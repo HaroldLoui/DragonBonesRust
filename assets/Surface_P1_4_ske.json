@@ -1,0 +1,76 @@
+{
+  "frameRate": 24,
+  "name": "SurfaceFixture",
+  "version": "5.5",
+  "armature": [
+    {
+      "type": "Armature",
+      "name": "fixture",
+      "frameRate": 24,
+      "aabb": { "x": -260, "y": -260, "width": 520, "height": 520 },
+      "bone": [
+        { "name": "root" },
+        {
+          "name": "surf",
+          "parent": "root",
+          "type": "surface",
+          "segmentX": 1,
+          "segmentY": 1,
+          "vertices": [-100, -100, 100, -100, -100, 100, 100, 100]
+        },
+        {
+          "name": "child",
+          "parent": "surf",
+          "transform": { "x": 0, "y": 0, "skX": 30, "skY": 30 }
+        },
+        {
+          "name": "anchor",
+          "parent": "root",
+          "transform": { "x": 0, "y": 170, "skX": 0, "skY": 0 }
+        }
+      ],
+      "slot": [
+        { "name": "s_child", "parent": "child", "displayIndex": 0 },
+        { "name": "s_anchor", "parent": "anchor", "displayIndex": 0 }
+      ],
+      "skin": [
+        {
+          "name": "default",
+          "slot": [
+            { "name": "s_child", "display": [{ "name": "parts/body" }] },
+            { "name": "s_anchor", "display": [{ "name": "parts/head" }] }
+          ]
+        }
+      ],
+      "animation": [
+        {
+          "name": "idle",
+          "duration": 24,
+          "playTimes": 0,
+          "timeline": [
+            {
+              "type": 50,
+              "name": "surf",
+              "frame": [
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "offset": 0,
+                  "vertices": [-60, -60, 60, -60, -60, 60, 60, 60]
+                },
+                {
+                  "duration": 12,
+                  "tweenEasing": 0,
+                  "offset": 0,
+                  "vertices": [0, 0, 0, 0, 0, 0, 0, 0]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "defaultActions": [{ "gotoAndPlay": "idle" }]
+    }
+  ],
+  "defaultActions": [{ "gotoAndPlay": "idle" }]
+}
