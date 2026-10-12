@@ -115,11 +115,7 @@ fn golden_inventory_matches_asset_specs() {
         let mut expected: Vec<String> = spec.anims.iter().map(|s| s.to_string()).collect();
         expected.sort();
         let actual = golden_dir_stems(spec.dir);
-        assert_eq!(
-            actual, expected,
-            "目录 `{}` 的动画文件集合不符",
-            spec.dir
-        );
+        assert_eq!(actual, expected, "目录 `{}` 的动画文件集合不符", spec.dir);
         total_anims += spec.anims.len();
 
         // 每个 golden 的 meta 结构一致
@@ -129,7 +125,11 @@ fn golden_inventory_matches_asset_specs() {
             let meta = &v["meta"];
             let ctx = path.display().to_string();
 
-            assert_eq!(meta["armature"].as_str(), Some(spec.armature), "{ctx}: armature");
+            assert_eq!(
+                meta["armature"].as_str(),
+                Some(spec.armature),
+                "{ctx}: armature"
+            );
             assert_eq!(meta["animation"].as_str(), Some(*anim), "{ctx}: animation");
             assert_eq!(
                 meta["frameRate"].as_u64(),
@@ -146,11 +146,7 @@ fn golden_inventory_matches_asset_specs() {
                 Some(spec.slots),
                 "{ctx}: 插槽数"
             );
-            assert_eq!(
-                meta["frameCount"].as_u64(),
-                Some(120),
-                "{ctx}: 帧数"
-            );
+            assert_eq!(meta["frameCount"].as_u64(), Some(120), "{ctx}: 帧数");
         }
     }
 

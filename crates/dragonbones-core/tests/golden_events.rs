@@ -129,10 +129,7 @@ fn frame_event_sequences_are_exact() {
     for (dir, anim, want) in expected {
         let v = read_value(&golden_path(dir, anim));
         let got = collect_frame_events(&v);
-        let want_vec: Vec<(u64, String)> = want
-            .iter()
-            .map(|(f, n)| (*f, n.to_string()))
-            .collect();
+        let want_vec: Vec<(u64, String)> = want.iter().map(|(f, n)| (*f, n.to_string())).collect();
         assert_eq!(got, want_vec, "{dir}/{anim}: frameEvent 序列不符");
     }
 }
@@ -165,7 +162,12 @@ fn dragon_walk_frame0_baseline() {
     let root = &v["frames"][0]["bones"]["root"];
     assert_number_array(root, "Dragon/walk frame0 root bone", 13);
     // [x, y, rotation, scaleX, scaleY, skew, a,b,c,d, tx,ty, alpha]
-    assert_close(root, &[0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+    assert_close(
+        root,
+        &[
+            0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+        ],
+    );
 
     let tail = &v["frames"][0]["slots"]["tailTip"];
     assert_number_array(tail, "Dragon/walk frame0 tailTip slot", 15);

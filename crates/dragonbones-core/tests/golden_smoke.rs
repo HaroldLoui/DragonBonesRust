@@ -30,7 +30,9 @@ fn golden_data_present_and_well_formed() {
         let ctx = path.display().to_string();
         let v = read_value(path);
 
-        let obj = v.as_object().unwrap_or_else(|| panic!("{ctx}: 顶层应为 object"));
+        let obj = v
+            .as_object()
+            .unwrap_or_else(|| panic!("{ctx}: 顶层应为 object"));
         let top_keys: HashSet<&str> = obj.keys().map(|k| k.as_str()).collect();
         assert_eq!(
             top_keys,
@@ -51,9 +53,24 @@ fn golden_data_present_and_well_formed() {
             (dt * frame_rate - 1.0).abs() < 1e-12,
             "{ctx}: dt 应为 1/frameRate"
         );
-        assert!(!meta["skeFile"].as_str().expect("skeFile string").is_empty(), "{ctx}");
-        assert!(!meta["armature"].as_str().expect("armature string").is_empty(), "{ctx}");
-        assert!(!meta["animation"].as_str().expect("animation string").is_empty(), "{ctx}");
+        assert!(
+            !meta["skeFile"].as_str().expect("skeFile string").is_empty(),
+            "{ctx}"
+        );
+        assert!(
+            !meta["armature"]
+                .as_str()
+                .expect("armature string")
+                .is_empty(),
+            "{ctx}"
+        );
+        assert!(
+            !meta["animation"]
+                .as_str()
+                .expect("animation string")
+                .is_empty(),
+            "{ctx}"
+        );
 
         let bone_names: Vec<&str> = str_array(&meta["boneNames"], &ctx, "boneNames");
         let slot_names: Vec<&str> = str_array(&meta["slotNames"], &ctx, "slotNames");
@@ -65,7 +82,9 @@ fn golden_data_present_and_well_formed() {
         let slot_set: HashSet<&str> = slot_names.iter().copied().collect();
 
         // ---- frames ----
-        let frames = v["frames"].as_array().unwrap_or_else(|| panic!("{ctx}: frames 应为 array"));
+        let frames = v["frames"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{ctx}: frames 应为 array"));
         assert_eq!(frames.len(), 120, "{ctx}: 恰 120 帧");
 
         for (i, frame) in frames.iter().enumerate() {
@@ -73,7 +92,9 @@ fn golden_data_present_and_well_formed() {
             assert_eq!(frame["i"].as_u64(), Some(i as u64), "{fctx}: 帧号连续");
 
             // bones：键集合 == meta.boneNames，每项 13 个 number
-            let bones = frame["bones"].as_object().unwrap_or_else(|| panic!("{fctx}: bones object"));
+            let bones = frame["bones"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{fctx}: bones object"));
             assert_eq!(bones.len(), bone_names.len(), "{fctx}: bones 键数");
             for name in &bone_names {
                 let vec = bones
@@ -83,7 +104,9 @@ fn golden_data_present_and_well_formed() {
             }
 
             // slots：键集合 == meta.slotNames，每项 15 个 number
-            let slots = frame["slots"].as_object().unwrap_or_else(|| panic!("{fctx}: slots object"));
+            let slots = frame["slots"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{fctx}: slots object"));
             assert_eq!(slots.len(), slot_names.len(), "{fctx}: slots 键数");
             for name in &slot_names {
                 let vec = slots
@@ -93,10 +116,14 @@ fn golden_data_present_and_well_formed() {
             }
 
             // events：数组，元素形状合法
-            let events = frame["events"].as_array().unwrap_or_else(|| panic!("{fctx}: events array"));
+            let events = frame["events"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{fctx}: events array"));
             for (k, e) in events.iter().enumerate() {
                 let ectx = format!("{fctx} event {k}");
-                let ty = e["type"].as_str().unwrap_or_else(|| panic!("{ectx}: type 应为 string"));
+                let ty = e["type"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{ectx}: type 应为 string"));
                 assert!(
                     EVENT_TYPES.contains(&ty),
                     "{ectx}: 未知事件类型 `{ty}`（转储协议只允许 9 种）"
@@ -153,7 +180,10 @@ fn str_array<'a>(v: &'a Value, ctx: &str, field: &str) -> Vec<&'a str> {
     v.as_array()
         .unwrap_or_else(|| panic!("{ctx}: {field} 应为 array"))
         .iter()
-        .map(|x| x.as_str().unwrap_or_else(|| panic!("{ctx}: {field} 元素应为 string")))
+        .map(|x| {
+            x.as_str()
+                .unwrap_or_else(|| panic!("{ctx}: {field} 元素应为 string"))
+        })
         .collect()
 }
 

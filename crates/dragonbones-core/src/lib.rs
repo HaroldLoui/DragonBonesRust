@@ -1,15 +1,10 @@
+//! DragonBones 运行时核心（纯逻辑，f64 全程，不依赖 Bevy）。
+//!
+//! 分阶段对齐 `DragonBonesJS/DragonBones/src/dragonBones/`：
+//! - [`geom`]：`geom/*.ts` 5 个数学类
+//! - [`core`]：`core/BaseObject`、`core/DragonBones` 静态部分与全部枚举
+//! - [`model`]：`model/*.ts` 11 个数据模型
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod core;
+pub mod geom;
+pub mod model;
