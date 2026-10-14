@@ -353,8 +353,8 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 | 字段 | JS 实际类型 | 说明 |
 |---|---|---|
 | `data.floatArray` / `data.frameFloatArray` | **Float32Array** | `number[]` 被重解释为 TypedArray，f64 值量化为 f32（实测 frameFloatArray 536 个值全部 f32 精确） |
-| `data.intArray` / `data.frameIntArray` / `data.colorArray` | Int16Array | 赋值按 i16 wrap |
-| `data.frameArray` / `data.timelineArray` | Uint16Array | 赋值按 u16 wrap |
+| `data.intArray` / `data.frameIntArray` / `data.colorArray` / `data.frameArray` | Int16Array | 赋值按 i16 wrap |
+| `data.timelineArray` | Uint16Array | 赋值按 u16 wrap |
 | `data.binary` | ArrayBuffer（**非 null**） | JSON 路径也构建 binary buffer |
 
 **结论：两路径的运行时值精度相同（float=f32、int=i16/u16）**，D1 的"JSON 路径 f64"仅指
@@ -386,3 +386,5 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 | `tests/enums.rs` | 16 枚举 + `BinaryOffset` 五组常量数值 |
 | `tests/geom_golden.rs` | geom 704 用例对齐 JS |
 | `tests/pool.rs` | 池复用 / `hash_code` 保留 / 缓冲延迟回收 / 上限 |
+| `tests/ir_golden.rs` | 阶段 2：9 素材 × 8 组 IR 数组 bit 级全等 + meta/structure/atlas 快照（`norm()` 后） |
+| `tests/js_compat.rs` | JS 语义真值表：`js_round` 半数向 +∞ / 三 helper 三态 / TypedArray wrap |

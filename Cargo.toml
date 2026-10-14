@@ -6,6 +6,6 @@ members = ["crates/*"]
 edition = "2024"
 
 [workspace.dependencies]
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 indexmap = "2"
 log = "0.4"

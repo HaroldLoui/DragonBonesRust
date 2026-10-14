@@ -1,5 +1,7 @@
 #![allow(dead_code)] // 测试辅助模块：并非每个测试二进制都用到全部函数
 
+pub mod ir_snapshot;
+
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

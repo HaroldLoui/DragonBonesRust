@@ -328,7 +328,11 @@ fn path_constraint_kind_defaults_match_on_clear() {
         },
         ..ConstraintData::default()
     };
-    assert_eq!(c.type_(), ConstraintType::Path, "type_() 由 kind 派生（TS 由解析器显式赋值）");
+    assert_eq!(
+        c.type_(),
+        ConstraintType::Path,
+        "type_() 由 kind 派生（TS 由解析器显式赋值）"
+    );
     match &c.kind {
         ConstraintKind::Path {
             path_slot,

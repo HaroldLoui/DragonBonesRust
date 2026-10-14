@@ -8,3 +8,4 @@
 pub mod core;
 pub mod geom;
 pub mod model;
+pub mod parser;
