@@ -9,16 +9,16 @@
 
 | # | 事实 | 影响 |
 |---|---|---|
-| F3.1 | **9 素材全部无约束**（实测 `constraint` 键不存在） | `Constraint` 按 requirements 留 **stub**（接口 + `_hasConstraint=false`）不损失任何 golden 覆盖；IK/Path 真身在阶段 6（P1-2）。bones↔constraints 的借用冲突设计也推迟到那时 |
+| F3.1 | ~~**9 素材全部无约束**（实测 `constraint` 键不存在）~~ **勘误（阶段 3 收口实测）**：查错了键——原始 JSON 用 **`"ik"`**，`龙`（IK_L/IK_R，weight=0）与 `Rooster×3`（bone_ik/bone_ik1，weight 缺省 1.0）共 4 个 IK | ~~stub~~ **IK 已在阶段 3 实现真身**（pose 差分证明必须：`updateByConstraint → isCache=true → fromMatrix` 回填链 + weight=1 解算）；Path 仍 stub（0 素材，P1-2）。bones↔constraints 借用已解决：`Bone::update` 三段签名 `left/right/constraints`。见 `model_mapping` D-4.19 |
 | F3.2 | **`_buildBones` 按 `sortedBones`（拓扑序）创建**（`BaseFactory.ts:168-173`），`Armature.advanceTime` 迭代这个创建序 | 运行时 `bones: Vec<Bone>` 天然"父索引 < 子索引" → `split_at_mut(i)` 顺序更新安全；**不是 JSON 原始序** |
 | F3.3 | **`origin` 全库只读**：唯一赋值 `Bone:360 origin = boneData.transform`、`Slot:461/464` 同理，无人写 `origin.xxx` | Rust 在 init 时 `clone` 一份 `origin: Transform` 与 JS 引用语义恒等（data 解析后不可变） |
 | F3.4 | `flipY = this._armature.flipY === DragonBones.yDown`（`Bone.ts:120`）——是**恒等比较**不是 `&&` | yDown 恒 true → `flipY = armature.flipY`；但照抄表达式，勿"化简"成 `&&` |
-| F3.5 | **Surface 骨被真实使用**：`Surface_P1_4` 的 `surf`（segment 1×1，且有子骨） | `Surface::_getGlobalTransformMatrix` 双线性插值必须真算，静态姿态验收会打到 |
+| F3.5 | **Surface 骨被真实使用**：`Surface_P1_4` 的 `surf`（segment 1×1，且有子骨） | ~~双线性插值~~ **勘误**：是"格子→对角线二分→`_getAffineTransform` 三角形拟合"（Surface.ts:66-88/165-437），静态姿态验收会打到 |
 | F3.6 | `Bone::update` 是**四分支脏标记机**（`Bone.ts:365-441`）：cache 命中 / 已缓存 / 约束+脏 / 普通；`_localDirty` 在 update **尾部重置为 true**、由 `updateByConstraint` 置 false 阻止同帧重复算矩阵 | P1-4 前 `cacheFrameIndex` 恒 -1 → 永远走"普通"分支；`_localDirty` 的时序照抄，勿按直觉改成"算完置 false" |
 | F3.7 | `armature._parent`（子骨架回指父插槽）在 core 只有两处消费：`Armature.ts:330` alpha 传播、`Animation.ts:177` inheritTimeScale（阶段 4） | 设计见 D-3.2，用索引解环 |
-| F3.8 | `_buildSlots` 流程（`BaseFactory.ts:177-224`）：defaultSkin 与 currentSkin 合并（current 覆盖）→ 遍历 `sortedSlots` → `replaceRawDisplayData` → `replaceTextureData`（仅当 textureAtlasName 非空）→ `_getSlotDisplay` → `replaceDisplay` → 末尾 `_setDisplayIndex(slotData.displayIndex, true)` | 逐行照抄，尤其 merge 语义与最后的 `_setDisplayIndex` 带 force 参数 |
+| F3.8 | `_buildSlots` 流程（`BaseFactory.ts:177-224`）：defaultSkin 与 currentSkin 合并（current 覆盖）→ 遍历 `sortedSlots` → `replaceRawDisplayData` → `replaceTextureData`（仅当 textureAtlasName 非空）→ `_getSlotDisplay` → `replaceDisplay` → 末尾 `_setDisplayIndex(slotData.displayIndex, true)` | 逐行照抄，尤其 merge 语义与最后的 `_setDisplayIndex` 带 force 参数（**勘误：第二参是 `isAnimation` 不是 force——`grep force Slot.ts` 为 0，TS:598**） |
 | F3.9 | 9 素材**单骨架**（requirements §1.3）→ 子骨架（Armature 型 display）路径 golden 无覆盖 | 接口照实现 + 手写单测；差分不承诺 |
-| F3.10 | 槽排序比较器 `zIndex*1000+zOrder > … ? 1 : -1`（`Armature.ts:47`，永不返回 0）；ES2019 起 Array.sort **稳定** | Rust 用 `sort_by_key(zIndex*1000+zOrder)` + **stable sort**（`sort_by_key` 即稳定）→ 平局保持原序 = V8 实际行为；阶段 0 golden 的 `meta.slotNames` 就是**排序后**的槽名序（dump 发生在 advance 之后）→ 直接当验收锚点（R5 收口） |
+| F3.10 | 槽排序比较器 `zIndex*1000+zOrder > … ? 1 : -1`（`Armature.ts:47`，永不返回 0）；ES2019 起 Array.sort **稳定** | Rust 用 `sort_by_key(zIndex*1000+zOrder)` + **stable sort**（`sort_by_key` 即稳定）→ 平局保持原序；**勘误**：「= V8 实际行为」不成立——比较器永不返 0（不一致比较器）不受稳定排序规格覆盖，node 实测 V8 对**等键组逆序**；决策 = 保持 Rust 原序并登记 **D-4.29**（官方公开路径 z_order 恒唯一、等键不可达）。阶段 0 golden 的 `meta.slotNames` 是**排序后**槽名序（dump 在 advance 之后）→ 验收锚点（R5 收口） |
 | F3.11 | `buildArmature` 收尾调 `armature.advanceTime(0.0)`（`BaseFactory.ts:713`） | Rust 装配收尾同样先 `invalidUpdate` 再 `advance_time(0.0)`，否则静姿态不算 |
 
 ---
@@ -182,6 +182,7 @@ impl BaseFactory {
     pub fn dispose_armature(&mut self, idx: ArmatureIdx);  // on_clear + free.push
 }
 ```
+> **勘误（阶段 3 收口）**：`build_armature` 最终实现返回 **`Option<ArmatureIdx>`**（= JS fill 失败返回 `null` 语义）；另 `advance_one(idx, dt)` 公开（= TS 直接 `armature.advanceTime(0)`，build 收尾同款驱动），`advance_time(dt)` 对齐官方 `WorldClock.advanceTime(0)` **早退为 no-op**（`WorldClock.ts:114-116`）。
 
 子骨架（`_buildChildArmature`，`BaseFactory.ts:254-257`）：build 时把 `parent = Some((父Idx, 槽Idx))` 写进子 Armature、`slot.child_armature = Some(子Idx)`——9 素材走不到，配单测（手造 ArmatureDisplayData 走 `_getSlotDisplay` 分支）。
 
@@ -275,9 +276,9 @@ pub fn update(&mut self, cache_frame_index: i32, bones: &mut [Bone], constraints
 }
 ```
 
-- **约束钩子**（TS 376-382/402-408）：`if has_constraint { for c in constraints { if c.root == self { c.update() } } }`——阶段 3 结构保留、`has_constraint` 恒 false（F3.1），阶段 6 接真身时再解决 bones↔constraints 借用（方案预告：`mem::take(constraints)` 提出后传引用，或 stage 6 再议）。
-- `update_by_constraint`（TS 445-455）：照抄（阶段 6 用）。
-- `invalid_update`（TS 481+）：置 `local_dirty/transform_dirty` 并沿子传播，逐行对照。
+- **约束钩子**（TS 376-382/402-408）：`if has_constraint { for c in constraints { if c.root == self { c.update() } } }`——~~阶段 3 结构保留、`has_constraint` 恒 false（F3.1），阶段 6 再议借用~~ **勘误：F3.1 已证伪，IK 真身随阶段 3 落地**（`constraint.rs`），借用方案 = `Bone::update(cache, left, right, constraints, flip_x, flip_y)` 三段切片（`split_at_mut` + `split_first_mut`），约束在 root 的 update 内、脏标记消费之前执行，chain 骨靠 F3.2 拓扑序同帧靠后消费。
+- `update_by_constraint`（TS 445-455）：照抄（**注意 resolve 放在 `local_dirty` 早退之后**，与 TS:446-447 一致）。
+- `invalid_update`（TS 481+）：**勘误**：TS:481-483 **只有一行 `_transformDirty = true`**，不置 local_dirty、不沿子传播（子骨经 update 的 `children_dirty` 链间接传播）。指南任务 6 的"照抄"结论正确、此处旧表述有误。
 
 ### 3.4 `_update_alpha`（TS 334-341）
 
@@ -301,6 +302,8 @@ self.global_alpha = if let Some(p) = parent { self.alpha * p.global_alpha }
 //   注意：原地写 self 的临时矩阵（TS 复用 this.globalTransformMatrix？读 165-230 原文确定写入目标）
 ```
 > **实现前先精读 `Surface.ts:165-230`**——插值目标矩阵与四角采样方式我未在本指南展开，防止转述失真；黄金数据（Surface_P1_4 静姿态）会验证。
+>
+> **勘误（阶段 3 收口）**：上方"双线性插值"猜测**整体不成立**——官方实现是**格子→对角线二分→每三角形 `_getAffineTransform` 拟合仿射**（Surface.ts:66-88/165-437，5 区域 Left→Right→Up→Down→Center），结果返回**静态 help 矩阵的拷贝**、不写 self；另有两处 JS 数组越界靠自动扩容（`_hullCache` 10→12、`_matrixCahce` 在 segmentY>segmentX 的 Left 分区）Rust 必须显式扩容——实测推导与正确分配公式见 `surface.rs` 模块文档（上界 = `max(TS 长, 五区域最大下标+1)`，旧笔记公式错误已修）。
 
 - `Surface::update` 若有覆盖（读 `Surface.ts` 的 update/init 差异部分）一并翻译。
 - `Bone::update_global_transform_matrix` 的 `is_surface` 分支依赖 `parent.get_global_transform_matrix(global.x, global.y)`（任务 3 已留口）。
@@ -479,6 +482,12 @@ for (const s of armature.getSlots()) slots[s.name] = [
 //   geometryData 非空时: vertexCount / triangleCount（阶段2 已锁 IR，这里验证 runtime getter 通路）
 fs.writeFileSync(out, JSON.stringify({ meta:{ armature:armName, frameRate, slotNames },
                                        bones, slots }));
+```
+>
+> **勘误（阶段 3 收口）**：
+> 1. **元素顺序以 `tools/jsdump.mjs:127-142` 实际输出为准**（bone 13 元是 `x,y,rotation,scaleX,scaleY,skew,…`——skew 在第 6 位非第 4 位；slot 颜色 8 元是 `red,green,blue,alpha` × multiplier/offset——非 alpha 在前），上方草图顺序不采用，`posedump.mjs`/`pose_golden.rs` 均按 jsdump 顺序，保证与阶段 0 golden 同构。
+> 2. `factory._dragonBones.advanceTime(0)` 经 `WorldClock.ts:114-116` 早退是 **no-op**（node 实测第二遍逐字节无变化）——收敛全部发生在 buildArmature 内部那遍；posedump 保留该调用仅作官方管线镜像，Rust 侧对应 `BaseFactory::advance_time(0.0)` 早退（驱动用 `advance_one`）。
+> 3. 出参另含 `meta.boneNames` 与 `geometry: {槽: [vertexCount, triangleCount]}`（仅 mesh 槽；Surface_P1_4 的几何挂在**骨**上，槽级为 `{}`）。
 ```
 
 批量：`tools/gen_pose.mjs`（镜像 gen_golden 的 9 素材清单）→ `testdata/pose/<asset>.json`（9 文件，预计 <100KB）。

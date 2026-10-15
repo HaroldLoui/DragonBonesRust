@@ -1,8 +1,9 @@
 # model 字段对照表（TS → Rust）
 
-> 配套 `docs/guide/01-stage1.md` 任务 6，是 P0-3 / P0-4 的验收物。
-> 对照源：`DragonBonesJS/DragonBones/src/dragonBones/model/*.ts`（数据版本 5.7.000）。
-> Rust 落地：`crates/dragonbones-core/src/model/`。
+> 配套 `docs/guide/01-stage1.md` 任务 6（P0-3 / P0-4 验收物）；阶段 3 起扩展收录
+> `armature/`、`factory/`、`event/` 运行时层（§3.12+，见 `docs/guide/03-stage3.md`）。
+> 对照源：`DragonBonesJS/DragonBones/src/dragonBones/`（数据版本 5.7.000）。
+> Rust 落地：`crates/dragonbones-core/src/`。
 
 ---
 
@@ -328,6 +329,223 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `bone` / `slot` | `Option<String>` | `None` |
 | `data` | `Option<Box<UserData>>` | `None` |
 
+### 3.12 `TransformObject.ts` → `armature/transform_object.rs`
+
+阶段 3 新增模块挂入 `src/lib.rs`（`armature/*` 7 文件、`event/`、`factory/`、`animation/` 占位）；
+`geom/mod.rs` 补顶层 `pub use`（`ColorTransform`/`Matrix`/`Point`/`Rectangle`/`Transform`）供运行时层直引。
+
+**索引与句柄**（定义于 `armature/mod.rs`，放 armature 层避免 `armature → factory` 反向依赖）：
+
+| Rust | 说明 |
+|---|---|
+| `ArmatureIdx(u32)` / `BoneIdx(u32)` / `SlotIdx(u32)` | newtype 索引（D-3.1），`.index()` → `usize`；`ArmatureIdx` 指 `BaseFactory.armatures` 槽位，`None` 空位 = 已 dispose；`BoneIdx` 创建序 = `sortedBones` 拓扑序（F3.2，父 < 子） |
+| `DisplayHandle` | 占位枚举 `Null` / `Raw`（`_rawDisplay`，Slot.ts:248）/ `Mesh`（Slot.ts:249）/ `Armature(ArmatureIdx)`（Slot.ts:510-513 分支）——渲染契约隔离（关键结论 2 / D-3.4），阶段 7 映射实体 |
+| `ArenaCtx<'a>` | `{ armatures: &'a mut Vec<Option<Armature>>, self_idx }`——推进期间自身槽位为 `None`（借用契约），`armature()/armature_mut()` 按索引取（D-3.2 解环；父 idx < 子 idx） |
+
+字段（默认值 = `_onClear`，TransformObject.ts:100-111）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| `globalTransformMatrix` | `global_transform_matrix: Matrix` | identity |
+| `global` | `global: Transform` | identity |
+| `offset` | `offset: Transform` | identity |
+| `origin` | `origin: Option<Transform>` | `None`（F3.3：init 时 clone 自 data） |
+| `userData` | `user_data: Option<Value>` | `None` |
+| `_globalDirty` | `global_dirty` | `false`（与 alpha 相反） |
+| `_alpha` | `alpha` | `1.0` |
+| `_globalAlpha` | `global_alpha` | `1.0` |
+| `_armature` | `armature: Option<ArmatureIdx>` | `None`（D-3.1 存索引不存对象） |
+
+方法：`update_global_transform()`（惰性回填 `global ← 矩阵分解`，TransformObject.ts:135-140）。
+TS 继承（`Bone/Slot extends`）落成 `base: TransformObject` 组合 + `Deref`/`DerefMut` 透传。
+
+### 3.13 `Bone.ts` → `armature/bone.rs`
+
+跨模块契约字段（**勿改名**）：`base` / `idx` / `bone_name` / `parent` / `bone_type` / `transform_dirty` /
+`children_transform_dirty`（`event`/`slot`/`armature`/`factory` 依赖，bone.rs 结构文档）。
+默认值逐行对齐 `_onClear`（Bone.ts:92-107 + super）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| —（super） | `base: TransformObject` | 见 3.12 |
+| —（Rust 侧） | `idx: BoneIdx` | `0`（init 预置 = push 后下标） |
+| `_boneData`（名字缓存） | `bone_name: String` | `""`（兼作 init 幂等判定） |
+| `_parent` | `parent: Option<BoneIdx>` | `None` |
+| `_boneData.type`（D-3.3 缓存） | `bone_type: BoneType` | `BoneType::Bone` |
+| `_transformDirty` | `transform_dirty` | `false` |
+| `_childrenTransformDirty` | `children_transform_dirty` | `false` |
+| `offsetMode` | `offset_mode: OffsetMode` | `OffsetMode::Additive`（:95） |
+| `animationPose` | `animation_pose: Transform` | identity（:96） |
+| `_localDirty` | `local_dirty` | **`true`**（:100 ★ 反直觉默认：`update` 尾部 :440 重置为 true、仅 `updateByConstraint` :447 置 false，F3.6） |
+| `_hasConstraint` | `has_constraint` | `false`（:101；`Constraint::init` TS:203 只标根骨） |
+| `_visible` | `visible` | `true`（:102） |
+| `_cachedFrameIndex` | `cached_frame_index` | `-1`（:103，阶段 3 恒 -1） |
+| `_cachedFrameIndices` | `cached_frame_indices: Option<Vec<i32>>` | `None`（:106，阶段 6 P1-4） |
+| `_boneData.inherit*` 四旗标（D-3.3 缓存） | `inherit_translation/rotation/scale/reflection: bool` | 全 `false` |
+| `_boneData.length`（D-3.3 缓存） | `length: f64` | `0.0` |
+| `Surface extends Bone`（TS 类继承） | `runtime: BoneRuntime` | `BoneRuntime::Bone`（Surface 载荷见 3.14） |
+
+方法要点：`init`（TS:345-361，不 push 只预置 `idx`，D-4.14）、`update` 四分支脏标记机（TS:365-441，
+`left/right/constraints` 三段骨表）、`update_global_transform_matrix`（TS:109-330 offsetMode 三分支 +
+inherit 大分支两数学路径）、`update_by_constraint[_resolved]`、`invalid_update`（仅置自身
+`transform_dirty`，Bone.ts:481-483，指南 3.3 勘误）、`set_visible`、`contains`、`on_clear`；
+其余字段与分支逐行见源码注释。
+
+### 3.14 `Surface.ts` → `armature/surface.rs`
+
+形态：`BoneRuntime::Surface(SurfaceState)`（TS `Surface extends Bone` 类继承的 Rust 形态）。
+默认值 = `_onClear`（Surface.ts:51-64）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| `surfaceData.segmentX/segmentY`（D-3.3 缓存） | `segment_x` / `segment_y` | `0` |
+| `_boneData.geometry`（D-3.3 缓存） | `geometry: GeometryData` | `GeometryData::default()` |
+| `_bone`（宿主骨，Surface.ts:469-475 解析） | `bone: Option<BoneIdx>` | `None`（:63） |
+| `_dX` / `_dY` | `d_x` / `d_y` | `0.0`（:54/:55） |
+| `_k` / `_kX` / `_kY` | `k` / `k_x` / `k_y` | `0.0`（:56-:58） |
+| `_vertices` / `_deformVertices` | `Vec<f64>` | `[]` |
+| `_hullCache` | `hull_cache: Vec<f64>` | `[]`（init 显式分配 **12**——TS `length = 10`（:463）却写 `[10]/[11]`（:303-304/578-579），JS 靠自动扩容存活） |
+| `_matrixCahce`（原文拼写） | `matrix_cahce: Vec<Cell<f64>>` | `[]`（init 按上界扩容——`segmentY > segmentX` 时 TS Left 分支（:194）写超长度式（:462），JS 自动扩容、Rust 显式） |
+
+越界扩容处理：上述两处 JS 数组越界 Rust 显式扩容，元素值与扩容后的 JS 数组逐元素一致；
+`geometry.root` 缺失时 warn + 空顶点缓冲（记 §4 D-4.27）。
+
+### 3.15 `Slot.ts` → `armature/slot.rs`
+
+主字段（默认值 = `_onClear`，Slot.ts:261-330 + super；10 个 dirty 标志默认全 `false` 不逐行列）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| `_slotData`（名字缓存） | `slot_name: String` | `""`（:319，兼作 init 幂等/未初始化判定） |
+| `_parent` | `parent: BoneIdx` | `BoneIdx(0)`（非 Option 契约——数据必有父骨，未初始化槽由 init 重写，:328） |
+| `_displayController` | `display_controller: Option<String>` | `None`（:294） |
+| `_visible` | `visible` | `true`（:306） |
+| `_blendMode` | `blend_mode: BlendMode` | `BlendMode::Normal`（:307） |
+| `_displayIndex` / `_animationDisplayIndex` | 同名 | `-1` / `-1`（:308/:309） |
+| `_zOrder` / `_zIndex` | 同名 | `0` / `0`（:310/:311） |
+| `_cachedFrameIndex` | `cached_frame_index` | `-1`（:312，阶段 3 恒 -1） |
+| `_pivotX` / `_pivotY` | 同名 | `0.0` / `0.0`（:313/:314） |
+| `_localMatrix` | `local_matrix: Matrix` | identity（:315） |
+| `_colorTransform` | `color_transform: ColorTransform` | identity（:316，Rust 方法名 `clear()`，D-4.13） |
+| `_displayFrames` | `display_frames: Vec<DisplayFrame>` | `[]`（:317） |
+| `_geometryBones` | `geometry_bones: Vec<Option<BoneIdx>>` | `[]`（:318，`None` = TS null） |
+| `_displayFrame` | `display_frame: Option<usize>` | `None`（:320，TS 对象引用 → 下标，D-4.16） |
+| `_geometryData` / `_boundingBoxData` / `_textureData` | `Option<…>`（**值克隆**，D-3.3） | 全 `None`（:321-:323） |
+| `_rawDisplay` / `_meshDisplay` | `DisplayHandle` | `Null` / `Null`（:324/:325） |
+| `_display` | `display: Option<DisplayHandle>` | `None`（:326） |
+| `_childArmature` | `child_armature: Option<ArmatureIdx>` | `None`（:327，D-3.2 索引解环） |
+| `_cachedFrameIndices` | `cached_frame_indices: Option<Vec<i32>>` | `None`（:329，阶段 6） |
+| —（Rust 侧 D-3.3 缓存） | `data: Arc<DragonBonesData>` / `armature_name: String` / `texture_atlas_scale: f64` / `adapter: Box<dyn SlotRenderAdapter>` | 默认 Arc / `""` / `1.0` / `NullSlotAdapter` |
+
+`DisplayFrame`（Slot.ts:27-139，默认 = `_onClear` Slot.ts:38-44，`derive(Default)` 等价）：
+`raw_display_data` / `display_data` / `texture_data: Option<…>`（值克隆）全 `None`、
+`display: Option<DisplayHandle>` = `None`（`Armature(idx)` = 子骨架）、`deform_vertices: Vec<f64>` = `[]`。
+
+`SlotUpdateCtx<'a>`（自身骨架不在 arena 的借用契约，任务 6）：
+`parent: &Bone` / `bones: &[Bone]` / `actions: &mut Vec<EventObject>` / `armature: ArmatureIdx` /
+`cache_frame_rate: f64`。
+
+`SlotRenderAdapter`：TS `Slot.ts:332-348` 的 14 个 `protected abstract` 方法 → trait（D-3.4，
+阶段 7 换 Bevy 实现，**签名冻结**）；`NullSlotAdapter` = jsdump `NullSlot` 全 no-op（偏差见 D-4.21）。
+方法清单（`init/dispose/update/add/replace/remove display` + `zOrder/visible/blendMode/color/frame/mesh`
++ `transform/identityTransform`），详见 `slot.rs` trait 定义。
+
+### 3.16 `Armature.ts` → `armature/armature.rs`
+
+字段默认值逐行对齐 `_onClear`（Armature.ts:122-181；**无 `Default`**——`Armature::new` 字面量即该组值）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| —（Rust 侧） | `idx: ArmatureIdx` | alloc 分配（`proxy.db_init(idx)` 用） |
+| `_armatureData` | `data: Arc<DragonBonesData>` + `armature_name: String` | D-3.3 拆两字段（`on_clear` 清空 name，:172） |
+| `inheritAnimation` | `inherit_animation` | `true`（:155） |
+| `userData` | `user_data: Option<Value>` | `None`（:156） |
+| `_lockUpdate` | `lock_update` | `false`（:158） |
+| `_slotsDirty` | `slots_dirty` | `true`（:159） |
+| `_zOrderDirty` / `_zIndexDirty` | 同名 | `false` / `false`（:160/:161） |
+| `_alphaDirty` | `alpha_dirty` | `true`（:162） |
+| `_flipX` / `_flipY` | `flip_x` / `flip_y` | `false` / `false`（:163/:164） |
+| `_cacheFrameIndex` | `cache_frame_index` | `-1`（:165，阶段 3 恒 -1） |
+| `_alpha` / `_globalAlpha` | 同名 | `1.0` / `1.0`（:166/:167） |
+| `_bones` / `_slots` / `_constraints` / `_actions` | `Vec<…>` | `[]`（:168-:171） |
+| `_animation` | `animation: Animation` | 占位（3.20；`on_clear` = `reset()` + `init(idx)`，:173） |
+| `_proxy` | `proxy: Box<dyn ArmatureProxy>` | `Armature::new` 注入（`Box` 不可 null：`db_clear()` 清场、box 保活，D-3.1 池语义偏差；:174） |
+| `_display` | `display: DisplayHandle` | build 注入 `Armature(idx)`（:175；Slot.ts:512 读子骨架 display） |
+| `_parent` | `parent: Option<(ArmatureIdx, SlotIdx)>` | `None`（:180，D-3.2 索引回指） |
+| `_clock` / `_dragonBones` | 未落地 | 阶段 5（P0-12）TODO |
+| `_replaceTextureAtlasData` / `_replacedTexture` | 未落地 | 阶段 6（P1-5）TODO |
+
+方法：`advance_time`（主循环顺序契约：锁 → animation → 槽排序 → alpha → bones → slots → actions →
+解锁 + `dbUpdate`）、`invalid_update`、`on_clear`、`add_bone/slot/constraint`（名字判重 warn+忽略，D-4.14）、
+`buffer_action`、`contains_point` / `intersects_segment`（签名偏差 D-4.26）。
+
+### 3.17 `Constraint.ts` → `armature/constraint.rs`
+
+TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单结构体，`kind` 承担
+`BaseFactory._buildConstraints` 的 switch 分派（BaseFactory.ts:229）；`PathConstraint`（:230-834）
+**结构在、不执行**（factory 对 Path 数据 warn 跳过，0 素材，真身留 P1-2 阶段 6）。
+默认值 = `_onClear`（Constraint.ts:84-91 + 基类 :49-54）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| `_constraintData.name` | `name: String` | `""`（兼作 init 幂等判定） |
+| `_root`（:193 按名解析） | `root: BoneIdx` | `BoneIdx(0)`（`Bone::update` 按 `root == self.idx` 过滤） |
+| `order`（数据登记；运行期不排序） | `order: i32` | `0` |
+| `_target`（:192） | `target: BoneIdx` | `BoneIdx(0)`（`sortBones.wait_constraint` 保证 `idx < root`） |
+| `_bone`（:194，`None` = 单骨 `_computeA`） | `bone: Option<BoneIdx>` | `None` |
+| `_weight` | `weight: f64` | `1.0`（:89；阶段 5 时间轴改写） |
+| `_bendPositive` | `bend_positive` | `false`（:88） |
+| `type`（BaseFactory.ts:229 switch） | `kind: ConstraintType` | `ConstraintType::IK` |
+| `_scaleEnabled`（TS:72/:87/:198 整行注释） | 不设字段 | 忽略（对齐 TS 现状，D-4.19） |
+
+### 3.18 `IArmatureProxy.ts` / `EventObject.ts` → `armature/i_armature_proxy.rs` / `event/event_object.rs`
+
+`ArmatureProxy` trait（IArmatureProxy.ts:36-92 + IEventDispatcher.ts:43-108 两接口合并，D-3.4）
+8 方法：`db_init` / `db_clear` / `db_update` / `dispose` / `add_db_event_listener` /
+`remove_db_event_listener` / `has_db_event_listener` / `dispatch_db_event`
+（`thisObject` 用闭包捕获表达，`DbEventListener = Box<dyn Fn(&EventObject)>`）。
+`NullArmatureProxy`（= jsdump `EvProxy`，`derive(Default)`）：`armature: Option<ArmatureIdx>` = `None`、
+`listeners: HashMap<String, Vec<DbEventListener>>` = `{}`。
+
+`EventObject` 默认 = `_onClear`（event_object.rs，阶段 3 最小骨架）：
+
+| TS | Rust | 默认值（= `_onClear`） |
+|---|---|---|
+| `time` | `time: f64` | `0.0` |
+| `type` | `event_type: String` | `""`（§1 `type` 规则加 `event_` 前缀） |
+| `name` | `name: String` | `""` |
+| `armature` | `armature: Option<ArmatureIdx>` | `None` |
+| `bone` / `slot` | `Option<BoneIdx>` / `Option<SlotIdx>` | `None`（TS 对象引用 → 本骨架内索引，D-4.20） |
+| `actionData` | `action_data: Option<ActionData>` | `None`（TS 引用 → 克隆，D-4.20） |
+| `data` | `data: Option<Box<UserData>>` | `None` |
+| `animationState` | 未落地 | 阶段 4/5 TODO（类型尚不存在） |
+
+另含事件名 9 常量（EventObject.ts:46-134）与 `action_data_to_instance`（:139-159）。
+
+### 3.19 `BaseFactory.ts` → `factory/base_factory.rs`
+
+| TS | Rust | 默认值 / 说明 |
+|---|---|---|
+| `autoSearch`（:52） | `auto_search: bool` | `false` |
+| `_dragonBonesDataMap`（:54） | `data_map: IndexMap<String, Arc<DragonBonesData>>` | `{}`（保插入序 = V8 `for-in` 字符串键序） |
+| `_textureAtlasDataMap`（:55，value 是数组） | `atlas_map: IndexMap<String, Vec<TextureAtlasData>>` | `{}`（同名多 atlas） |
+| —（D-3.1 新增，运行时世界） | `armatures: Vec<Option<Armature>>` | `[]`；`None` = 已 dispose 空位 |
+| —（D-3.1 新增） | `free: Vec<u32>` | `[]` 空位复用栈（`dispose` push、`alloc_armature_slot` 挑 `> min`，子 idx > 父 idx） |
+| `_dataParser`（:57） | `parser: ObjectDataParser` | 每工厂一个实例（TS `static` 惰性单例） |
+| `_dragonBones`（:56） | 未落地 | 阶段 5（P0-12）TODO |
+| `BuildArmaturePackage`（:1017-1027） | `data_name` / `texture_atlas_name` / `data: Arc<…>` / `armature_name` / `skin: Option<SkinData>` | `skin` 存**克隆**（fill ④ 怪癖允许跨 data），其余为名字 + Arc |
+
+主要入口：`parse_dragon_bones_data` / `parse_texture_atlas_data`、
+`build_armature(armature_name, db_name, skin_name, atlas_name, proxy) -> Option<ArmatureIdx>`
+（多 proxy 参数 + `Option` 返回，D-4.15；收尾 `invalid_update(null, true)` + `advance_time(0.0)`，F3.11）、
+`dispose_armature`（BFS 子骨架递归 + `on_clear` + `free.push`，D-4.17）、`advance_time`（遍历 arena，
+阶段 5 WorldClock 接管）、`alloc_armature_slot`。
+
+### 3.20 `Animation.ts` → `animation/mod.rs`（阶段 3 占位）
+
+`Animation { armature: Option<ArmatureIdx> }` = `None`；`advance_time` / `play` / `fade_in` 全 no-op
+返回 `None`、`reset` / `stop` 空实现——阶段 4 接 fade 状态机（返回类型 `AnimationState` 阶段 4 才有）。
+
 ---
 
 ## 4. 与 TS 的已知语义偏差
@@ -343,6 +561,28 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | D-4.7 | 整数样字符串键 `for..in` 排序规则 | `IndexMap` 纯插入序 | 9 素材无整数样键，登记为已知差异（F1.6） |
 | D-4.8 | `AnimationData.cacheFrames` / `ArmatureData.setCacheFrame` | 未实现 | P1-4，阶段 6 |
 | D-4.9 | `BinaryOffset` 单个 `const enum` 五组共用、判别值大量重复 | 五组 `binary_offset::*` 模块常量（`usize`） | 单 Rust enum 触发 E0081（实测）；下标语义用 const（enum 的类型区分在 `as usize` 使用点丢失，见 `01-stage1.md` 任务 3）；值与 TS 逐项一致，`tests/enums.rs` 守护 |
+| D-4.10 | Armature/Bone/Slot/Constraint 走 TypeId 池（`borrowObject` / `returnToPool`） | 不进池：`BaseFactory.armatures: Vec<Option<Armature>>` + `free` 空位栈——`dispose = on_clear + free.push`，build 经 `alloc_armature_slot` 优先复用空位，且 `min_exclusive` 保证**子 idx > 父 idx** | 指南 D-3.1 池语义决策（03-stage3 坑 12）；Bone/Slot/Constraint 随 `Armature.bones/slots/constraints` 生灭（`_onClear` 副作用照抄） |
+| D-4.11 | `Armature.ts:302 / :306` 两处 warn-return（`_armatureData === null` / `_parent === null`） | 不复刻，`advance_time` 上锁后直接继续 | Rust 持 `Arc<DragonBonesData>`，数据活到无引用（`on_clear` 清 `armature_name` 使 `armature_data()` 不可达）→ 分支不可达（指南 D-3.3，armature.rs 方法文档） |
+| D-4.12 | `TransformObject` 静态 `_helpMatrix/_helpTransform/_helpPoint`（TransformObject.ts:37-39；Surface.ts:186 等同款） | 调用点局部临时值 | 不复刻 `thread_local` 样板（纯实现细节）；值拷贝天然消除“静态被下次调用覆盖”的别名隐患（transform_object.rs 模块文档） |
+| D-4.13 | TS `ColorTransform.identity()` | Rust 侧方法名 `clear()`（Point/Rectangle 同名；Matrix/Transform 仍 `identity()`） | 阶段 1 遗留待记项（geom 落地时统一命名，无行为差异） |
+| D-4.14 | `Bone.init:358 _addBone(this)` / `Slot.init:665 _addSlot(this)`（init 内 push 自身，按对象身份 `indexOf` 去重） | `init` 不 push、只预置 `idx = len()`，由调用方 `armature.add_bone/add_slot` 推入；去重改成**按名字**判重（warn + 忽略本次推入） | Rust 无法在 `&mut self` 的 `init` 内移动自身入容器；装配循环“建一根推一根”顺序不变（bone.rs / slot.rs 方法文档、`_build_bones`/`_build_slots` 注） |
+| D-4.15 | 指南任务 7 草图 `build_armature(armatureName, dragonBonesName, skinName, textureAtlasName)` 返回裸 idx | 多 `proxy: Box<dyn ArmatureProxy>` 参数、返回 `Option<ArmatureIdx>` | D-3.4 调用方注入（jsdump `NullFactory._buildArmature` 在内部 `new EvProxy()` 的等价迁移）；`None` = JS `null`（fill 失败/数据缺失）（base_factory.rs 方法文档） |
+| D-4.16 | 对象身份比较：`_displayFrame` 对象引用、`display === _rawDisplay` / `_meshDisplay` 等 `!==` | 值比较/下标：`display_frame: Option<usize>`、`DisplayHandle` 值相等 | 同值 ⟹ 同变换/同几何/同纹理 → 刷与不刷结果一致，已论证无行为差异（slot.rs `DisplayFrame`/`update_display_data` 文档） |
+| D-4.17 | `Slot._onClear:279` 递归 `eachDisplay.dispose()`（子骨架）与 `Armature._onClear:123-124` `_clock.remove` | `Slot::on_clear` 只做本地复位 + adapter 分发（子骨架分支 warn 跳过）；子骨架递归由 `BaseFactory::dispose_armature` BFS 实现（`child_armature` + 各 `display_frames[].display`，去重防环）；clock 移除留 TODO | `on_clear` 拿不到 `ArenaCtx`（阶段 3 借用契约）；WorldClock 归阶段 5（P0-12）（slot.rs / base_factory.rs 文档） |
+| D-4.18 | `Slot.ts:541 / :549` 子骨架 `clock` 写入、`:554` `cacheFrameRate` 写回 data（`armatureData.cacheFrames` setter） | TODO 跳过（代码保留分支结构 + 注释） | 阶段 5（WorldClock）/ 阶段 6（cacheFrames setter，P1-4）再接 |
+| D-4.19 | 指南 F3.1「9 素材全部无约束」实测为错误事实；TS `Constraint.ts:72/:87/:198` `_scaleEnabled` 整行注释（TODO） | **IK 约束阶段 3 提前实现（F3.1 勘误）**：原始 JSON 键是 `constraint` 之外的 **`"ik"`**——`龙`（IK_L/IK_R，weight=0）与 `Rooster_Ani/Blend/P1`（bone_ik/bone_ik1，weight 缺省 1.0）共 4 个 IK 走真身；Path 仍为 stub（0 素材，真身留 P1-2）；同时忽略 `scale_enabled` | 静姿态差分证明必须真身——否则 rotation 回填链（`updateByConstraint` → `isCache=true` → `fromMatrix`）缺失，龙素材 rotation 必错；`scale_enabled` 忽略 = 对齐 TS 现状（constraint.rs 模块文档） |
+| D-4.20 | `EventObject.bone/slot` 存对象引用、`actionData` 存引用、含 `animationState` 字段 | `bone/slot` 存本骨架内索引（`Option<BoneIdx>` / `Option<SlotIdx>`）+ **冗余 `bone_name/slot_name`**（索引给核心逻辑按身份扫描；名字给事件消费者——jsdump golden 读 `e.bone.name`，监听器拿不到 arena 无法解析索引）；`action_data` 存 `ActionData` 克隆；无 `animation_state` 字段 | D-3.2 索引解环 / D-1.1 值语义；名字冗余在 `action_data_to_instance` 统一填、`event.slot` 覆写点同步补；`AnimationState` 类型阶段 4/5 才有；克隆意味着监听器原地改 `UserData` 会与 data 分叉（event_object.rs） |
+| D-4.21 | jsdump `NullSlot._onUpdateDisplay` 的 `this._rd = this._display \|\| this._rawDisplay` 赋值 | `NullSlotAdapter::update_display` 纯 no-op | 该字段全库无消费者；Rust adapter 不持有 Slot 状态（trait 方法不带状态参，D-3.4 签名冻结）——阶段 7 扩 trait 签名时再议（slot.rs trait/adapter 文档） |
+| D-4.22 | `_getSlotDisplay:307` `armatureDisplayData.armature = childArmature.armatureData`（data 层写回，`_buildChildArmature` 递归链上） | 不复刻 | Rust data 层不可变（D-3.3 / F3.3）；该字段 TS 只写不读（grep 零消费者：仅 parser 初始化 + 本行写入）→ 零行为影响（base_factory.rs `_get_slot_display` 注） |
+| D-4.23 | `parseDragonBonesData:482` `name = name ?? data.name`（`null` 表“未指定”） | 空串视作“未指定”落 `data.name`（`(!name.is_empty()).then_some(name)`） | Rust 入参 `&str` 无 null/undefined（jsdump 恒传非空 key，base_factory.rs:125 记偏差） |
+| D-4.24 | `addTextureAtlasData:573` `indexOf < 0` 按对象身份判重 | `Vec::contains` 值判重 | 值等价：同内容重复 push 无行为差异，判重更严（base_factory.rs:204 记偏差）；同名多 atlas 允许语义不变 |
+| D-4.25 | `buildArmature:704` fill 失败 warn 的 `dragonBonesName !== null ? dragonBonesName : ""` 拼串怪癖 | 直接 `warn!("No armature data: {}, {}", armature_name, db_name)` | 纯日志格式，无行为影响（base_factory.rs:952 不复刻） |
+| D-4.26 | `Armature.intersectsSegment` 的 3 个可选出参对象（intersectionPointA/B、normalRadians）+ `:548-551`「A/B 出参均未提供 → 首个命中即 break」分支 | 3 个出参对象并成 8 个 f64 入参（循环内局部 `Point` 承接、命中覆写）；`:548-551` 分支不复刻；返回值 = `:573 return intSlotA` 的坐标化 `Option<(f64, f64)>`（无命中 `None`） | 签名既定（任务 6 冻结）：Rust 恒“提供”出参；`normalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文档） |
+| D-4.27 | `Surface.init:451` 读 geometry 的 IR 根（TS 两跳对象引用，null 即崩溃） | `geometry.root` 缺失 → warn + 空顶点缓冲（`_update_vertices` / 曲面采样对空缓冲防御性跳过） | `finalize_root` 未跑属坏数据；TS 该路径读 undefined 得 NaN 污染矩阵，Rust 保持矩阵不动（surface.rs `SurfaceState::init` 记对照表偏差） |
+| D-4.28 | 病态配置 `target == chain`（Constraint.ts:173 改写 ikGlobal 后 :176 再读） | 不复刻特殊处理（无等价路径） | 本库 4 个 IK 的 target 均为独立效果骨、`sortBones.wait_constraint` 保证 `idx < root` → 不可达（constraint.rs 模块文档，登记见阶段 3 报告） |
+| D-4.29 | 槽排序比较器 `Armature.ts:46-48` `a…>b…?1:-1` **永不返回 0**（不一致比较器）→ ES2019 稳定排序保证不覆盖 `compare==0`，V8 实测对**等键组逆序**（node 验证 n=5/100/5000） | Rust 稳定 `sort_by_key(zIndex*1000+zOrder)`，等键保持**原序** | 官方公开路径 `z_order` 恒唯一（parser 0..n-1、`_setZOrder` 回写、ZOrder 时间轴按 data 序）→ 等键不可达；阶段 5/6 接 `_sortZOrder` 越界跳过时复核撞键（armature.rs 排序处注释 + `armature_unit` 排序测试） |
+| D-4.30 | `IEventDispatcher.removeDBEventListener(type, listener, thisObject)` 按三元组删单个；jsdump `EvProxy` 的 remove 是 no-op | `add_db_event_listener` 返回 `ListenerId(u64)` 句柄、`remove_db_event_listener(id)` 按句柄删单个 | `Box<dyn Fn>` 无身份可比；句柄化是 Rust 惯用形态，阶段 5 事件系统按此接（i_armature_proxy.rs 文档，调用方现为 0） |
+| D-4.31 | `Armature.dispose:265-270` 只 `_lockUpdate=true` + `_dragonBones.bufferObject(this)`，真正 `_onClear` 由 DragonBones **下一帧** flush | `BaseFactory::dispose_armature` 就地 `on_clear`（含 `db_clear`）+ BFS 递归子骨架 + `free.push` | 结果面等价（dispose 后不可达），时机提前一帧；官方缓冲语义随阶段 5 `bufferObject` 链一并复核（base_factory.rs `dispose_armature` 文档） |
 
 ### 4.1 阶段 2 必读：IR 量化事实（实测，修正 requirements D1）
 
@@ -388,3 +628,5 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 | `tests/pool.rs` | 池复用 / `hash_code` 保留 / 缓冲延迟回收 / 上限 |
 | `tests/ir_golden.rs` | 阶段 2：9 素材 × 8 组 IR 数组 bit 级全等 + meta/structure/atlas 快照（`norm()` 后） |
 | `tests/js_compat.rs` | JS 语义真值表：`js_round` 半数向 +∞ / 三 helper 三态 / TypedArray wrap |
+| `tests/pose_golden.rs` | 阶段 3：9 素材静姿态差分——骨 13 元 / 槽 15 元（前 4 元整数全等）/ `slotNames` 全序（F3.10 排序锚点）/ geometry 双向 / frameRate，容差 `1e-9*(1+\|want\|)`（不放宽 1e-6） → P0-6 / P0-7 / M3 |
+| `tests/armature_unit.rs` | 子骨架接线（F3.9 / D-3.2）、槽排序稳定性（R5 / F3.10）、`invalid_update` 传播（指南 3.3 转述勘误）、`displayIndex == -1` 提前返回（坑 10） |

@@ -293,7 +293,10 @@ impl ObjectDataParser {
             ..Default::default()
         };
 
-        if has_key(raw, ARMATURE) {
+        // armature 分支不再提前 return（TS 亦无早退）：官方在 `if (ARMATURE in rawData)`
+        // 块**之后**无条件捕获内嵌图集（ObjectDataParser.ts:2336-2338），两路汇合到
+        // 同一个 return——Rust 同构为 if/else 汇合后再捕获，避免 armature 键在时漏捕。
+        let out = if has_key(raw, ARMATURE) {
             self.data = Some(data);
             self.parse_array();
             self.frame_indices.clear();
@@ -326,14 +329,19 @@ impl ObjectDataParser {
                 data.stage = Some(data.armature_names[0].clone());
             }
 
-            return Some(data);
-        }
+            Some(data)
+        } else {
+            // 无 armature 时仍返回数据（TS 行为——`:2340 return data` 在 if 块外）。
+            Some(data)
+        };
 
-        // 无 armature 时仍返回数据（TS 行为）。
+        // TS:2336-2338：返回前**无条件**捕获内嵌 `textureAtlas`（armature 键在否无关）。
+        // 漏掉这条 → BaseFactory::parse_dragon_bones_data 的内嵌图集 while 循环
+        // （BaseFactory.ts:357-366）首圈即 break，含内嵌图集的 ske 图集静默丢失。
         if has_key(raw, TEXTURE_ATLAS) {
             self.raw_texture_atlases = raw[TEXTURE_ATLAS].as_array().cloned();
         }
-        Some(data)
+        out
     }
 
     /// 对齐 `ObjectDataParser.parseTextureAtlasData`（简化 null 回退路径）。
