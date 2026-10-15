@@ -1,327 +1,364 @@
-# 阶段 4 实现指南 — 动画系统
+# 阶段 4 实现指南：动画运行时
 
-> 配套 `docs/requirements.md` §4 阶段 4。按任务 1→8 顺序实现，验收清单全绿后告诉我，我 review 后写阶段 5 指南。
-> **基准 = 官方仓库实现**（`DragonBonesJS/DragonBones/src/dragonBones/`），不以素材覆盖裁剪行为——官方有、素材没打到的路径也要照实现（能单测的配单测，不能的结构照抄+注释标注）。
-> 本指南所有"实测"结论均已对官方 TS 源码逐行核对；**伴随研究笔记在本机 `target/stage4_notes/`**（`clock_driver.md` / `animation.md` / `animation_state.md` / `timeline_states.md`，含逐行伪代码与行号索引，实现时随手翻），笔记是本指南的展开版，冲突时以官方 TS 原文为准。
-> **编号说明**：本指南设计决策用 `DD-4.N`（`model_mapping.md §4` 的偏差编号 `D-4.N` 已占到 D-4.31，避免撞号）；实测事实用 `F4.N`。
+> 配套 `docs/requirements.md` §3 阶段 4。官方 TS 是行为规格，但不是 Rust 结构模板。
+> 本指南要求数值公式、状态转移、时间轴顺序和可观察行为对齐 TS；所有权、arena、容器、借用和调度采用 Rust 设计，并用行为测试证明等价。
+> 先完成任务 1 的架构决策与测试，再按任务 2→9 实现。全套验收通过后进行 review，再编写阶段 5 指南。
+> 参考笔记位于 `target/stage4_notes/`：`clock_driver.md`、`animation.md`、`animation_state.md`、`timeline_states.md`。行号以 `DragonBonesJS/DragonBones/src/dragonBones/` 当前 5.7 源码为准。
 
 ---
 
-## 0. 已实测事实与 requirements 修正（先读）
+## 0. 规则与已核实事实
 
-| # | 事实 | 影响 |
+### 0.1 哪些必须逐项对齐
+
+下列逻辑直接影响姿态、插槽或事件边界，逐个 TS 分支核对，并使用数值/行为测试锁定：
+
+- `BaseTimelineState` 的时间归一化、帧查表、帧跨越、easing 和 tween 公式。
+- 16 个具体 TimelineState 对扁平 IR 的索引、wrap、插值、pose 写点及调用顺序。
+- `AnimationState` 的 fade/playhead 状态、权重分配、timeline 分组遍历、自动淡出。
+- `Animation` 的公开 API 默认值、config 归一化和写回、副作用、子动画继承及更新顺序。
+- WorldClock/runtime 的时间缩放、0 早退、成员顺序、运行时 add/remove/clear 对本帧迭代的影响。
+- Action Play 链。它不受事件监听器闸门影响，会创建/推进动画状态，数值相关。
+
+“逐项对齐”不要求 Rust 代码逐行相似。保留官方表达式的算术顺序；若用不同控制结构表达同一行为，必须通过对应测试证明。
+
+### 0.2 哪些按 Rust 语义实现
+
+不机械移植 JS 对象引用、setter 回调、动态数组空洞、trait-object 所有权或对象池。Rust 实现采用 arena/newtype handle、唯一 owner、显式 runtime context 和安全容器。只有可观察的延迟释放/成员变更时机必须保留；对象内部如何被持有不属于验收目标。
+
+不要因 Rust 风格偏好改变官方可观察顺序。尤其不要用无序 HashMap 遍历替代会影响 blend 首写者的顺序，也不要通过 `Rc<RefCell<_>>` 绕过 arena 的借用边界。
+
+### 0.3 官方源码已核实的阶段 4 事实
+
+| 编号 | 官方事实 | 实现约束 |
 |---|---|---|
-| F4.1 | **requirements 行数是"非空行"口径**，实测（总行数）：`AnimationState.ts` **1602**（非 1445）、`Animation.ts` **959**（非 887）、`BaseTimelineState.ts` **570**（非 500）、`TimelineState.ts` **1074**（非 931）、`WorldClock.ts` **256**（非 240）、`DragonBones.ts` **400**（非 375） | 总量比 requirements 估算多约 15%，排期按 8–12 天上限走 |
-| F4.2 | requirements 任务 3 三处名不副实：①**帧定位不是二分查找**——`frameIndices[frameIndicesOffset + floor(currentTime*frameRate)]` O(1) 查表（BaseTimelineState.ts:200-201）；②**运行期没有贝塞尔**——`_getCurvePoint`/`_samplingEasingCurve` 是**解析期**（ObjectDataParser.ts:134/:147），运行期只有 `_getEasingValue`(:233)/`_getEasingCurveValue`(:253) 两个纯查表线性插值函数 | 任务 3 按笔记 `timeline_states.md §2` 实现，别去找不存在的二分/递归 |
-| F4.3 | **官方没有 `FadeState` 枚举**（requirements 决策 1 的值域不成立）：三个裸 `number`（AnimationState.ts:195-209）——`_fadeState` ∈ {-1 Fade in, 0 Fade complete, 1 Fade out}、`_subFadeState` ∈ {-1 Fade start, 0 Fading, 1 Fade complete}，**都没有 2 且同值不同义**；`_playheadState` 是位掩码 {2 Play, 1 Fade Play}，**只有 ===3 推进时间** | 见 DD-4.2：**两个枚举 + 一个位类型**，比较处 40 个点逐条对齐（笔记 `animation_state.md §10.2`） |
-| F4.4 | **17 个 `TimelineType` 值 → 16 个具体类**：`BoneAlpha=60` 与 `SlotAlpha=24` 共用 `AlphaTimelineState`（AnimationState.ts:440/:599）；类名拼写实测是 **`MutilpleValueTimelineState`**（缺 t，勿"纠正"）；**BoneAll 是 6 值/帧**（x,y,rotation,skew,scaleX,scaleY；TimelineState.ts:314） | 批次实现按 16 类；字段命名保留官方拼写并注释 |
-| F4.5 | **三基准读取链**：`abs = (frameIntOffset \| frameFloatOffset) + timelineArray[tl.offset+TimelineFrameValueOffset] + frameIndex*valueCount`，其中 `_frameValueOffset` 按 `FrameValueType` 三选一（Step=0 / Int 相对① / Float 相对②，parser:1253-1265） | 公式与逐类型表见笔记 `timeline_states.md §3`——**这是本阶段最核心的数据通路**，任务 6 全部批次共用 |
-| F4.6 | 异形轴三处：**SlotColor** 间接寻址（frameIntArray 存 colorArray 下标，`+=65536` wrap 修正 :678/:699）、**Surface/Deform** 用 `TimelineFrameValueCount`（**index 3，不是 4**）取 5 元 deform 头（:527/:883，Deform 版还有 :893-897 的 wrap 修正）、**Action/ZOrder/SlotDisplay** 是 Step 型值在 `frameArray` | 三处 wrap/异形照抄，漏了就是符号位分叉 |
-| F4.7 | **负时间三层接力、全库无 `.abs()`**：WorldClock 原样缩放（:110-112，`time` 只前进）→ `Animation.ts:173-175` 硬取正（注释 "Only animationState can reverse play."）→ **反向播放唯一实现点是 `AnimationState.ts:815-817` 自身带符号 timeScale** | abs 只在 Animation 层做一次；clock 层不取正 |
-| F4.8 | **`WorldClock.advanceTime(0)` 早退（:114-116）只跳推进**：`_systemTime` 刷新（:108）与 timeScale 缩放（:110-112）都发生在早退**之前**；`DragonBones.advanceTime` 的三段（objects flush :305-311 → clock :313 → events flush :315-331）**无条件执行** | 阶段 3 已按此改了 `BaseFactory::advance_time(0.0)` 早退（保持）；timeScale 必须排在 0 判定前 |
-| F4.9 | **Play action 与事件是两条队列、闸门不同**：`ActionType.Play` → `_bufferAction(ev, true)`（TimelineState.ts:43-49）**无监听器闸门 → 数值相关，阶段 4 必须真做**；Frame/Sound/start/loopComplete/complete 走 `bufferEvent` + `hasDBEventListener` 闸 → 纯事件可推阶段 5 | 阶段 4/5 边界的唯一分水岭（DD-4.5） |
-| F4.10 | `start/loopComplete/complete` **不在 `_advanceFadeTime`**（requirements §590 表述易误导），在 `ActionTimelineState.update`（TimelineState.ts:85/:103/:111），且 `loopComplete` 推迟到跨过第 0 帧才 buffer（:156-159/:215-218/:240-244，最后 :251-257 兜底 flush） | 事件体阶段 5，但**触发逻辑结构属于 Action 轴**（任务 6 批 1 照抄结构，入队走占位） |
-| F4.11 | `gotoAndStopByFrame` **官方真有**（Animation.ts:713-720 = `gotoAndPlayByFrame(name, frame, 1)` + `state.stop()`）；**`resetToPose` 不是方法**——只是 `AnimationConfig.resetToPose`（:114，默认 true）→ 拷进 `AnimationState.resetToPose`（:81）的**字段**；**`Animation` 没有公开 `fadeOut`**（公开版在 AnimationState.ts:1111，Animation 只有私有 `_fadeOut:102`） | 验收三条按此落地（任务 8）；requirements P0-9 的 "fadeOut" 指 `_fadeOut` 过滤器 |
-| F4.12 | `play()` 与 `fadeIn()` 的 fadeOutMode **不同**：`play` 走 `clear()` → **All(4)**（AnimationConfig.ts:279），`fadeIn` 参数默认 **SameLayerAndGroup(3)**——"同名重播"用哪个入口决定淡出范围；`_fadeOut` 里 **`Single` 是 `// TODO` 空 case**（Animation.ts:143-151 附近），Single 真逻辑在 `playConfig:352-362`（复用既有 state 早退） | 照抄，勿把 Single 挪进 `_fadeOut` |
-| F4.13 | **fade 推进在 timeScale 缩放之前**（AnimationState.ts:810-812 vs :814-817）→ 单状态 `timeScale` 不影响 fade；`pauseFadeIn` 默认 true（AnimationConfig.ts:286）→ init 起 `_playheadState=2` 冻结到淡入完成 `|=1`（:705/:749） | 顺序照抄；playhead 位语义见 F4.3 |
-| F4.14 | **时间归一化只在 `BaseTimelineState._setCurrentTime`（:92-161）**，且三分支：0/1 帧轴镜像 action（:97-101）、action 自身/带 timeScale·timeOffset 的真算（:102-141）、**普通多帧轴根本不归一化、直接抄 action 结果**（:142-146）；负数**先取反再 floor**（:130-133）→ `currentPlayTimes ≥ 0` 恒成立；负向整数倍时刻 `currentTime = _duration`（正向是 0）→ 不对称落到 `frameIndices` 多分配的第 `frameCount` 项 | 分支结构照抄；`frameIndices` 有 `frameCount+1` 项承接该越界（parser:1272） |
-| F4.15 | **缓存帧（P1-4）条件已实测**：`isCacheEnabled = (_fadeState===0) && cacheFrameRate>0`（:832，淡入淡出中都不缓存）；**多状态恒传 cfr=0**（Animation.ts:250 vs :230 单状态传真值）；素材不设 `armature.cacheFrameRate` → `:850-875` 整段短路 | 阶段 4 实现**结构保留、体留 `// TODO P1-4`**，但 `:832` 判断必须在（rate=0 时整段不进，零风险） |
-| F4.16 | Action 轴帧位置用 **`frameArray[pos] / frameRate` 除法**（6 处；`* frameRateR` 版本被官方注释 `// Precision problem`） | Rust 必须用除法，勿"优化"成乘法 |
-| F4.17 | **骨架 scale 两套落点**：BoneAll 在 `blend()` 里乘（:325/:334-343）；BoneTranslate/Surface/Deform 在 `init()` 置 `_valueScale` 读取期乘；BoneRotate/BoneScale **不乘** | 两处都要实现，别只做一处（笔记 §3.3 表） |
-| F4.18 | **IR 读取三件套**：`frameFloatArray` 已是 f32 量化（与 JS Float32Array 位级同）→ Rust 按 f64 读原值即可；`frameIntArray` 是 i16/u16 wrap 后的符号扩展 → **`+=65536` 修正三处必须原样**；parser 写侧 `round(v*scale)` 与运行侧 `_valueScale`（0.01/0.0001）是**量化-还原**关系，运行侧这步不能省 | 用 f64 直读/漏还原会引入 1e-7 级偏差撞穿容差（model_mapping §4.1） |
-| F4.19 | `BlendState` 在 **AnimationState.ts:1528-1601**；两层键 = `Animation.getBlendState(type→name→BlendState)`（:748-760），**每帧开头全部 `reset()`**（:188-193）；`update` 用 leftWeight(1.0 预算)/layerWeight/blendWeight 层优先分配，`dirty===1` = 首个写入者（先清零该骨 pose :894-902）；**官方不存在 `_fadeStates` 字段** | requirements"两层字典每帧 reset"正确；无 `_fadeStates` |
-| F4.20 | `AnimationState` **没有 `fadeIn()` 方法**（淡入 = init 时 `_fadeState=-1/_subFadeState=-1` 自然开始）、**没有 `_normalizedTime`**、**没有 `_timelineStates` 字典——是 8 个强类型数组（:229-236）** | DD-4.3；`start` 之类事件在 init/advance 里发 |
-| F4.21 | `DragonBones` 5.7 核心**没有 `dispatchEvent/addEvent/removeEvent`**——派发只有 `DragonBones.advanceTime:321 → armature.eventDispatcher.dispatchDBEvent`，`_eventManager` 只接 SOUND（:322-324） | 阶段 5 按此实现；阶段 4 只搭三段骨架（DD-4.5） |
-| F4.22 | **两个前置缺口**（阶段 3 留的 TODO，本阶段必须补）：`Armature::_sort_z_order`（Armature.ts:185-207，ZOrder 轴 3 个消费点）与 `Constraint::invalid_update`（Constraint.ts:218-224，IK 轴每帧调 :980） | 任务 6 批 0 先补 |
-| F4.23 | 两条 **READ-ORIGINAL** 待差分确认：① IK 轴 `_onUpdateFrame` 写 `_currentA/_currentB`（:971-972）而非 `_resultA/_resultB`，非 tween 帧 `_current*` 只在 tween 时赋值（BaseTimelineState:447-463）→ 可能读到陈旧值/初值 0.0（=weight 0、bend false）；② Deform JSON 路径退化使 `_parseDeformFrame` 头两分支不可达（dbbin 或不同）。9 素材 291 条 curve 全为长度 4 → `_curveCount` 负分支不可达 | 先照抄，差分打不过再回原文；负分支照抄不许"修复" |
-| F4.24 | `WorldClock` 迭代：长度 `l` 循环前**定格** → 本帧 `add` 的成员不推进；`remove` 置 null 跳过、空洞下帧压缩；**`clear()` 不清数组**——只把成员 `clock` 置 null 触发 setter 幂等闸（:241-254）回摘 | Rust 直译不能写成 `vec.clear()`（成员回指未复位=分叉）；笔记 §2 有完整表 |
-| F4.25 | `Armature._clock` 的**子骨架传播在 clock setter 里**（Armature.ts:904-910：挂钟时给已有子骨架递归挂同钟）+ `Slot._updateDisplay:549`（切换显示时挂）——**子骨架入钟只有这两个入口** | 漏掉 → 子骨架不被推进 → 数值差 |
-| F4.26 | `Animation` 拿数据：`_animations` 挂 `ArmatureData.animations` **引用**（Armature.ts:290），查表失败 warn+null（:339-348）；`replaceAnimation` 允许挂任意合并子集 | Rust `Arc<DragonBonesData>` + `armature_name` 直查（阶段 6 P1-5 的 replaceAnimation 留 TODO）；运行时**写** `AnimationData.cached_frames` 的硬冲突（笔记 §4.3）→ P1-4 前不可达，届时再议 RefCell/偏差 |
-| F4.27 | `EventObject.animationState` 全库**只写不读**（写点 AnimationState.ts:680/:716、Action Timeline :47；core 无读者，jsdump 也不 dump） | 阶段 4 **不建该字段**，阶段 5 若事件用例需要再建（登记于代码注释） |
+| F4.1 | requirements 行数与源码总行数有差异：AnimationState 1602、Animation 959、BaseTimelineState 570、TimelineState 1074、WorldClock 256、DragonBones 400 | 以 TS 原文和本指南行号为准，不以估算行数裁剪 |
+| F4.2 | 帧定位使用 `frameIndices[frameIndicesOffset + floor(currentTime*frameRate)]` O(1) 查表；Bezier 在解析期采样，运行期是 easing 与曲线表线性插值 | 不实现不存在的二分或运行期 Bezier |
+| F4.3 | `_fadeState` 值为 -1/0/1；`_subFadeState` 也为 -1/0/1 但含义不同；`_playheadState` 为位掩码，只有值 3 推进动画时间 | Rust 可用两个 enum 和 bitflags/newtype，不得混淆状态含义 |
+| F4.4 | 17 种 TimelineType 对应 16 个具体类；BoneAlpha/SlotAlpha 共用 AlphaTimelineState；BoneAll 每帧 6 个值 | 具体类/值布局按此实现；保留官方 `MutilpleValueTimelineState` 拼写仅用于源码定位 |
+| F4.5 | 时间轴值读取基址为 frame int/float 基址 + timeline offset 中的 value offset + frame index × value count；Step/Int/Float 三类 offset 来源不同 | 作为所有时间轴共用的数据读取规则 |
+| F4.6 | SlotColor 间接读 colorArray；Surface/Deform header 使用 TimelineFrameValueCount（IR index 3）；Action/ZOrder/SlotDisplay 的 Step 值位于 frameArray；若干 int16 wrap 需要 `+=65536` | 按 TS 指定数组和 wrap 规则读取 |
+| F4.7 | WorldClock 保留 dt 符号；Animation 层对负 dt 取正；AnimationState 的 timeScale 是反向播放入口 | 负时间只在 TS 指定层处理 |
+| F4.8 | WorldClock 更新时间基准、timeScale 缩放后才做 0 早退；DragonBones 的 objects/clock/events 三段无条件按序运行 | clock 的早退不能挪到 runtime 外层 |
+| F4.9 | Play Action 入 armature action 队列，无 listener 闸；Frame/Sound 等 event 走事件队列和监听器闸 | Play 链本阶段真实现；纯事件派发可在阶段 5 完成 |
+| F4.10 | start/loopComplete/complete 的触发属于 ActionTimelineState；loopComplete 有跨第 0 帧的延迟 flush | 保留触发点和相对顺序，即使事件消费留到阶段 5 |
+| F4.11 | `gotoAndStopByFrame` 存在；`resetToPose` 是 config/state 字段而非独立方法；Animation 没有公开 fadeOut | Rust API 和测试按真实公开行为映射 |
+| F4.12 | play 使用 All 淡出策略；fadeIn 默认 SameLayerAndGroup；`_fadeOut` 的 Single case 是空实现，Single 复用既有 state 的分支在 playConfig | 不合并这些路径 |
+| F4.13 | fade 推进先于 state timeScale；默认 pauseFadeIn 会冻结 playhead 直到 fade-in 完成 | 顺序保持 |
+| F4.14 | 时间归一化在 BaseTimelineState，分为 action/single-frame/普通多帧轴；普通多帧轴复制 action 时间；负时间取反后 floor；负向整数倍时刻 currentTime=duration | 分支结构与边界行为必须测试 |
+| F4.15 | cache 只在 fade 完成且 cacheFrameRate>0 时启用；多状态路径传 0；当前素材通常不会进入缓存体 | 本阶段保留结构并标注 P1-4，不伪称缓存已完成 |
+| F4.16 | Action 轴帧位置用 `frameArray[pos] / frameRate`，不是乘预先计算的倒数 | 保持除法表达式 |
+| F4.17 | 骨架 scale 修正落在不同轴的不同位置：BoneAll blend；Translate/Surface/Deform init 读值；Rotate/Scale 不乘 | 按轴移植，不统一“优化” |
+| F4.18 | float IR 已 f32 量化；int IR 有 i16/u16 wrap；parser 写侧 scale 与运行侧 `_valueScale` 互为量化/还原 | 两侧行为都要保留 |
+| F4.19 | BlendState 每帧 reset；leftWeight/layerWeight/blendWeight 分配；dirty 首写者清空 pose；遍历序影响结果 | 保留确定性遍历顺序 |
+| F4.20 | AnimationState 没有 fadeIn 方法、normalizedTime 或单一 timeline 字典；内部按固定组保存时间轴，并有 pose timeline 集合 | Rust 容器可调整，但组顺序和 pose fallback 必须保留 |
+| F4.21 | DragonBones 5.7 事件派发仅在 advanceTime flush；全局 eventManager 只接 SOUND | 事件边界阶段 5 收口 |
+| F4.22 | 阶段 3 尚缺 `_sort_z_order` 和 `Constraint::invalid_update`，阶段 4 时间轴会调用 | 在 ZOrder/IK 轴之前补齐 |
+| F4.23 | IK currentA/B 与 Deform JSON 退化路径需 READ-ORIGINAL；素材未覆盖的曲线负分支仍须保留 | 先按源码保留，再用合成输入验证可达行为 |
+| F4.24 | WorldClock 固定初始循环边界；新增成员本帧不推进；移除成员跳过并在压缩阶段处理；clear 通过成员关系解除，不只是清容器 | 用 runtime 调度算法实现，不要求复制 JS 空洞数组 |
+| F4.25 | 根骨架挂钟会传播至现有 child；Slot 切换 child display 时也挂接；buildArmature 本身不挂钟 | 两个传播入口不可漏 |
+| F4.26 | Animation 从 `ArmatureData.animations` 查数据；cacheFrame 写路径属于 P1-4 | 数据通过只读 Arc/借用访问，不把可变缓存伪装成不可变引用 |
+| F4.27 | EventObject.animationState 在核心只写不读，golden 不 dump | 阶段 4 不加该字段，除非事件验收证明需要 |
+
+### 0.4 阶段边界
+
+阶段 4 完成动画数值、WorldClock 调度、Action Play 和帧级 golden。阶段 5 完成事件 listener dispatch、SOUND 双发、EventObject 池化及交叉动画用例矩阵。事件触发条件和入队时点若影响状态/Action，不得因消费延后而省略。
+
+阶段 4 的事件验证走任务 1.4 固定、任务 7 落实的 seam：注册 9 类探针打开 listener 闸门 + `take_flushed_events()` 快照断言顺序，flush 不 dispatch；阶段 5 只把 flush 的“丢弃”换成 dispatch + 回收，事件产生路径不动。
 
 ---
 
-## 1. 设计决策（DD-4.1 – DD-4.8）
+## 1. Rust 运行时架构决策
 
-### DD-4.1 模块布局（D7：1 TS 文件 → 1 Rust 模块）
+### 1.1 唯一 owner 与 arena
 
-```text
-src/animation/mod.rs            ← 重写：Animation（Animation.ts 959 行）+ pub mod
-src/animation/world_clock.rs    ← WorldClock（256）+ IAnimatable 语义（76，无对象可言→并入）
-src/animation/animation_state.rs← AnimationState（1602）+ BlendState（同文件 :1528-1601）
-src/animation/base_timeline_state.rs ← 5 个抽象基类（570）
-src/animation/timeline_state.rs ← 16 个具体类（1074）
-src/core/dragon_bones.rs        ← 常量 struct 保留，**新增实例部分**（见 DD-4.5；阶段 5 继续长）
-src/armature/armature.rs        ← +clock 字段/getter/setter/子骨架传播、_sort_z_order 真身、
-                                   on_clear 里 animation.reset→on_clear（R4）
-src/armature/constraint.rs      ← +invalid_update（F4.22）
-src/factory/base_factory.rs     ← +_dragonBones 字段注入、clock() getter、advance_time 走三段
-```
-
-`AnimationConfig`/`AnimationData`/`TimelineData` 阶段 2 已在 `model/`，本阶段**只核对不重写**（任务 2）。
-
-### DD-4.2 fade 子状态 = 两个枚举 + 一个位类型（修正 requirements 决策 1）
+由 `BaseFactory`（或本阶段新增的窄 `Runtime`，但不能出现双 owner）拥有：
 
 ```rust
-/// 对齐 `_fadeState`（AnimationState.ts:199-205 注释）：值域 {-1,0,1}，**无 2**。
-#[repr(i8)] enum FadeState { FadeIn = -1, FadeComplete = 0, FadeOut = 1 }
-/// 对齐 `_subFadeState`（:206-209）：**同数字与 FadeState 不同义**（-1=Fade start, 0=Fading, 1=Fade complete）。
-#[repr(i8)] enum SubFadeState { FadeStart = -1, Fading = 0, FadeComplete = 1 }
-/// 对齐 `_playheadState`（:195-198 "Play Enabled, Fade Play Enabled"）——位掩码：
-/// bit1(2)=Play（用户层），bit0(1)=Fade Play（淡入完成解锁）；**只有 3 才推进时间**（:814）。
-#[repr(u8)] struct PlayheadState(u8);   // stop(): &=1；fadeOut(pause): &=2；init: pauseFadeIn→2 否则 3
-```
-
-**不许用魔法数字**，但 40 个比较点（笔记 `animation_state.md §10.2` 列全）必须逐条语义等值；`2` 只出现在 `_timelineDirty` 与位值里——`_timelineDirty` 单独用小整数枚举。
-
-### DD-4.3 `AnimationState` 的时间轴容器 = 8 个强类型字段（修正 requirements 决策 2）
-
-官方不是 `enum TimelineStateKind + Vec`，是 8 个强类型数组（:229-236）且 `advanceTime` 按**固定分组序**遍历（action → zOrder → bone → boneBlend → slot → slotBlend → constraint → animation，:842-1015）。Rust 跟随官方：
-
-```rust
-pub struct AnimationState {
-    pub action_timeline: Option<ActionTimelineState>,
-    pub z_order_timeline: Option<ZOrderTimelineState>,
-    pub bone_timelines: Vec<BoneAllTimelineState>,        // 见下注
-    pub bone_blend_timelines: Vec<…>, pub slot_timelines: Vec<…>,
-    pub slot_blend_timelines: Vec<…>, pub constraint_timelines: Vec<…>,
-    pub animation_timelines: Vec<…>,
-    // + pose_timelines（resetToPose 兜底，:1022-1060）、8 数组之外的字段见笔记 §1
+struct Runtime {
+    armatures: Vec<Option<Armature>>,
+    clocks: ClockArena,
+    // DragonBones data, event queue, parser/factory state as needed.
 }
-// 注：骨四类（All/Translate/Rotate/Scale）与 Blend 两类官方也是分数组
-//（:408-434 等 4 组 + _boneBlendTimelines…）——照 AnimationState.ts:229-236 实测的
-// 8 个数组名一一落成字段，别自造分组。
+
+struct ClockArena {
+    clocks: Vec<Option<WorldClock>>,
+}
+
+struct WorldClock {
+    time: f64,
+    time_scale: f64,
+    system_time: f64,
+    parent: Option<ClockId>,
+    members: Vec<AnimatableHandle>, // stable order
+}
+
+enum AnimatableHandle {
+    Armature(ArmatureIdx),
+    Clock(ClockId),
+}
 ```
 
-分组遍历序是契约（影响 BlendState 的 `dirty` 首写者与 `prevTarget` 去重，:889-892）。
+设计要求：
 
-### DD-4.4 借用策略（沿用阶段 3 的"拆字段 + ctx"三板斧）
+1. `WorldClock` 不拥有 Armature，不保存 `&mut BaseFactory`，不保存 `Box<dyn IAnimatable>`。
+2. Armature 与 Clock 都用 newtype handle 相互引用；容器 owner 唯一，禁止 `Rc<RefCell<_>>`。
+3. `AnimatableHandle::Clock` 纳入本阶段，因为官方 WorldClock 本身实现 IAnimatable，嵌套 clock 属于其公开行为。循环嵌套必须避免递归栈溢出；测试定义官方允许的自环/环行为，不额外发明无限递归。环检测/断开属于**对官方行为的有意偏离**（官方 `add` 不防环），结论与依据登记进任务 8 的差异条目。
+4. `Armature.clock` 可保留 `Option<ClockId>` 作为回指状态，但只由 runtime 关系操作修改；不能提供会绕过成员表的裸 setter。
+5. handle 指向空 arena slot 时视为无效成员：推进时安全跳过并清理；dispose 要先 detach 再回收 slot。
 
-1. **`Armature::advance_time` 内**：`let Self { animation, bones, slots, constraints, actions, … } = self;` 字段级解构后，`animation.advance_time(passed_time, &mut AnimCtx { bones, slots, actions, constraints, scalars…, world })` ——新增 **`AnimationCtx`**（对照 `SlotUpdateCtx` 先例，`armature/slot.rs:239`）：
-   - `bones: &mut [Bone]`、`slots: &mut [Slot]`、`constraints: &mut [Constraint]`、`actions: &mut Vec<EventObject>`（Action 轴 `_bufferAction` 用）；
-   - 骨架标量（写点都在时间轴/状态）：`cache_frame_index: &mut i32`、`alpha_dirty/z_index_dirty/slots_dirty: &mut bool`、`armature_idx`、`inherit_animation: bool`、`cache_frame_rate: f64`（数据侧）；
-   - `world: &mut ArenaCtx`（跨骨架：子骨架 fadeIn 继承 Animation.ts:443-452、inheritTimeScale 父链 :178——父必须先推进，成员资格即数值）；
-   - proxy 引用怎么办：`hasDBEventListener`/`bufferEvent` 是事件面 → 阶段 4 事件走**全局 `DragonBones` 占位**（DD-4.5），不摸 proxy，`Armature` 持 `_dragonBones: Option<ArmatureIdx?…>` 见 DD-4.5 的取舍。
-2. **`Animation::play/fadeIn/gotoAnd*` 的 config 双重借用**（TS `this.playConfig(this._animationConfig)`）：Rust 用 **`mem::take(&mut self.animation_config)` → 本地填 → `play_config(&mut cfg)` → 写回**，或 `play_config(AnimationConfig) -> AnimationStateRef` 值语义。任选其一，**归一化写回行为必须保留**（playConfig 原地改 cfg：F 见笔记 `animation.md §3.2`——首播 fadeInTime 强制 0、fadeOutTime 缺省=fadeInTime、timeScale≤-100 → `1/ad.scale`、负 position `duration - (pos%dur)`…）。
-3. **状态引用**：`AnimationState` 由 `Animation.animation_states: Vec<AnimationState>` 拥有；跨对象引用（`last_animation_state`、`EventObject` 若阶段 5 建字段、`_parent` 子状态）用 **`StateRef(索引)`/`(ArmatureIdx, u32)`**，禁 `Rc`（D3）。`get_state` 倒序扫描语义（:787-797）保持。
-4. **`blend_states`**：`HashMap<String(type), HashMap<String(name), BlendState>>` 归 `Animation` 拥有（对应 :63 两层字典）；`BlendState.target` 是骨/槽/约束的**目标引用** → 用 `BlendTarget` 枚举（`Bone(BoneIdx)/Slot(SlotIdx)/Constraint(BoneIdx)/AnimationState(StateRef)/Surface…`，按 `getBlendState` 调用点实测收口）。
+### 1.2 RuntimeCtx：窄能力，不传万能 Factory
 
-### DD-4.5 阶段 4/5 事件边界（最小占位面——数值必须真 / 事件可占位）
+加入一个只在驱动/跨对象更新期间存活的上下文（名称可为 `RuntimeCtx` 或扩展 `ArenaCtx`）：
 
-**阶段 4 必须真现**（缺了 golden 数值就不过）：
-1. `WorldClock` 全语义（F4.8/F4.24）；
-2. `Armature.clock` 字段 + getter/setter + **子骨架传播**（F4.25）+ `on_clear` 的 `_clock.remove`（Armature.ts:123-124，阶段 3 留的 TODO 正好关闭）；
-3. `DragonBones` **实例部分**（不再是常量 struct）：`_clock` + `advance_time` 三段骨架——① objects flush **空队列 no-op**、② `_clock.advance_time(dt)` **真现**、③ events flush **循环体只 clear 不 dispatch**（保持同帧清空节奏，阶段 5 只填循环体）；
-4. `buffer_event`（真 push + 去重，无派发也无害）/ `buffer_object`（no-op 占位）两个方法**签名存在**——调用点：AnimationState.ts:681/:717、TimelineState.ts:59/:90、Armature.ts:268；
-5. **Play action 链**：Action 轴 → `armature.buffer_action(ev, true)`（阶段 3 已有）→ `Armature::advance_time` ⑦ 消费 → `animation.fade_in`（本阶段真身）——**不经事件、无闸门**（F4.9）；
-6. `BaseFactory._dragonBones` 字段 + `clock()` getter（jsdump.mjs:94/101 形态）；`BaseFactory::advance_time(dt)` 改为委托 `dragon_bones.advance_time(dt)`。
+```rust
+struct RuntimeCtx<'a> {
+    armatures: &'a mut [Option<Armature>],
+    clocks: &'a mut [Option<WorldClock>],
+    // 当前 clock 的成员表由独立拆借字段/操作器提供。
+}
 
-**阶段 5 才做**：`dispatchDBEvent`、SOUND 双发、监听器 harness、池回收、`EventObject.animationState`（F4.27）。
-**占位即数值安全的证明链**：事件派发只调回调、核心无事件→数值回路；`hasDBEventListener` 恒 false 时连 EventObject 都不构造（闸门结构照抄 TimelineState.ts:53/85/103/111、AnimationState.ts:676/:712）。
+impl RuntimeCtx<'_> {
+    fn armature(&self, id: ArmatureIdx) -> Option<&Armature>;
+    fn set_armature_clock(&mut self, id: ArmatureIdx, clock: Option<ClockId>);
+    fn advance_animatable(&mut self, handle: AnimatableHandle, dt: f64);
+}
+```
 
-> ⚠️ **推进成员资格**（F4.8 + 阶段 3 已有行为的衔接）：`BaseFactory::advance_time(dt)` 改三段委托后，**只推进挂了 clock 的骨架**——`build_armature` 官方不自动挂钟（jsdump 是手动 `armature.clock = factory.clock`）。差分 harness 必须自己挂钟（任务 8）；阶段 3 的 `pose_golden`/`armature_unit` 只用 build 收尾 advance 与 `advance_one`，**不受影响**（`advance_time(0.0)` 仍早退 no-op）。`dispose_armature` 必须同时 `clock.remove`（成员资格泄漏）。
+签名可调整以满足 Rust 借用，但遵循以下实现模式：
 
-### DD-4.6 数据访问 = `Arc<DragonBonesData>` 直查 + 名字
+- 从成员 Vec 取一个 handle 到局部值，再释放成员表借用。
+- 通过 arena 将对应对象 `take()` 出来，执行推进，放回原 slot。
+- 推进上下文允许 `set_armature_clock`、Slot child display 接线和 Action 建立新 state；成员关系操作写回当前 clock 成员表。
+- 避免持有一个跨整个推进循环的 `&mut members` 同时调用会修改该 Vec 的方法。
+- 若使用 pending command queue，则每条命令须在官方对应操作时点生效；不能统一拖到整帧结束导致成员资格差异。
 
-- `Animation._animations` 不存引用：查表 = `data.armatures[armature_name].animations.get(name)`（失败 `log::warn!` + None，对齐 :339-348）；
-- 时间轴 init 读 IR：`data.root.as_ref()` → `ir.frame_float_array/frame_int_array/frame_array/timeline_array/frame_indices/color_array`（阶段 2 已锁）；
-- `AnimationData.cached_frames` 运行时写（:868/:872）= **P1-4 才开**（F4.15：rate=0 整段不进）→ 结构照抄、体 `// TODO P1-4`，届时再议 RefCell 或登记偏差。
+该上下文是 Rust 借用边界，不是 TS 对象的替代物。它只暴露当前更新路径确实需要的操作。
 
-### DD-4.7 事件结构照抄、体走占位
+### 1.3 WorldClock 遍历语义
 
-`_advanceFadeTime`/`ActionTimelineState` 里 `hasDBEventListener` 闸 + `buffer_event` 调用**结构逐行保留**（行号注释齐全），阶段 5 往 `DragonBones::buffer_event`→flush 填真身时零结构改动。
+按 `WorldClock.ts:97-155` 实现语义，不照搬 `null` 空洞表示：
 
-### DD-4.8 `Animation::on_clear`（关闭阶段 3 的 R4 TODO）
+1. NaN→0；显式负 dt 用“当前系统时间 - 上次基准”替代；创建时初始化 system time。
+2. 刷新 system time，应用 timeScale，再对缩放后的 0 早退。
+3. `time += abs(passedTime)`，但成员收到带符号 passedTime。
+4. 固定本轮开始边界。推进中新 add 的 handle 本轮不推进；本轮尚未到达的 handle 被 remove 后跳过；当前 handle 推进过程中 self-remove 不重复推进。
+5. 遍历后安全整理成员顺序。Rust 可用 `Vec<Option<Handle>>` tombstone + `retain`/压缩，也可用快照与增量列表；选择必须通过下列行为测试，且不能用 `unsafe set_len`。
+6. `clear()` 解除每个成员的回指及嵌套 clock 关系；清除后容器状态和所有 owner back-reference 一致。
+7. `contains` 沿 clock parent 链查询，不把“直接成员”误当祖先包含语义。
+8. 时间源可注入：`system_time` 与负 dt sentinel 依赖墙钟（TS `Date.now`）。提供可测 seam——内部 `advance_time_with(passed_time, now)`、对外入口取真实 now，或可替换的 now 函数字段——否则任务 1 测试矩阵里 “system time 更新顺序、time 与成员 dt 符号符合 TS” 的断言无法稳定成立。
 
-TS `_onClear`（Animation.ts:68-100）= states 逐个回收 → `_animations` 表逐 key delete（:73-75，**`:96` 的 clear 被注释**）→ `_blendStates` 逐项回收 delete → config `clear()` 保留实例（Rust 无池）→ 标量复位（timeScale=1.0、inherit=1.0、dirty=false、数组清空）。`Armature::on_clear` 把 `reset()+init` 换成 `on_clear()`。
+### 1.4 时间轴容器与确定性
+
+TS 的 8 组 timeline 遍历序会影响首写者、pose reset 和 action 先后（F4.19/F4.20）。Rust 可以用强类型字段、固定数组或 enum+有序 Vec；只有当更新序被显式固定并经测试时，才可合并容器。任何 HashMap 只用于按键 lookup，不可依赖其 iteration 顺序。
+
+AnimationState 引用使用 `StateIdx`；骨骼/槽/约束目标用 `BoneIdx`/`SlotIdx`/`ConstraintIdx`。不要在状态机内部保存跨 arena Rust 引用。
+
+- `ConstraintIdx` 按**创建序身份**定义（constraints 恒不重排，同阶段 3 `SlotIdx` 语义），不得以容器位置充当身份。
+- `StateIdx` 必须有稳定语义：官方多状态回收会压缩数组（Animation.ts:246-254），裸 Vec 下标会漂移——用 `Vec<Option<AnimationState>>` 槽位化（tombstone，索引天然稳定），或回收时同步作废旧索引并断言失效；二选一，必须有测试覆盖“状态回收后旧引用不被误用”。
+
+### 1.5 数值兼容的实现纪律
+
+- 复制 JS 运算顺序，特别是除法位置、加减次序和 f64 中间值。
+- 对 JS wrap/round 已有 helper（阶段 2）复用，不重复实现另一套。
+- 未覆盖分支可用合成 timeline/IR 输入测试；不能以素材未触发作为删除理由。
+- 遇到看似官方 bug，先 READ-ORIGINAL 并做最小差分测试；未经用户确认和差异登记不“修复”。
+
+### 1.6 阶段 3 触碰面（任务 1 的前置改造）
+
+Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工即处理，完成后先确认阶段 3 回归再继续：
+
+- **0 早退位置迁移**：阶段 3 现状在 `BaseFactory::advance_time` **最顶层** `dt == 0 → return`（当时以 WorldClock.ts:114 为据）；任务 1.4 要求 dt=0 时外层 objects/events 两段仍执行 → 该早退**下移进 `WorldClock::advance_time` 内层**。`armature_unit::advance_time_zero_is_noop_while_advance_one_drives` 的注释依据同步更新（断言本身仍应成立：挂钟成员在 dt=0 时不被推进）。
+- **`ArenaCtx → RuntimeCtx` 签名迁移**：`Armature::advance_time(&mut ArenaCtx)` 的形参、`SlotUpdateCtx::world`、`Slot` 的 child clock 两处 TODO（Slot.ts:541/:549——正是任务 1.5 要落实的接线）、`BaseFactory::dispose_armature` 增加 detach。
+- **推进驱动换轴**：`BaseFactory::advance_time(dt)` 从 arena 全遍历改为「`DragonBones` 三段 → 挂钟成员」驱动（对应常见错误 5）；`advance_one(idx, dt)` **保留**单骨架直驱语义（build 收尾与既有测试依赖它，即官方 `armature.advanceTime(0)` 直调形态）。
+- 既有测试兼容性：`pose_golden`/`armature_unit` 不挂钟、只用 build 收尾 advance 与 `advance_one`——改造后必须**原样全绿**（任务 1 完成条件已含 workspace 回归）。
 
 ---
 
-## 2. 组件与字段清单（对照 TS 抄；细表在笔记）
+## 2. 任务依赖与实施步骤
 
-| 组件 | 字段/方法全表在哪 | 落地时注意 |
-|---|---|---|
-| `WorldClock` | 笔记 `clock_driver.md §2`（字段 :49-68 已列） | `advance_time` 伪代码在笔记；F4.24 迭代语义 |
-| `Animation` | `animation.md §1（18 方法+8 getter API 表 + Rust 草案）/§2 字段表` | `animationConfig` getter **每次读都 clear()**（:939-942）；`isCompleted` 空列表 **false**（:861）；`_onClear` 见 DD-4.8 |
-| `AnimationState` | `animation_state.md §1 字段全表（默认=_onClear）/§6` | 8 强类型数组（DD-4.3）；`_pose_timelines`（:1022-1060）别漏 |
-| `BaseTimelineState` 5 基类 | `timeline_states.md §1 职责表/§2 伪代码` | `playState` 三态 {-1 start, 0 play, 1 complete}（BaseTimelineState.ts:30-32）；`dirty` 生命周期（§2.4） |
-| `BlendState` | `animation_state.md §5`（AnimationState.ts:1528-1601） | `update` 三分支 + `dirty` 语义；`_reset` 每帧（Animation.ts:188-193） |
-| `AnimationConfig` | 已在 `model/animation_config.rs`（阶段 2）+ `animation.md §0/§3.2 消费点` | 核对 `clear()` 默认值与 **AnimationConfig.ts:279-296** 逐项一致 |
-| 16 个时间轴类 | `timeline_states.md §4 类清单表（每帧布局/写点/绑定行号/依赖就绪度）` | §3 三基准链 + §5 Action/ZOrder 完整伪代码 |
+执行顺序：**任务 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9**。任务 8 随手维护 TODO/差异清单。任务 7 的 golden harness 可在任务 6 批 2 完成 BoneAll 后提前搭建。
 
----
+## 任务 1 — Runtime/Clock handle 调度与行为测试
 
-## 任务 1 — `WorldClock` + 驱动链接线（requirements 顺序第 1 步）
+目标：先证明 Rust arena 能表达官方 clock 成员资格和推进期间变更，再开始动画状态机。
 
-1. `src/animation/world_clock.rs`：字段（time/timeScale/_systemTime/_animatebles/_clock）+ `advance_time`（**逐行照笔记 `clock_driver.md §2` 伪代码**：NaN→0、负 dt 自动帧间隔、`_systemTime` 先于早退刷新、timeScale 先于 0 判定、time 绝对值前进而成员收到带符号 dt、长度定格 + 前移压缩 + 尾段整理）+ `add/remove/clear/clock setter`（幂等闸 :241-254；`clear()` 不 vec.clear()——F4.24）。
-   `IAnimatable`（76 行）在 Rust 是 trait：`fn advance_time(&mut self, passed_time: f64)`——`Armature` 实现之（现有方法直接挂 trait 即可）。
-2. `Armature`：`clock: Option<ClockHandle>`（阶段 5 定型，先存 `Option<u32>` 句柄或直接 `Option<()>` 占位 + TODO——**要能表达"当前挂的钟"以便 setter 幂等与 on_clear 摘除**；建议阶段 4 直接让 `BaseFactory` 拥有 `WorldClock` 实例、`Armature.clock` 存 `Option<ClockIdx>` 简单新类型，阶段 5 扩成多钟）；getter/setter 按 Armature.ts:886-911 逐行（**挂钟时子骨架递归挂同钟 :904-910**，摘钟同理）；`on_clear` 的 `clock.remove`（:123-124）落地。
-3. `core/dragon_bones.rs` 实例部分：`DragonBones { clock, events: Vec<EventObject>, objects: …(no-op 队列) }` + `advance_time` 三段骨架（占位面按 DD-4.5）+ `buffer_event/buffer_object`。**静态常量 struct 不动**（`VERSION/Y_DOWN/…`）。
-4. `BaseFactory`：`_dragon_bones: DragonBones` 字段（jsdump:94 `new DragonBones(em)` 等价——事件 dispatcher 先喂 `NullArmatureProxy` 或空实现，阶段 5 接 eventManager）、`fn clock(&mut self) -> &mut WorldClock`（jsdump:101 用）、`advance_time(dt)` 委托三段；`dispose_armature` 摘钟。
+前置：先完成 §1.6 的阶段 3 触碰面改造（0 早退迁移、ArenaCtx→RuntimeCtx、推进换轴），并确认阶段 3 回归全绿。
 
-**验收自测**：`advance_time(0.0)` 仍 no-op（阶段 3 测试绿）；`advance_one` 不变；`advance_time(dt>0)` 只推进挂钟骨架——挂钟前后各跑一次断言。
+1. 设计并实现 `ClockId`、`AnimatableHandle`、`ClockArena/WorldClock` 和窄 runtime context。Armature/Clock 均由 runtime arena 拥有；禁止 trait-object ownership。
+2. 提供统一关系入口：attach/detach armature、clock parent attach/detach、clear、dispose。armature 的 clock back-reference 和成员表必须原子式维护。
+3. 实现 `WorldClock.advance_time` 的 F4.8/F4.24 语义与 runtime dispatch。WorldClock 保持时间策略；runtime 按 handle 解析并推进对象。
+4. 接入 `DragonBones.advance_time` 三段顺序：objects flush（Rust 暂无对象池，可空操作）→ clock advance → events flush。dt=0 不跳过外层两段。事件 seam（P1-1 已定）：
+   - `buffer_event` 真入队（去重按 TS:334-338），`buffer_object` 本阶段 no-op 占位；
+   - flush 点把队列**整体移入“本帧已 flush”缓冲**：`take_flushed_events() -> Vec<EventObject>`（取走即清；或 `advance_time` 直接返回本帧快照，二选一），`BaseFactory` 透传该 seam。flush 本身**不 dispatch、不调用任何 listener**，禁止“静默清空后无法验证”；
+   - 注意可见性：`tests/` 是集成测试（外部 crate），`pub(crate)` 看不到——seam 用 `pub` + `#[doc(hidden)]`（或 dev-feature 门控），不要 `pub(crate)`；
+   - 阶段 5 把 flush 的“移入缓冲”替换为 `dispatchDBEvent` + SOUND 双发 + 池化回收，事件产生路径与队列顺序保持不变。
+5. 接入 Armature clock propagation 两处：根挂钟传播至已有 child（Armature.ts:904-910）；Slot display child 切换时继承 parent clock（Slot.ts:541/549）。buildArmature 不自动挂钟。dispose/clear 必须 detach。
 
-## 任务 2 — 数据面核对 + Animation 骨架 + 占位收口
+**必须覆盖的 clock 测试**（不依赖动画数据）：
 
-1. `AnimationConfig` 核对：`clear()`/`copy_from()` 与 **AnimationConfig.ts:279-296** 逐字段 diff（含 `fadeOutMode` 默认 All、`timeScale` 默认 -100、`playTimes=-1`、`autoFadeOutTime=-1`——注意笔记提到 :304 与 config:296 的默认差异，以 `_onClear` 为准）；缺啥补啥，`tests/model_defaults.rs` 加断言。
-2. `Animation` **骨架**（先字段后逻辑）：按 `animation.md §2` 字段表 + `_onClear` 逐字段；`init(armature_idx)`（:161-168 幂等）、`animations` 挂表 setter（:908-926：同引用早退 + 按插入序重建 `animation_names`）——**Armature::init 阶段 3 已调 `animation.init`，本任务补挂表**（对应 Armature.ts:290，读 `armature_data().animations`）；`on_clear`（DD-4.8）替换 `armature.rs` R4 的 `reset()+init`；`play/fadeIn/goto*/stop/reset/get_state/has_animation/get_states/is_playing/is_completed/last_*` **先留签名 + `todo!()`**（任务 5 填体），签名按 `animation.md §1.3 草案`（★`play` 第 2 参 `play_times: i32`、`stop(Option<&str>)`、`fadeIn` 6 参——阶段 3 占位签名是错位的，本任务一并改）。
-3. **调用点同步改造**（签名一改就断的，全在本任务收掉）：
-   - `armature/slot.rs` 子骨架分支 `child.animation.play(None, -1.0)` → `play(None, -1)`（playTimes 语义）；
-   - `armature/armature.rs` action 队列三分支 `fade_in(name, -1.0)` → 官方调用形态（Animation.ts:360/368/374 实测参数——**读原文**：`childArmature.animation.fadeIn(actionData.name)` 单参默认 vs `this._animation.fadeIn(actionData.name)`，映射成 `fade_in(name, -1.0, -1, 0, "", SameLayerAndGroup)` 或提供默认包装）；
-   - `factory/base_factory.rs` `_getSlotDisplay` 的 `play(None, -1.0)` 同步；
-   - 其余 `animation/mod.rs` 模块头的"占位差异表"注释按实现情况收缩。
-4. `EventObject`：**不建 `animationState` 字段**（F4.27），在 `event_object.rs` 注释登记。
+| 用例 | 断言 |
+|---|---|
+| 新建/直接 attach/detach | 成员顺序、回指一致；重复 attach 幂等 |
+| timeScale 0/0.5/2 | 0 早退；时间累计与传入成员 dt 符合 TS |
+| dt=NaN、正数、负数 sentinel | system time 更新顺序、time 与成员 dt 符号符合 TS |
+| 未挂钟与已挂钟 Armature | 只有 clock 成员被 runtime advance；`advance_one(0)` 仍跑单骨架更新 |
+| 推进 A 时新增 B | B 本轮不推进，下轮按插入序推进 |
+| 推进 A 时移除尚未访问的 B | B 本轮跳过，关系回指清除 |
+| A 推进中移除自身 | 不崩溃、不重复推进；之后成员表可继续使用 |
+| clear 多成员 | 所有 Armature/Clock back-reference 清除，之后可重新 attach |
+| 根挂钟与 child 切换 | 已存在 child 递归挂接；切换旧 child 摘除，新 child 加入 |
+| dispose clock member | arena slot 清空前摘除成员，下一次 advance 无 stale handle |
+| 嵌套 clock/contains | parent 链查询正确；嵌套 clock 按 handle 推进且无无限递归 |
 
-## 任务 3 — `BaseTimelineState` 5 个抽象基类（笔记 `timeline_states.md §1/§2`）
+**任务完成条件**：以上测试通过；`cargo test --workspace` 阶段 0-3 回归通过；clock 设计没有未实现的公开假方法。未覆盖的循环 clock 语义写入“差异/限制”而不是留静默 TODO。
 
-- 5 个基类按官方（TimelineState / Tween / Single / Double / Multiple——**以 `BaseTimelineState.ts` 实测类名为准**，笔记 §1 有职责表）；
-- `_set_current_time` **三分支逐行**（笔记 §2.2 伪代码 + F4.14 要点）：返回 `bool`"时间没变→整帧跳过"；
-- `update` 帧定位（§2.1）：O(1) 查表（F4.2）、`frameIndices` 尾项承接（:121 `duration+0.000001` 精度补偿 → floor 越界一格）、`_on_arrive_at_frame/_on_update_frame` 钩子与 `dirty` 生命周期（§2.4）；
-- 缓动两函数（§2.3）：`get_easing_value`（QuadIn/QuadOut/QuadInOut 半余弦 + `(value-progress)*easing+progress`）与 `get_easing_curve_value`（查表线性、`count>0` 判 omited、**负分支照抄不修**——F4.23）；`easing = frameArray[frameOffset+2] * 0.01`（:316）；
-- `_frame_position/_frame_duration_r`（§3.2 尾）：末帧 `1.0/(anim.duration - position)`、**有限循环最后一帧强制不 tween**（:300-307/341-342）。
+## 任务 2 — AnimationConfig/AnimationData 核对 + Animation 容器骨架
 
-**单测**：手造小 `AnimationData`+IR（或取 Dragon 某轴）断言帧定位/归一化三分支/负时间/整数倍不对称（F4.14 的 `currentTime=d` 案例）/easing 三公式数值。
+1. `AnimationConfig::clear/copy_from` 对照 `AnimationConfig.ts:279-296`：`fadeOutMode=All`、`timeScale=-100`、`playTimes=-1`、`autoFadeOutTime=-1` 等默认逐字段测试。
+2. 核对 `AnimationData`/`TimelineData` 已有模型字段；不因本阶段重写 model。
+3. Animation 拥有 `Vec<AnimationState>`，状态引用使用 `StateIdx`。按需实现有序动画表和 blend state lookup；lookup 容器 iteration 不参与结果。
+4. 先立 API 签名与类型，不留一组无调用者的 `todo!()` API；逐个由后续任务填体。签名按 `animation.md §1.3`，特别是 play 的 `play_times: i32`、`stop(Option<&str>)`、fadeIn 的参数。
+5. `Animation::on_clear` 对照 TS `_onClear`，替换 Armature 清理路径中旧 `reset()+init`（DD-4.8）。
+6. config 双借用采用值语义、本地 config 再写回或等价方案；`play_config` 的归一化写回不能丢。
 
-## 任务 4 — `AnimationState` + fade 状态机 + `BlendState`（顺序：先于 Animation 逻辑）
+## 任务 3 — BaseTimelineState 与可独立验证的时间算法
 
-1. **字段全表**（笔记 `animation_state.md §1`，默认值 = `_onClear` :251-311 逐项；timeline 回池段 :251-289 结构保留）+ `init`（:725-803，含 `pauseFadeIn→playhead=2/否则 3`、layer/group 写点 :738/:744、负时间修正 :796-798 照抄——疑似 bug 也抄）。
-2. **fade 子状态**（DD-4.2 两枚举 + 位类型）+ **`_advanceFadeTime` 逐行**——照抄下方伪代码（=笔记 §2.4，行号实测）：
+对照 `timeline_states.md §1-3` 实现五种基类职责。Rust 可通过组合/enum 表示，不必复制 TS 抽象继承树；必须保持派生轴看到相同字段和更新钩子。
 
-```text
-_advanceFadeTime(passedTime):                                  # AnimationState.ts:667
-  isFadeOut := fade_state > 0                                  # :668 方向入口一次判定
-  if sub_fade == FadeStart:                                    # :670  -1 → 0
-      sub_fade = Fading                                        # :671
-      eventActive = parent.is_none() && action_enabled         # :673  ★子动画状态不发 fade 事件
-      if eventActive:
-          ty = isFadeOut ? FADE_OUT : FADE_IN
-          if armature_proxy_has_listener(ty):                  # :676  ★闸门（结构保留，阶段5接派发）
-              push_buffered(EventObject{ ty, armature, /*animationState:阶段5*/ })  # :677-681
-  if passedTime < 0: passedTime = -passedTime                  # :686-688  ★fade 时间永不倒退
-  fade_time += passedTime                                      # :690
-  if fade_time >= fade_total_time: sub_fade = FadeComplete;
-      fade_progress = if isFadeOut {0.0} else {1.0}            # :692-694
-  elif fade_time > 0: fade_progress = 线性（淡入 t/T，淡出 1-t/T） # :696-697 ★纯线性无 TweenType
-  else: fade_progress = if isFadeOut {1.0} else {0.0}          # :699-700
-  if sub_fade == FadeComplete:                                 # :703
-      if !isFadeOut: playhead |= 1; fade_state = FadeComplete  # :705-706 ★只有淡入完成才复位+解锁
-      eventActive 同上 → FADE_IN/FADE_OUT_COMPLETE 闸门入队    # :709-717
-  # 淡出完成：fade_state 保持 FadeOut、sub 保持 FadeComplete（本函数不复位）
-```
+- `_set_current_time` 三分支与负数/循环边界按 F4.14。
+- 帧定位 O(1) 查 `frameIndices`；验证 frameCount+1 尾项、duration 精度补偿（F4.2）。
+- tween frame position/duration、有限循环最后一帧不 tween，按 F4.2/F4.16。
+- `get_easing_value`、曲线表插值函数按 TS 表达式；运行期不重新采样 Bezier。
+- `playState`、`dirty` 状态生命周期按 TS；magic number 转 enum 时列出映射表。
 
-3. `advance_time(passed_time, cache_frame_rate)` **主干逐行**（笔记 §3 伪代码 = :808-1070）：**fade 先于 timeScale**（F4.13）→ `playhead==3` 才推进 → `_timeline_dirty` 结构重建（:822-828，约束段留 stage6/批5 对应处理）→ `is_blend_dirty`/`is_cache_enabled`/`weight_result` 级联（:831-840）→ **action 轴在权重早退之前**（:842-848，`weight==0` 仍发事件）→ 缓存段（F4.15：结构+`TODO P1-4`）→ **8 数组分组遍历 + BlendState 去重/首写者清零 pose**（:877-1015，分组序是契约 DD-4.3）→ 淡入完成善后 + `autoFadeOutTime>=0` 自动淡出（:1018-1067）。
-4. `fadeOut(fade_out_time, pause_playhead)`（:1111-1164，笔记 §2.5）：**新淡出更长则整体忽略**（:1120-1124）、`fade_total_time = out/progress` 回写（:1162-1163 ★进度曲线连续的关键）、5 类数组 `timeline.fade_out()` + 子状态 `fadeOut(999999,true)`（:1133-1158）、`display_control=false`（:1161）。
-5. **`BlendState`**（:1528-1601，笔记 §5）：字段、`update(animation_state) -> bool` 三分支（leftWeight 预算/layerWeight/blendWeight）、`dirty` 语义、`_reset` 时机；`Animation::get_blend_state(type, name, target)`（两层懒建 :748-760——本任务先给 `Animation` 加这个方法体，字典字段任务 2 已立）。
-6. 时间归一化不在本文件——引用任务 3 的 `_set_current_time`（F4.14）；`currentTime` setter（:1440-1474）若被 Progress 轴用到，任务 6 批 5 再补。
+**单测**：时间归一化三分支、正/负整数倍、负向边界 currentTime=duration、首/末帧查表、每类 easing、最后一帧 tween 禁止条件。
 
-## 任务 5 — `Animation` 顶层逻辑（笔记 `animation.md §3`）
+## 任务 4 — AnimationState 与 BlendState
 
-1. **`advance_time(passed_time)`（:172-267，笔记 §3.1 伪代码）**：abs（F4.7，只此一处）→ `inherit_time_scale` 父链重算（:177-186，**读父骨架 `animation._inherit_time_scale`——经 `ArenaCtx` 解析父（`Armature.parent` 索引，D-3.2），父必须先推进）** → 缩放 → **每帧开头 blend_states 全 reset**（:188-193）→ 单/多/零状态三分支（:196/:233/:264——单状态传真 cfr、多状态恒 0.0 且回收压数组 + `cache_frame_index=-1`、零状态 `-1`；F4.15）→ `buffer_object` 回收点 = 占位。
-2. **`play_config`（:337-481，笔记 §3.2 伪代码）逐行**：查表失败 warn+null → Single 早退（:352-362，**不改 cfg**）→ 归一化（:364-409，全部写回 cfg——注意负 position 的 `duration - (pos % duration)`）→ `_fadeOut(cfg)` → 借 state `init` → `_animation_dirty=true` + `cache_frame_index=-1` → layer 插入序 → **子骨架同名继承（:443-452，has_animation + getState==null 双闸，经 world 淡入子骨架）** → animation_timelines 子状态（:454-472，`fadeIn(k,0,1,layer,"",Single)` + `actionEnabled=false/resetToPose=false/stop()` + `addState`）→ `_last = s`。
-3. **`_fadeOut(cfg)`（:102-157，笔记 §3.4）**：5 模式过滤逐行（SameLayer :110 / SameGroup :122 / SameLayerAndGroup :134-137 / All :143-151 / **Single 空 case 不补**——F4.12）。
-4. 快捷方法装配（笔记 §3.3）：`play`（clear→fadeOutMode=**All** + resetToPose + fadeInTime=0 + null 三分支：defaultAnimation/暂停恢复/重播 last——:516-528）、`fadeIn`（6 参表 F 见 §3.3）、`gotoAnd*` 族（position 计算 :636/:668）、`gotoAndStop*` = gotoAndPlay(playTimes=1)+`state.stop()`。
-5. 查询面照 `§1.1/§1.2` 全实现（`getState` **倒序**、`isCompleted` 空 false、`animationConfig` getter 的 clear 副作用）。
+1. 字段初始化按 `AnimationState.ts:251-311`；Rust 删除没有观测价值的临时池字段，但默认值测试和 reset 行为必须覆盖。
+2. 使用 `FadeState`、`SubFadeState`、`PlayheadState` 表达官方值域；状态迁移对照 F4.3/F4.13。
+3. `_advanceFadeTime` 的线性 fade、负时间取正、fade event 入队时点和 parent/actionEnabled 条件按 F4.10。
+4. `advance_time` 顺序按 `AnimationState.ts:808-1070`：fade → playhead/timeScale → timeline rebuild → action 轴（在 weight early-return 前）→ 固定组更新 → fade complete/auto fade。
+5. BlendState 保留每帧 reset、预算权重计算、dirty 首写者 pose 初始化和 target 去重（F4.19）；用确定性容器/循环。
+6. cache path 按 F4.15 保留结构；仅实现 cacheFrameRate=0 下不会进入的分支时，注释明确 P1-4 未完成，不宣称缓存支持。
+7. `fade_out` 的 longer-fade guard、progress continuity、五种 fadeOutMode 过滤逐项覆盖（F4.12）。
 
-## 任务 6 — 时间轴批次（requirements 五批 + 批 0 前置）
+**单测**：fade in/out 状态转移、pauseFadeIn、fade 独立于 state timeScale、weight=0 时 action 仍执行、blend 首写者、相同 target 去重、fade-out 连续性。
 
-**批 0 前置（F4.22，先做）**：
-- `Armature::_sort_z_order(slot_indices, offset)`（Armature.ts:185-207 照抄——阶段 3 在 `armature.rs:217-224` 留了逐行 TODO；越界 `continue`、`z_order_dirty = !is_original`、置 `slots_dirty`）；
-- `Constraint::invalid_update`（Constraint.ts:218-224 = `root.invalid_update()` + `bone.invalid_update()`）。
+## 任务 5 — Animation 顶层 API 与状态管理
 
-**批 1 — `ActionTimelineState` + `ZOrderTimelineState`**（笔记 §5 完整伪代码）：
-- Action 是**唯一重写 `update()`** 的轴（除 SlotColor）：跨帧扫描对每个经过帧调 `_on_cross_frame`（正向 :153/:212、单帧 :237/:246、兜底 flush :251-257）；
-- 触发四件套：`Play → buffer_action(ev,true)`（:49 **无闸，数值**）、Frame/Sound → `buffer_event`（:59，Sound 无条件 :53，阶段 5 出体）、START/LOOP_COMPLETE/COMPLETE（:85/:103/:111，`eventActive = parent.is_none() && action_enabled` :75，**loopComplete 推迟跨 0 帧**）；
-- `_sort_z_order(null,0)` 在 :80（`displayControl && resetToPose`——zOrder 归位）；
-- **帧位置一律 `frameArray[pos] / frame_rate` 除法**（F4.16，6 处）；
-- ZOrder：`playState>=0` 守卫（:275）→ `_sort_z_order(frame_array, frame_offset+2)`（:278）→ 末帧 `_sort_z_order(null,0)`（:281）。
+对照 `animation.md §3`：
 
-**批 2 — 骨骼四轴**（BoneAll/Translate/Rotate/Scale）：按笔记 §3.3 表（值个数 6/2/2/2、基准 ②、scale 落点 F4.17）→ 写 `bone.animation_pose` + `transform_dirty=true`（写点行号见 §4 表）、BoneAll 末帧 `normalize_radian`（:300-301）、pose 兜底 scale=1（:305-306）、Rotate 末帧差量归一化（:409-410）、`blend()` 里挂 `BlendState(BONE_TRANSFORM)`。**先 pose 再 blend 的分工**：`_on_update_frame` 算 `_result*`，`blend` 写 `animationPose`——照官方。
+1. `advance_time`：负 dt 取正只在此层；父继承 timeScale 读取同帧 runtime 状态；blend states reset；单/多/零 state 分支和缓存 frame index 更新顺序按 TS。
+2. `play_config`：查表失败、Single 复用、config normalize 写回、fade-out filtering、state 创建/插入、child animation inheritance、子动画状态创建顺序逐项移植。
+3. `play`、`fade_in`、`goto_and_play_*`、`goto_and_stop_*`、`stop` 和查询 API 逐个映射 TS 默认/副作用；`play` 与 `fadeIn` 不能共用错误的默认 fadeOutMode。
+4. 父子 AnimationState 用 `StateIdx`/owner handle，不保存跨 arena 引用。RuntimeCtx 只在需要访问其他 Armature/状态时提供窄查询/命令。
+5. 子骨架 clock membership 来自任务 1 的 runtime 关系入口；Animation 不直接改 clock 成员表。
 
-**批 3 — 槽四轴**：SlotDisplay（`set_display_index(v, true)` :647 + `playState>=0` 守卫 + pose 取 `slot_data.display_index` :644）、SlotColor（**在 update 里直接写**，fade 期 `result + (target-result)*progress^4` :773-781、稳态直赋 :798-805、两处 `color_dirty=true`；间接寻址 +65536 F4.6）、SlotZIndex（`+=`/`=` 与 blendWeight :843/:846 + `z_index_dirty=true` :851——消费链阶段 3 已通）、Alpha（**双用** BoneAlpha/SlotAlpha，`_alpha` + `alpha_dirty=true` :629，scale 0.01）；slot 轴的 `displayController` 门（:930-935：null / == state.name / == state.group）。
+**单测**：config normalize 写回、Single 早退不改 config、play vs fadeIn 淡出范围、gotoAndStop freeze、stop 单状态/全部、get_state 倒序、isCompleted 空列表 false、child animation inheritance。
 
-**批 4 — Surface/Deform**：deform 头 5 元用 `TimelineFrameValueCount`(**index 3**)（:527/:883 + F4.6）、动态 `_value_count/_deform_count/_deform_offset/_same_value_offset`（:529-532/:888-891，Deform 版 same 偏移 +65536 修正 :893-897）、blend 三分支写 `surface.deform_vertices` / `display_frame.deform_vertices`（:555-574/:921-940；JSON 路径退化分支照抄 F4.23②）、`vertices_dirty=true` 守卫 `slot.geometry_data == frame.get_geometry_data()`（:951-952）。**运行时依赖已就绪**（笔记 §7.1 表：`SurfaceState.deform_vertices`/`DisplayFrame.deform_vertices`/`update_deform_vertices` 阶段 3 都在）。
+## 任务 6 — 16 类 TimelineState
 
-**批 5 — IK + Animation 三轴**：IK（写 `_current_a/_current_b` :971-972、pose 回 `IKConstraintData` :975-977、`constraint.invalid_update()` :980——批 0 前置；**F4.23① READ-ORIGINAL**：非 tween 帧读陈旧值的行为先照抄，差分为准）、AnimationProgress/Weight/Parameter（**`_parent.is_some()` 才写**子状态 `currentTime/weight/parameterX/Y` :1004/:1031/:1058——9 素材无子动画，结构照抄 + 单测合成数据）。
+依赖顺序与原 TS 名称/公式见 `timeline_states.md §3-5`。每个类先列出：输入 IR 数组与 offset 基准、每帧值数量、写入 runtime 目标、dirty 标记、结束帧行为和差异测试，再实现。
 
-## 任务 7 — 调用点与收口核对
+**批 0 前置**：补 `Armature::sort_z_order`（`Armature.ts:185-207`）和 `Constraint::invalid_update`（`Constraint.ts:218-224`），确保行为用例先行。
 
-- `Armature::advance_time` ② `self.animation.advance_time(passed_time)` 保持（现已是真身调用点）；`AnimationCtx` 组装按 DD-4.4；
-- 阶段 3 全部 `todo!()`/TODO 注释清点：`armature.rs`（`_sort_z_order` 已于批 0 完成、on_clear R4 已换）、`animation/mod.rs` 差异表收缩、`constraint.rs` invalid_update、`event_object.rs` animationState 注记保留；
-- grep 清扫：`todo!(` 在 `src/animation|armature|factory` 的残留逐条列出——除明确 `TODO P1-4/P1-5/阶段5` 外必须为零。
+**批 1：Action/ZOrder**
 
-## 任务 8 — 静态差分基建（验收工具）：`tests/golden_anim.rs`
+- ActionTimelineState 是主要跨帧扫描轴；逐个经过的 action frame 按方向触发。
+- Play action 无 listener 闸，追加到 Armature action queue；Armature 同帧消费并启动目标 animation。
+- Frame/Sound/start/loopComplete/complete 的 event 条件与 enqueue 点保留；实际 dispatch 留阶段 5。
+- ZOrder 轴调用 sort_z_order；Action 帧位置使用除法（F4.16）。
 
-**纯 Rust 测试，不需要新 JS 工具**（阶段 0 的 golden 已是 120 帧逐帧 dump）。逐动画文件（`tests/common/mod.rs::golden_dir_stems` 遍历 9 素材 37 动画）：
+**批 2：BoneAll/Translate/Rotate/Scale**
 
-```text
-for each testdata/golden/<asset>/<anim>.json:
-    factory.parse(ske, key) + parse_texture(tex, key)      # key = ir_snapshot 同款推导
-    idx = factory.build_armature(armature_name, key, "", key, Box::new(NullArmatureProxy::new()))
-    armature.clock = factory.clock                          # jsdump.mjs:101 镜像（DD-4.5 ⚠️）
-    armature.animation.goto_and_play_by_time(anim, 0.0, -1) # jsdump.mjs:117
-    for i in 0..frameCount:                                 # jsdump:120-144：**先推进后采样**
-        factory.advance_time(meta.dt)                       # = 1/frameRate，走 DragonBones→clock→armature
-        compare frames[i].bones[name] == [13 元]            # jsdump:127-131 顺序
-        compare frames[i].slots[name] == [15 元]            # jsdump:136-142 顺序
-        # frames[i].events **整体跳过**（阶段 5）
-    末尾：slotNames 顺序 == golden meta.slotNames（排序锚点）；frameRate/dt 一致
-```
+- 值数量 6/2/2/2；帧值三基准链；scale 落点按 F4.17。
+- 先更新 animation pose，再按 BlendState 写最终 pose；保持 normalize/末帧/pose fallback 行为。
 
-- **容差**：`|got-want| <= 1e-9 * (1.0 + |want|)` 首跑（pose_golden 同款）；失败时 panic 带**分类计数 + 最大绝对/相对误差 + 前 5 最差（素材/帧/骨或槽/字段/want/got）**——确认属 libm 级差异（`Math.cos/sin/atan2` 实现差）后降级 `1e-6*(1.0+|want|)`（requirements 硬指标）**并在指南回执里报告实测最大差**，别静默放宽容差；
-- 失败诊断先行：先查表达式序（除法/加减序、F4.16/F4.18、`+=65536`、`_valueScale` 还原），再怀疑 libm；
-- **单测（`tests/animation_unit.rs` 或并入）**：
-  1. `gotoAndStopByFrame` 往返：`goto_and_stop_by_frame(name, k)` → 连推 N 帧数值**冻结**（playhead≠3）→ 同帧 `goto_and_play_by_frame(name, k)` 与首采样一致（往返一致）；
-  2. `resetToPose`：语义 = `resetToPose=true` 时**动画未覆盖的骨/槽由 `_pose_timelines` 兜底回数据姿态**（AnimationState.ts:1022-1060 + TimelineState.ts:79-80 zOrder 归位）——用阶段 3 的 `testdata/pose/<asset>.json` 当"数据姿态"基准：播 A 动画若干帧 → `play()`（resetToPose=true）起播同名动画至淡入完成 → 断言未覆盖集合姿态 == pose 黄金；若 9 素材动画全覆盖骨架导致无差异，**用合成 data 造未覆盖骨**保证分支被测到；
-  3. 子骨架继承（F3.9 单测的延伸）：inheritAnimation 子骨架在父 `play` 后 `has_animation` 命中 → 子状态被创建（`get_state` 非 None）；
-  4. `timeScale`：`animation.time_scale = 2.0` 后 dt 推进翻倍（对拍 golden 前 60 帧 ≡ 正常速度前 120 帧，容差同上）——requirements 把 timeScale 用例放阶段 5，但**此处先钉数值通路**，阶段 5 用例矩阵直接复用。
-- 阶段 0-3 全部回归保持绿（83 例）。
+**批 3：SlotDisplay/SlotColor/SlotZIndex/Alpha**
 
----
+- SlotColor 间接索引 colorArray 和 wrap 修正；fade color 使用官方 progress 曲线。
+- SlotZIndex 的 `+=` 与绝对赋值、displayController gate、displayIndex 终值行为保持。
+- Alpha 双用 BoneAlpha/SlotAlpha，写对应 dirty 标记。
 
-## 验收清单（全绿即阶段 4 完成）
+**批 4：Surface/Deform**
+
+- deform header 五值和 IR index 3；same-value offset/wrap、权重/顶点边界按 TS。
+- 写 Surface/DisplayFrame deform data 的分支和 geometry identity guard 保持。
+- 9 素材未覆盖的 JSON 退化分支照原实现保留并用合成数据测试可达部分。
+
+**批 5：IK/AnimationProgress/Weight/Parameters**
+
+- IK current/result 字段严格按 TS 写点，并调用 constraint invalidation。
+- Animation 三轴仅 parent state 存在时修改子状态；用合成数据覆盖素材未覆盖分支。
+
+**每批验收**：轴级合成 IR 单测 + 涉及资产的 golden 子集；失败先核查 offset、wrap、scale、遍历序，再排查 libm。
+
+## 任务 7 — 逐帧 golden harness 与状态行为测试
+
+新增 `tests/golden_anim.rs`，复用阶段 0 的 9 资产 × 全动画 × 120 帧 golden。构造流程：parse → build → 显式 attach 根骨架到 runtime clock → `goto_and_play_by_time(anim, 0, -1)` → 每帧先推进后采样。
+
+对每帧比较骨骼 13 值和槽 15 值。还需比较骨/槽名称与顺序元数据——**末态比对**（jsdump 在 120 帧跑完后才写 `meta.slotNames`）。
+
+事件验证口径（任务 1.4 固定的 seam，逐帧执行）：
+
+1. harness 在 armature proxy 上为需验证的 **9 类事件注册探针**，使对应 `hasDBEventListener` 为真——探针只为打开入队闸门，flush 不 dispatch，测试期间不会被调用；
+2. 每帧推进后用 `take_flushed_events()` 取本帧快照，与 golden 的 `frames[i].events` 按 `(type, name, bone, slot)` **逐帧全等**比较（`golden_events` 断言可直接复用参照；事件同帧 flush，时序与 jsdump 一致），比较后丢弃；
+3. 正式 dispatch 对拍（调用真实 listener 回调）留阶段 5；阶段 4 的验收目标是事件产生条件、入队时机与队列顺序正确，且全程不调用 listener。
+
+容差初始 `1e-9 * (1 + |want|)`；只有证实是系统 libm 差异后才按 requirements 降至 `1e-6 * (1 + |want|)`，在验收记录报告最大绝对/相对误差，不静默放宽。
+
+额外 animation tests：
+
+1. gotoAndStopByFrame 后时间推进姿态冻结；同帧 gotoAndPlay 恢复结果与首采样一致。
+2. resetToPose 让未被动画覆盖的 bone/slot 回到 model pose；若素材无未覆盖目标，用合成骨骼/slot 测试。
+3. 子骨架 inheritAnimation 的 StateIdx 创建、clock propagation 和父子时间缩放顺序。
+4. state timeScale=2 的前 60 帧与正常前 120 帧对拍；反向状态 timeScale 覆盖负向推进。
+5. WorldClock 成员变更/嵌套用例使用任务 1 的 runtime tests，不在 golden harness 里另造另一套驱动。
+
+## 任务 8 — 收口、清理和差异登记
+
+- 清点阶段 3 遗留 TODO：`_sort_z_order`、`Constraint::invalid_update`、Animation 清理路径、Slot child clock 接线。
+- `todo!()` 在阶段 4 范围内必须为零；允许的 `TODO P1-4/P1-5/阶段5` 要有明确调用条件与不影响本阶段验收的证明。
+- 检查所有新增 handle 都有 owner、失效规则和测试；不得有 stale member、未同步 back-reference 或 `unsafe` 容器长度操作。
+- 更新差异登记：仅记录确实未实现/不可达/行为不等价的条目，写明证据和后续阶段，不用“Rust 实现不同”笼统带过。
+- 对代码做一次逐轴 TS 原文 review，重点核对 F4.5/F4.6/F4.14/F4.17/F4.18/F4.19。
+
+## 任务 9 — 验收
 
 ```bash
-cargo build && cargo test -p dragonbones-core        # 阶段 0-3 回归 + golden_anim + animation_unit
-cargo clippy -p dragonbones-core --tests             # 零警告
-node tools/gen_pose.mjs                              # 阶段 3 黄金不回归（确定性 9 ok）
+cargo build
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+node tools/gen_pose.mjs
 ```
 
-**验收标准（对应 requirements §4）**：
-1. **9 素材 × 全动画 × 120 帧差分**：骨 13 元 + 槽 15 元逐元素通过（容差策略见任务 8；`events` 字段阶段 5 再比）；
-2. `slotNames`/`boneNames` 末态与 golden `meta` 全序一致；
-3. `gotoAndStopByFrame` 往返一致（冻结 + 同帧复现）；
-4. `resetToPose` 后未覆盖姿态与阶段 3 静姿态黄金一致（合成数据兜底覆盖分支）；
-5. 无 `todo!()` 残留于本阶段范围（任务 7 清扫清单）；clippy 零警告；
-6. 阶段 0-3 全部回归绿。
+**阶段 4 完成标准**：
 
-**常见坑速查**（全部实测，编号对 §0）：
-1. 帧定位是 O(1) 查表不是二分；运行期缓动只有两个线性函数（F4.2）。
-2. fade 枚举**值域无 2、两字段同值异义**；只有 `playhead==3` 推进时间（F4.3/DD-4.2）。
-3. 17 type → 16 类（Alpha 双用）；BoneAll **6 值/帧**；类名 `MutilpleValue…` 保留拼写（F4.4）。
-4. 三基准链 + 三处 `+=65536` + `_valueScale` 量化还原——IR 通路三件套（F4.5/6/18）。
-5. abs 只在 `Animation.advanceTime` 做一次；反向播放 = state 带符号 timeScale（F4.7）。
-6. `WorldClock(0)` 早退、timeScale 先于 0 判定、`time` 绝对值前进而成员收带符号 dt（F4.8）。
-7. Play action **无监听器闸、数值相关**；其余事件可占位——阶段 4/5 分水岭（F4.9/DD-4.5）。
-8. `start/loopComplete/complete` 在 Action 轴不在 fade（F4.10）；loopComplete 推迟跨 0 帧。
-9. `play→All` vs `fadeIn→SameLayerAndGroup`；`Single` 在 `_fadeOut` 是官方空 case（F4.12）。
-10. **fade 推进先于 timeScale**；`pauseFadeIn` 默认使 playhead 冻结到淡入完成（F4.13）。
-11. 归一化三分支——普通多帧轴**抄 action 不自算**；负数先反再 floor；负向整数倍 `currentTime=d`（F4.14）。
-12. `isCacheEnabled` 要求 `fade_state==FadeComplete`；多状态恒 cfr=0；缓存段结构保留 `TODO P1-4`（F4.15）。
-13. Action 帧位置**除法**（官方注释 Precision problem）（F4.16）。
-14. 骨架 scale 两套落点（blend 内 vs init 的 `_valueScale`），Rotate/Scale 不乘（F4.17）。
-15. `BlendState` 每帧 reset、`dirty==1` 首写者清零 pose、分组遍历序是契约（F4.19/DD-4.3）。
-16. `AnimationState` 无 `fadeIn()`/`_normalizedTime`/`_timelineStates` 字典（F4.20）。
-17. 子骨架入钟只有 clock setter 传播与 `Slot.ts:549` 两个入口（F4.25）；`WorldClock::clear` 不能写成 `vec.clear()`（F4.24）。
-18. 批 0 两前置别忘：`_sort_z_order`、`Constraint::invalid_update`（F4.22）。
-19. config 双重借用用 `mem::take` 解（DD-4.4）；`play_config` 归一化**写回 cfg**的行为必须保留。
-20. 差分 harness **必须挂钟**（`armature.clock = factory.clock`），否则 `advance_time(dt)` 推不动（DD-4.5 ⚠️）；采样在 advance **之后**（jsdump:120-144）。
-21. IK 轴 `_currentA/B`、Deform 退化分支 = READ-ORIGINAL，先照抄后差分（F4.23）。
-22. `EventObject.animationState` 阶段 4 不建（F4.27）；`buffer_event/buffer_object` 签名必须先存在（DD-4.5）。
+1. 9 资产 × 全动画 × 120 帧 bones/slots golden 逐元素通过；报告容差和最大观测误差。
+2. clock 行为测试全绿：显式成员资格、timeScale、零早退、成员 add/remove/clear、child propagation、dispose、嵌套 clock/contains 与 cycle 防护。
+3. gotoAndStopByFrame、resetToPose、child animation inheritance、AnimationState timeScale 测试通过。
+4. 阶段 0-3 回归全绿；clippy 无警告。
+5. 阶段 4 范围内无未解释 `todo!()`；P1 cache 的保留分支已单独标注。
+6. 任何未实现的官方可观察行为都写入差异登记；不把“素材没覆盖”当作删实现的理由。
+7. 事件 enqueue 验证（P1-1 seam）：9 类事件逐帧 `(type, name, bone, slot)` 快照与 golden 一致；全程未调用 listener（正式派发对拍属阶段 5）。
 
-**工期提示**：任务 4（AnimationState）与任务 6（16 类）是大头，合计占 60% 以上；任务 1/2/3 各半天到一天可并行推进。建议顺序 = 1→2→3→4→5→6→8（任务 7 随手做），其中**任务 8 的 harness 可以在任务 5 后先搭骨架**（单轴批 2 完成时就能对拍 BoneAll 素材的骨姿态，提前暴露 IR 通路问题）。
+## 常见错误速查
 
----
+1. TS 结构不等于规格；arena/runtime 中央维护关系，不模拟任意可重入 setter。
+2. 不用 `Box<dyn IAnimatable>` 保存 arena 对象；稳定 handle 才是跨子系统引用。
+3. clock 成员遍历不能借用 Vec 时调用会修改该 Vec 的回调；先取 handle、释放借用，再通过 context 推进。
+4. 不用 `unsafe set_len`；Vec 压缩使用安全操作并验证插入顺序。
+5. 只有显式挂钟的骨架参与全局推进；buildArmature 自己不挂钟；单骨架 `advance_one(0)` 与全局 clock `advance_time(0)` 不同。
+6. 负 dt 不在 WorldClock 取绝对值；Animation 层与 AnimationState 层按 F4.7 分工。
+7. `play` 的 All 与 `fadeIn` 的 SameLayerAndGroup 默认不同；Single 在 `_fadeOut` 是空 case。
+8. fade 先于 state timeScale；`playhead == 3` 才推进时间。
+9. Action Play 无 listener 闸；必须与 event queue 分离。
+10. Timeline group 顺序、BlendState reset/dirty first-writer 是数值契约。
+11. 三基准 IR offset、三处 `+=65536`、运行时 `_valueScale` 还原不能省。
+12. IK/Deform 的 READ-ORIGINAL 分支不能因当前素材没覆盖就删除。
 
 ## 完成后
 
-把 `cargo test` 输出（尤其 `golden_anim` 的逐素材通过情况与**实测最大差**）+ `gen_pose` 输出发我。确认全绿后我 review，然后写**阶段 5（工厂、事件与 P0 收口）**指南——`DragonBones.advanceTime` 三段真身、事件派发链、`EventObject` 池、`BaseFactory` 剩余 replace_* 方法，以及 requirements §5 的 9 格用例矩阵（fadeOut 交叉 / layer 叠加 / goto 往返 / 事件时序 / timeScale / 双骨架…）差分基建。
+提交验收输出、逐资产 golden 通过摘要、最大差异、clock 行为矩阵和差异登记供 review。Review 完成后再编写阶段 5 指南：事件派发、对象池、replace API 和交叉淡入/事件矩阵。
