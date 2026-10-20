@@ -3,8 +3,10 @@
 //! - `goto_and_stop_by_frame` 冻结与同帧 `goto_and_play_by_frame` 往返（任务 7 项 1）。
 //! - `AnimationState.time_scale=2` 的 60 帧对 golden 120 帧奇数帧（任务 7 项 4 / 任务 9 §3）。
 //! - 反向 `AnimationState.time_scale=-1` 的姿态逆序（任务 7 项 4）。
-//! - `resetToPose` 未覆盖 bone/slot（模块内合成用例见 `animation_state.rs`；本文件放端到端
-//!   可构造部分，任务 7 项 2）。
+//! - `resetToPose` 未覆盖 bone/slot 的真实素材端到端用例（任务 7 项 2；模块内合成
+//!   用例见 `animation_state.rs`）：
+//!   `Dragon` 上 walk→stand 的骨复位 + 与"从零播放 stand"的整姿态对照，
+//!   `PlantAnimate` 上 Shoot→Idle 的插槽 displayIndex 复位 + 关闭配置的残留对照。
 //! - 子骨架同帧 state 创建（D-4.36）。
 //!
 //! 容差一律 `1e-9 * (1 + |want|)`；失败信息中文带动画/帧/目标上下文。
@@ -13,13 +15,12 @@ mod common;
 
 use common::ir_snapshot::{asset_root, tex_stem};
 use common::{golden_path, read_value};
-use dragonbones_core::armature::{
-    ArmatureIdx, DisplayHandle, NullArmatureProxy, SlotIdx,
-};
+use dragonbones_core::animation::StateId;
+use dragonbones_core::armature::{ArmatureIdx, DisplayHandle, NullArmatureProxy, SlotIdx};
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
 use dragonbones_core::model::{
-    ActionData, AnimationData, ArmatureData, DisplayData, DisplayKind,
+    ActionData, AnimationConfig, AnimationData, ArmatureData, DisplayData, DisplayKind,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -83,7 +84,11 @@ fn pose_snapshot(factory: &BaseFactory, idx: ArmatureIdx) -> (Vec<BonePose>, Vec
     (bones, slots)
 }
 
-fn assert_pose_eq(context: &str, want: &(Vec<BonePose>, Vec<SlotPose>), got: &(Vec<BonePose>, Vec<SlotPose>)) {
+fn assert_pose_eq(
+    context: &str,
+    want: &(Vec<BonePose>, Vec<SlotPose>),
+    got: &(Vec<BonePose>, Vec<SlotPose>),
+) {
     assert_eq!(
         want.0.iter().map(|(name, _)| name).collect::<Vec<_>>(),
         got.0.iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -302,7 +307,9 @@ fn state_time_scale_two_sixty_frames_match_golden_odd_frames() {
         .time_scale = 2.0;
 
     let frames = golden["frames"].as_array().expect("golden frames");
-    let frame_rate = golden["meta"]["frameRate"].as_f64().expect("golden frameRate");
+    let frame_rate = golden["meta"]["frameRate"]
+        .as_f64()
+        .expect("golden frameRate");
     let mut boundary_exemptions = Vec::new();
     for frame in 0..60 {
         factory.advance_time(dt);
@@ -398,7 +405,11 @@ fn reverse_state_time_scale_replays_pose_in_reverse_order() {
         let want = &forward[3 - step];
         let got = pose_snapshot(&factory, idx);
         assert_pose_eq(
-            &format!("timeScale=-1 第 {} 步（应回到正向第 {} 帧）", step + 1, 4 - step),
+            &format!(
+                "timeScale=-1 第 {} 步（应回到正向第 {} 帧）",
+                step + 1,
+                4 - step
+            ),
             want,
             &got,
         );
@@ -466,9 +477,7 @@ fn child_animation_state_is_created_and_advanced_in_same_frame_as_parent_play() 
         .animation
         .get_state("walk", -1)
         .unwrap_or_else(|| {
-            panic!(
-                "D-4.36：父骨架同帧 advance 后子骨架应创建 walk state（inherit_animation=true）"
-            )
+            panic!("D-4.36：父骨架同帧 advance 后子骨架应创建 walk state（inherit_animation=true）")
         });
     let current = factory
         .armature(child)
@@ -479,6 +488,112 @@ fn child_animation_state_is_created_and_advanced_in_same_frame_as_parent_play() 
     assert!(
         current > 0.0,
         "D-4.36：子骨架应在父同帧内被推进，current_time 应 > 0，实际 {current}"
+    );
+}
+
+/// 任务 7 项 3：子骨架 inheritAnimation 的父子时间缩放组合顺序——
+/// `child._inheritTimeScale = parent._inheritTimeScale * child.timeScale`。
+/// 单层亲子场景验证：父 2.0 与子 0.5 组合成净 1.0（父缩放只乘一次，子自身
+/// timeScale 再叠加），子改回 1.0 后完整继承父的 2.0。
+#[test]
+fn child_animation_composes_inherited_parent_time_scale_once() {
+    let ske = read_value(&asset_root().join(format!("{PARENT_KEY}.json")));
+    let tex = read_value(&asset_root().join(format!("{}.json", tex_stem(PARENT_KEY))));
+    let mut factory = BaseFactory::new();
+    factory
+        .parse_dragon_bones_data(&ske, PARENT_KEY)
+        .expect("parse Dragon");
+    assert!(factory.parse_texture_atlas_data(&tex, PARENT_KEY));
+    inject_child_with_walk_animation(&mut factory);
+
+    let parent = factory
+        .build_armature(
+            "Dragon",
+            PARENT_KEY,
+            "",
+            PARENT_KEY,
+            Box::new(NullArmatureProxy::new()),
+        )
+        .expect("build Dragon");
+    let (child, _slot) = find_child_slot(&factory, parent);
+    factory
+        .attach_armature(factory.root_clock(), parent)
+        .expect("parent 挂 root clock");
+
+    // 关闭 fade 暂停与淡入，让 playhead 每帧严格前进 dt，便于比较缩放增量。
+    let mut config = AnimationConfig {
+        name: "walk".to_owned(),
+        animation: "walk".to_owned(),
+        pause_fade_in: false,
+        fade_in_time: 0.0,
+        ..AnimationConfig::default()
+    };
+    assert!(
+        factory
+            .armature_mut(parent)
+            .animation
+            .play_config(&mut config)
+            .is_some(),
+        "parent play_config(walk) 应成功"
+    );
+    let dt = 1.0 / 24.0;
+    // 子状态在本帧尾部创建，并在同一次 root-clock 派发内被推进（D-4.36 / arena 序）。
+    factory.advance_time(dt);
+
+    let parent_state = factory
+        .armature(parent)
+        .animation
+        .get_state("walk", -1)
+        .expect("parent walk state");
+    let child_state = factory
+        .armature(child)
+        .animation
+        .get_state("walk", -1)
+        .expect("child walk state");
+    let state_time = |factory: &BaseFactory, armature: ArmatureIdx, state: StateId| {
+        factory
+            .armature(armature)
+            .animation
+            .state(state)
+            .expect("state alive")
+            .current_time()
+    };
+    let parent_t0 = state_time(&factory, parent, parent_state);
+    let child_t0 = state_time(&factory, child, child_state);
+    assert!(
+        parent_t0 > 0.0 && child_t0 > 0.0,
+        "父子 walk 状态都应已推进：parent={parent_t0} child={child_t0}"
+    );
+
+    // 父 2.0 × 子 0.5 → 子继承 1.0：父缩放只经 parent._inheritTimeScale 乘一次。
+    factory.armature_mut(parent).animation.time_scale = 2.0;
+    factory.armature_mut(child).animation.time_scale = 0.5;
+    factory.advance_time(dt);
+    let parent_delta = state_time(&factory, parent, parent_state) - parent_t0;
+    let child_delta = state_time(&factory, child, child_state) - child_t0;
+    assert!(
+        (parent_delta - 2.0 * dt).abs() <= 1e-12,
+        "父 timeScale=2 时每帧应推进 2*dt，实际 Δ={parent_delta}"
+    );
+    assert!(
+        (child_delta - dt).abs() <= 1e-12,
+        "子应继承 2.0*0.5=1.0 的净缩放，每帧推进 dt，实际 Δ={child_delta}"
+    );
+
+    // 子自身改回 1.0 → 只继承父的 2.0。
+    let parent_t1 = state_time(&factory, parent, parent_state);
+    let child_t1 = state_time(&factory, child, child_state);
+    factory.armature_mut(child).animation.time_scale = 1.0;
+    factory.advance_time(dt);
+    let parent_delta = state_time(&factory, parent, parent_state) - parent_t1;
+    let child_delta = state_time(&factory, child, child_state) - child_t1;
+    assert!(
+        (parent_delta - 2.0 * dt).abs() <= 1e-12,
+        "父 timeScale=2 时每帧应推进 2*dt，实际 Δ={parent_delta}"
+    );
+    assert!(
+        (child_delta - 2.0 * dt).abs() <= 1e-12,
+        "子 timeScale=1 时应继承父的 2.0，每帧推进 2*dt，实际 Δ={child_delta}"
     );
 }
 
@@ -595,10 +710,9 @@ fn sound_action_appears_in_flushed_event_snapshot_without_listener() {
     for _ in 0..4 {
         factory.advance_time(1.0 / 24.0);
         sound_events.extend(
-            factory
-                .take_flushed_events()
-                .into_iter()
-                .filter(|event| event.event_type == dragonbones_core::event::EventObject::SOUND_EVENT),
+            factory.take_flushed_events().into_iter().filter(|event| {
+                event.event_type == dragonbones_core::event::EventObject::SOUND_EVENT
+            }),
         );
     }
     assert_eq!(
@@ -640,11 +754,254 @@ fn state_time_scale_two_half_step_control_matches_all_golden_odd_frames() {
         assert_frame_matches_golden(
             &factory,
             idx,
-            &format!(
-                "PlantAnimate/Shoot timeScale=2 半步对照 A帧{frame} → golden帧{golden_index}"
-            ),
+            &format!("PlantAnimate/Shoot timeScale=2 半步对照 A帧{frame} → golden帧{golden_index}"),
             golden_index,
             &frames[golden_index],
         );
     }
+}
+
+/// 任务 7 项 2（真实素材端到端）：`resetToPose` 把"上一动画覆盖、目标动画不覆盖"
+/// 的骨复位到数据姿态，且"目标动画覆盖的骨"与从零播放同一动画的对照骨架逐位一致
+/// ——证明 resetToPose 只补未覆盖目标，不改变被覆盖目标的动画数值。
+#[test]
+fn reset_to_pose_restores_uncovered_bones_after_real_animation_switch() {
+    let (mut played, idx, golden) = build_golden_fixture("Dragon", "walk");
+    let dt = golden_dt(&golden);
+
+    // 覆盖事实（`assets/Dragon_ske.json`）：walk 动 18 根骨，stand 只动 8 根，
+    // `body` 属于"walk 覆盖、stand 不覆盖"。
+    let (walk_covers_body, stand_covers_body) = {
+        let data = played.armature(idx).armature_data();
+        (
+            data.animations
+                .get("walk")
+                .expect("walk data")
+                .get_bone_timelines("body")
+                .is_some(),
+            data.animations
+                .get("stand")
+                .expect("stand data")
+                .get_bone_timelines("body")
+                .is_some(),
+        )
+    };
+    assert!(walk_covers_body, "walk 应覆盖 `body` 骨");
+    assert!(!stand_covers_body, "stand 不应覆盖 `body` 骨");
+
+    let body_pose = |factory: &BaseFactory, idx: ArmatureIdx| {
+        let body = factory
+            .armature(idx)
+            .get_bone("body")
+            .expect("`body` 骨存在");
+        factory
+            .armature(idx)
+            .bones
+            .iter()
+            .find(|bone| bone.idx == body)
+            .expect("`body` 骨索引有效")
+            .animation_pose
+    };
+    assert_eq!(
+        body_pose(&played, idx),
+        Transform::default(),
+        "初始动画姿态应为数据姿态"
+    );
+
+    // 1) 播 walk，直到 `body` 留下非零动画姿态残留。
+    played
+        .armature_mut(idx)
+        .animation
+        .play(Some("walk"), -1)
+        .expect("play(walk) 应成功");
+    let mut residual = Transform::default();
+    for _ in 0..24 {
+        played.advance_time(dt);
+        residual = body_pose(&played, idx);
+        if residual != Transform::default() {
+            break;
+        }
+    }
+    assert_ne!(
+        residual,
+        Transform::default(),
+        "walk 播放后 `body` 的动画姿态应非零（否则本用例无法证明复位）"
+    );
+
+    // 2) 切到不覆盖 `body` 的 stand，开启 resetToPose，淡入 0.2s。
+    //    `pause_fade_in` 默认 true 会暂停淡入期间的 playhead，使切换后的状态时间
+    //    滞后于从零播放的对照骨架；对照用例显式关闭，只比较同 playhead 位置的姿态。
+    let play_stand = |factory: &mut BaseFactory, idx: ArmatureIdx| {
+        let mut config = AnimationConfig {
+            name: "stand".to_owned(),
+            animation: "stand".to_owned(),
+            reset_to_pose: true,
+            pause_fade_in: false,
+            fade_in_time: 0.2,
+            ..AnimationConfig::default()
+        };
+        assert!(
+            factory
+                .armature_mut(idx)
+                .animation
+                .play_config(&mut config)
+                .is_some(),
+            "play_config(stand) 应成功"
+        );
+    };
+    play_stand(&mut played, idx);
+    // 12 帧 = 0.5s：覆盖 0.2s 淡入并留出 pose 轴移除后的余量。
+    for _ in 0..12 {
+        played.advance_time(dt);
+    }
+    assert_eq!(
+        body_pose(&played, idx),
+        Transform::default(),
+        "resetToPose 应把未被 stand 覆盖的 `body` 复位到数据姿态"
+    );
+
+    // 3) 对照：同一素材从零播放 stand 相同帧数。覆盖骨（tail/clothes/eyes/…）的
+    //    动画数值必须与切换后的骨架逐位一致，未覆盖骨在两边都是数据姿态。
+    let (mut control, control_idx, _) = build_golden_fixture("Dragon", "walk");
+    play_stand(&mut control, control_idx);
+    for _ in 0..12 {
+        control.advance_time(dt);
+    }
+    assert_pose_eq(
+        "resetToPose walk→stand 与从零播放 stand 的整姿态对照",
+        &pose_snapshot(&control, control_idx),
+        &pose_snapshot(&played, idx),
+    );
+}
+
+/// 任务 7 项 2（真实素材端到端）：`resetToPose` 把上一动画改过的插槽 displayIndex
+/// 复位到数据姿态；关闭该配置的对照骨架保留残留，证明复位确由 `resetToPose` 驱动。
+#[test]
+fn reset_to_pose_restores_uncovered_slot_displays_after_real_animation_switch() {
+    let (mut played, idx, golden) = build_golden_fixture("PlantAnimate", "Shoot");
+    let dt = golden_dt(&golden);
+
+    // 覆盖事实（`assets/PlantAnimate_ske.json`）：Shoot 有 10 条 slot 时间轴，
+    // Idle 一条都没有 → 切到 Idle 时所有槽目标都未被覆盖。
+    let (shoot_slot_timelines, idle_slot_timelines, data_indices) = {
+        let data = played.armature(idx).armature_data();
+        (
+            data.animations
+                .get("Shoot")
+                .expect("Shoot data")
+                .slot_timelines
+                .len(),
+            data.animations
+                .get("Idle")
+                .expect("Idle data")
+                .slot_timelines
+                .len(),
+            data.slots
+                .iter()
+                .map(|(name, slot)| (name.clone(), slot.display_index))
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert!(shoot_slot_timelines > 0, "Shoot 应有 slot 时间轴");
+    assert_eq!(
+        idle_slot_timelines, 0,
+        "Idle 不应有 slot 时间轴（槽目标全部未被覆盖）"
+    );
+
+    let deviating_slots = |factory: &BaseFactory, idx: ArmatureIdx| {
+        factory
+            .armature(idx)
+            .slots
+            .iter()
+            .filter_map(|slot| {
+                let (_, data_index) = data_indices
+                    .iter()
+                    .find(|(name, _)| name == &slot.slot_name)?;
+                (slot.display_index != *data_index).then_some(slot.slot_name.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let play_shoot = |factory: &mut BaseFactory, idx: ArmatureIdx| {
+        assert!(
+            factory
+                .armature_mut(idx)
+                .animation
+                .play(Some("Shoot"), -1)
+                .is_some(),
+            "play(Shoot) 应成功"
+        );
+    };
+    let play_idle = |factory: &mut BaseFactory, idx: ArmatureIdx, reset_to_pose: bool| {
+        let mut config = AnimationConfig {
+            name: "Idle".to_owned(),
+            animation: "Idle".to_owned(),
+            reset_to_pose,
+            fade_in_time: 0.2,
+            ..AnimationConfig::default()
+        };
+        assert!(
+            factory
+                .armature_mut(idx)
+                .animation
+                .play_config(&mut config)
+                .is_some(),
+            "play_config(Idle) 应成功"
+        );
+    };
+
+    // 1) 播 Shoot，直到出现 displayIndex 偏离数据姿态的槽。
+    play_shoot(&mut played, idx);
+    let mut changed = Vec::new();
+    for _ in 0..24 {
+        played.advance_time(dt);
+        changed = deviating_slots(&played, idx);
+        if !changed.is_empty() {
+            break;
+        }
+    }
+    assert!(
+        !changed.is_empty(),
+        "Shoot 播放后应有槽 displayIndex 偏离数据姿态（否则无法证明复位）"
+    );
+
+    // 2) 切到不覆盖任何槽的 Idle，开启 resetToPose：全部槽必须回到数据姿态。
+    play_idle(&mut played, idx, true);
+    for _ in 0..12 {
+        played.advance_time(dt);
+    }
+    for slot in played.armature(idx).slots.iter() {
+        let (_, data_index) = data_indices
+            .iter()
+            .find(|(name, _)| name == &slot.slot_name)
+            .unwrap_or_else(|| panic!("槽 `{}` 缺少数据", slot.slot_name));
+        assert_eq!(
+            slot.display_index, *data_index,
+            "resetToPose 后槽 `{}` 的 displayIndex 应复位到数据姿态（Shoot 残留：{:?}）",
+            slot.slot_name, changed
+        );
+    }
+
+    // 3) 对照：同样 Shoot→Idle，但 reset_to_pose=false → 残留必须保留。
+    let (mut kept, kept_idx, _) = build_golden_fixture("PlantAnimate", "Shoot");
+    play_shoot(&mut kept, kept_idx);
+    let mut kept_changed = Vec::new();
+    for _ in 0..24 {
+        kept.advance_time(dt);
+        kept_changed = deviating_slots(&kept, kept_idx);
+        if !kept_changed.is_empty() {
+            break;
+        }
+    }
+    assert!(
+        !kept_changed.is_empty(),
+        "对照组 Shoot 播放后应有槽 displayIndex 偏离数据姿态"
+    );
+    play_idle(&mut kept, kept_idx, false);
+    for _ in 0..12 {
+        kept.advance_time(dt);
+    }
+    assert!(
+        !deviating_slots(&kept, kept_idx).is_empty(),
+        "reset_to_pose=false 时 Idle 不覆盖槽目标，Shoot 的 displayIndex 残留应保留"
+    );
 }

@@ -550,13 +550,13 @@ src/animation/timeline_states/*.rs           各模块内单测：合成 IR 逐�
 
 每批先做合成 IR 单测，再跑相关 golden 子集。核对优先级：offset → wrap → scale 落点 → 状态组遍历 → 最后才考虑 libm。
 
-### 6.1 当前实现检查点（2026-10-19）
+### 6.1 当前实现检查点（2026-10-20）
 
 TimelineDirty rebuild、骨骼/插槽/约束/animation target 创建、pose fallback 与 fixed group runtime 更新已经接线；Action/ZOrder 保留独立更新路径。`golden_anim` 以 root clock 显式驱动 37 个现有动画 golden、逐帧比对 120 帧骨/槽 pose 和 enqueue event 快照，目前全绿。另有合成 line-tween header 边界单测，覆盖最后一个 line keyframe 不含 easing header 的布局。
 
 补充合成验证：`timeline_states::action::tests::sound_bypasses_listener_gate_while_frame_and_play_do_not_enter_event_queue` 锁住无 listener 时 Sound 仍入 event queue，而 Frame 被 gate、Play 进 armature action queue。
 
-任务 7 的 resetToPose 未覆盖目标、state timeScale=2 的 60-vs-120 帧与 reverse timeScale 端到端用例尚无专门测试，进行中（由 review 后补课），详见 §7.1。
+任务 7 的补课用例已落地：`resetToPose` 未覆盖目标（`Dragon` 骨 + `PlantAnimate` 插槽的真实素材端到端，另有 `animation_state.rs` 合成用例）、state timeScale=2 的 60-vs-120 帧（含半步对照）、reverse timeScale 端到端；另补父子时间缩放组合用例。详见 §7.1。
 
 ---
 
@@ -568,7 +568,7 @@ TimelineDirty rebuild、骨骼/插槽/约束/animation target 创建、pose fall
 |---|---|
 | `tests/golden_anim.rs` | 9 资产 × 全动画 × 120 帧测试（已落地 37 个 golden） |
 | `tests/common/mod.rs` | 现有 golden 读取/容差 helper；阶段 4 未单独抽 `anim_snapshot` |
-| 模块内单测（`animation/player.rs` / `animation_state.rs` / `timeline_states/*.rs`） | listener gate 正反向、同值 event、不 dispatch、gotoAndStop/child/timeScale 场景；resetToPose 合成用例仍进行中 |
+| 模块内单测（`animation/player.rs` / `animation_state.rs` / `timeline_states/*.rs`） | listener gate 正反向、同值 event、不 dispatch、gotoAndStop/child/timeScale 场景；resetToPose 合成用例已落地（真实素材端到端见 `tests/animation_acceptance.rs`） |
 
 ### harness 逐帧顺序
 
@@ -578,11 +578,11 @@ Rust 阶段 4 映射：注册 9 类 panic probe 必须在 goto/play 之前；显
 
 每帧对比 bones 13 值、slots 15 值和 events `(type,name,bone,slot)`；名称与顺序元数据按原指南在 120 帧末态比较。容差和最大误差报告按原指南，不以“看起来相同”验收。
 
-### 7.1 当前实现检查点（2026-10-19）
+### 7.1 当前实现检查点（2026-10-20）
 
 `tests/golden_anim.rs` 已按指南建成：37 个现有动画 golden，显式 root-clock attach，播放前安装 9 类 panic probe，逐帧运行后取替换式 event snapshot，并逐元素检查 13 bone / 15 slot 值与 `(type,name,bone,slot)` 事件。名称/顺序元数据在末帧检查；每个 golden 输出最大绝对和相对 pose 误差。另有无 listener 的 Shoot 测试验证 Frame/lifecycle gate；合成 Action 单测验证 Sound 仍入队、Play 进入 action queue。相关测试当前全绿。
 
-额外测试现状：gotoAndStopByFrame 时间冻结、listener 不注册时 Frame/lifecycle gate 与 Sound 例外、Play action 不走 event queue 已有模块内单测/golden 覆盖；同帧 gotoAndPlay 恢复、resetToPose 未覆盖目标、child state ID/clock/timeScale 的完整组合、state timeScale=2 的 60-vs-120 帧、reverse state timeScale 端到端仍进行中（由 review 后补课）。
+额外测试现状：任务 7 的五项补课已全部落地——gotoAndStop 冻结与同帧 gotoAndPlay 往返（`goto_and_stop_by_frame_freezes_pose_and_play_round_trip`）、`resetToPose` 未覆盖 bone/slot（`animation_state.rs` 合成 + `animation_acceptance.rs` 真实素材：`Dragon` walk→stand 骨复位并与"从零播放 stand"整姿态对照、`PlantAnimate` Shoot→Idle 插槽 displayIndex 复位及关闭配置的残留对照）、子骨架 StateId 创建/clock 传播/父子时间缩放组合（`child_animation_composes_inherited_parent_time_scale_once`）、state timeScale=2 的 60-vs-120 帧（含半步对照）、reverse timeScale 端到端。事件侧 listener gate、Sound 例外、Play action 不走 event queue 仍由模块内单测/golden 覆盖。
 
 ---
 
@@ -609,11 +609,9 @@ node tools/gen_pose.mjs
 
 交付摘要包含：逐资产/逐动画 golden 结果、最大绝对和相对误差、clock 行为矩阵、动画 API/state 测试结果、差异登记。所有命令及原指南阶段完成标准通过后才结束阶段 4。
 
-### 9.1 当前验收检查点（2026-10-19）
+### 9.1 当前验收检查点（2026-10-20）
 
-当前验收：`cargo build --workspace`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 和 `node tools/gen_pose.mjs` 均通过；pose 生成结果 9 ok / 0 fail。`golden_anim` 37 个动画 × 120 帧全通过，跨所有输出最大绝对 pose 差 `1.137e-13`、最大相对 pose 差 `3.085e-14`，严格使用 `1e-9 * (1 + |want|)` 容差。Clock、listener gate、Sound 例外、Play action 和 pose golden 均全绿。任务 7 的 resetToPose/timeScale/反向端到端用例仍未覆盖，进行中（由 review 后补课），见 §7.1。
-
-Task 8 差异登记补充 D-4.32（animation state graph cycle guard）；P1-4 cachedFrames 写侧仍明确保留未实现，不影响当前 37 个 pose/event golden。工作区包含既有的未提交 Cargo/armature/guide 改动，验收后仍需由用户决定是否提交。
+当前验收：`cargo build --workspace`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 和 `node tools/gen_pose.mjs` 均通过；pose 生成结果 9 ok / 0 fail。`golden_anim` 37 个动画 × 120 帧全通过，跨所有输出最大绝对 pose 差 `1.137e-13`、最大相对 pose 差 `3.085e-14`，严格使用 `1e-9 * (1 + |want|)` 容差。Clock、listener gate、Sound 例外、Play action 和 pose golden 均全绿。任务 7 的五项补课用例已全部覆盖（见 §7.1），其中 `resetToPose` 用真实素材做端到端对拍；收尾新增 3 个端到端用例后 workspace 共 205 个测试全绿、clippy 零警告。Task 8 差异登记补充 D-4.32（animation state graph cycle guard）；P1-4 cachedFrames 写侧仍明确保留未实现，不影响当前 37 个 pose/event golden。阶段 4 收尾改动（3 个用例 + 本文档修订）在工作区，待用户决定是否提交。
 
 ---
 
