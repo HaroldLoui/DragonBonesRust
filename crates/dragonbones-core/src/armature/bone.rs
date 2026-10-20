@@ -72,7 +72,7 @@ pub enum BoneRuntime {
 /// - `children_transform_dirty`：Slot mesh 分支读**父骨**的该脏标记
 ///   （Slot.ts:728-729；`_isBonesUpdate` 亦只读 `_childrenTransformDirty`，:362-364）
 /// - `transform_dirty`：Slot **从不读**骨的该标记——Slot.ts:199/749 的 `_transformDirty`
-///   是 Slot 自己的字段；骨的 `transform_dirty` 外部写方是 TimelineState（阶段 5/6）
+///   是 Slot 自己的字段；骨的 `transform_dirty` 外部写方是 TimelineState（阶段 6）
 ///
 /// 其余字段默认值 = `_onClear` 复位值（见 [`Default`] 逐行注释）。
 pub struct Bone {

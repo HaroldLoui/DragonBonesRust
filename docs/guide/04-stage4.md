@@ -40,7 +40,7 @@
 | F4.6 | SlotColor 间接读 colorArray；Surface/Deform header 使用 TimelineFrameValueCount（IR index 3）；Action/ZOrder/SlotDisplay 的 Step 值位于 frameArray；若干 int16 wrap 需要 `+=65536` | 按 TS 指定数组和 wrap 规则读取 |
 | F4.7 | WorldClock 保留 dt 符号；Animation 层对负 dt 取正；AnimationState 的 timeScale 是反向播放入口 | 负时间只在 TS 指定层处理 |
 | F4.8 | WorldClock 更新时间基准、timeScale 缩放后才做 0 早退；DragonBones 的 objects/clock/events 三段无条件按序运行 | clock 的早退不能挪到 runtime 外层 |
-| F4.9 | Play Action 入 armature action 队列，无 listener 闸；Frame/Sound 等 event 走事件队列和监听器闸 | Play 链本阶段真实现；纯事件派发可在阶段 5 完成 |
+| F4.9 | Play Action 入 armature action 队列，无 listener 闸；Frame event 和生命周期事件按各自 listener 闸门入队；Sound action 无条件进入事件队列（TimelineState.ts:53），但仍受 actionEnabled 等外层条件约束 | Play 链本阶段真实现；保留 Sound 的 listener 闸门例外；纯事件派发可在阶段 5 完成 |
 | F4.10 | start/loopComplete/complete 的触发属于 ActionTimelineState；loopComplete 有跨第 0 帧的延迟 flush | 保留触发点和相对顺序，即使事件消费留到阶段 5 |
 | F4.11 | `gotoAndStopByFrame` 存在；`resetToPose` 是 config/state 字段而非独立方法；Animation 没有公开 fadeOut | Rust API 和测试按真实公开行为映射 |
 | F4.12 | play 使用 All 淡出策略；fadeIn 默认 SameLayerAndGroup；`_fadeOut` 的 Single case 是空实现，Single 复用既有 state 的分支在 playConfig | 不合并这些路径 |
@@ -128,7 +128,8 @@ impl RuntimeCtx<'_> {
 签名可调整以满足 Rust 借用，但遵循以下实现模式：
 
 - 从成员 Vec 取一个 handle 到局部值，再释放成员表借用。
-- 通过 arena 将对应对象 `take()` 出来，执行推进，放回原 slot。
+- 对 Armature 使用 arena `take()` → 推进 → 放回原 slot；Clock 的调度循环由 runtime 持有，按每一步短借时钟字段和成员表，不取走整个 Clock 及其关系表。
+- 正在推进的 Clock 必须仍可通过 `ClockId` 访问，其成员表/parent 关系始终可供 attach、detach、clear 和嵌套查询修改。不得把 Clock slot 置为 `None` 后再要求 context 找回该 Clock；“正在推进”与“已销毁”是不同状态。
 - 推进上下文允许 `set_armature_clock`、Slot child display 接线和 Action 建立新 state；成员关系操作写回当前 clock 成员表。
 - 避免持有一个跨整个推进循环的 `&mut members` 同时调用会修改该 Vec 的方法。
 - 若使用 pending command queue，则每条命令须在官方对应操作时点生效；不能统一拖到整帧结束导致成员资格差异。
@@ -146,16 +147,19 @@ impl RuntimeCtx<'_> {
 5. 遍历后安全整理成员顺序。Rust 可用 `Vec<Option<Handle>>` tombstone + `retain`/压缩，也可用快照与增量列表；选择必须通过下列行为测试，且不能用 `unsafe set_len`。
 6. `clear()` 解除每个成员的回指及嵌套 clock 关系；清除后容器状态和所有 owner back-reference 一致。
 7. `contains` 沿 clock parent 链查询，不把“直接成员”误当祖先包含语义。
-8. 时间源可注入：`system_time` 与负 dt sentinel 依赖墙钟（TS `Date.now`）。提供可测 seam——内部 `advance_time_with(passed_time, now)`、对外入口取真实 now，或可替换的 now 函数字段——否则任务 1 测试矩阵里 “system time 更新顺序、time 与成员 dt 符号符合 TS” 的断言无法稳定成立。
+8. 时间源可注入：`system_time` 与负 dt sentinel 依赖墙钟（TS `Date.now`）。提供可测 seam——内部 `advance_time_with(passed_time, now)`（实现名 `WorldClock::update_time`）、对外入口取真实 now，或可替换的 now 函数字段——否则任务 1 测试矩阵里 “system time 更新顺序、time 与成员 dt 符号符合 TS” 的断言无法稳定成立。
 
 ### 1.4 时间轴容器与确定性
 
 TS 的 8 组 timeline 遍历序会影响首写者、pose reset 和 action 先后（F4.19/F4.20）。Rust 可以用强类型字段、固定数组或 enum+有序 Vec；只有当更新序被显式固定并经测试时，才可合并容器。任何 HashMap 只用于按键 lookup，不可依赖其 iteration 顺序。
 
-AnimationState 引用使用 `StateIdx`；骨骼/槽/约束目标用 `BoneIdx`/`SlotIdx`/`ConstraintIdx`。不要在状态机内部保存跨 arena Rust 引用。
+AnimationState 引用使用稳定 `StateId`；骨骼/槽/约束目标用 `BoneIdx`/`SlotIdx`/`ConstraintIdx`。不要在状态机内部保存跨 arena Rust 引用。
 
 - `ConstraintIdx` 按**创建序身份**定义（constraints 恒不重排，同阶段 3 `SlotIdx` 语义），不得以容器位置充当身份。
-- `StateIdx` 必须有稳定语义：官方多状态回收会压缩数组（Animation.ts:246-254），裸 Vec 下标会漂移——用 `Vec<Option<AnimationState>>` 槽位化（tombstone，索引天然稳定），或回收时同步作废旧索引并断言失效；二选一，必须有测试覆盖“状态回收后旧引用不被误用”。
+- 状态身份与播放顺序分开：`states: Vec<Option<AnimationState>>` 保存稳定 slot，`play_order: Vec<StateId>` 保存 TS 的 layer 排序、同层插入序和查询顺序。状态回收只从播放序列移除 ID 并释放 slot，不能通过压缩状态存储移动其他状态的身份。
+- `StateId` 包含 slot 与 generation；slot 每次复用时递增 generation，查询必须同时校验 slot/generation。若初版不引入 generation，则明确禁止 slot 复用，直到 Animation owner 销毁；不能把旧 ID 重新解释为新状态。
+- `last_state`、父/子状态与时间轴目标统一使用稳定 ID；不得保存 `play_order` 的位置。`get_state` 依 TS 语义倒序扫描播放序列，而非状态存储的 slot 顺序。
+- 必须测试“回收一个状态不改变其他状态 ID”“复用 slot 后旧 ID 无效”“回收/新建后 layer 顺序及同层查询结果仍与 TS 一致”。
 
 ### 1.5 数值兼容的实现纪律
 
@@ -168,7 +172,7 @@ AnimationState 引用使用 `StateIdx`；骨骼/槽/约束目标用 `BoneIdx`/`S
 
 Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工即处理，完成后先确认阶段 3 回归再继续：
 
-- **0 早退位置迁移**：阶段 3 现状在 `BaseFactory::advance_time` **最顶层** `dt == 0 → return`（当时以 WorldClock.ts:114 为据）；任务 1.4 要求 dt=0 时外层 objects/events 两段仍执行 → 该早退**下移进 `WorldClock::advance_time` 内层**。`armature_unit::advance_time_zero_is_noop_while_advance_one_drives` 的注释依据同步更新（断言本身仍应成立：挂钟成员在 dt=0 时不被推进）。
+- **0 早退位置迁移**：阶段 3 现状在 `BaseFactory::advance_time` **最顶层** `dt == 0 → return`（当时以 WorldClock.ts:114 为据）；任务 1.4 要求 dt=0 时外层 objects/events 两段仍执行 → 该早退**下移进 `WorldClock::update_time` 内层**（clock 层早退，只跳过成员推进）。`armature_unit::advance_time_zero_is_noop_while_advance_one_drives` 的注释依据同步更新（断言本身仍应成立：挂钟成员在 dt=0 时不被推进）。
 - **`ArenaCtx → RuntimeCtx` 签名迁移**：`Armature::advance_time(&mut ArenaCtx)` 的形参、`SlotUpdateCtx::world`、`Slot` 的 child clock 两处 TODO（Slot.ts:541/:549——正是任务 1.5 要落实的接线）、`BaseFactory::dispose_armature` 增加 detach。
 - **推进驱动换轴**：`BaseFactory::advance_time(dt)` 从 arena 全遍历改为「`DragonBones` 三段 → 挂钟成员」驱动（对应常见错误 5）；`advance_one(idx, dt)` **保留**单骨架直驱语义（build 收尾与既有测试依赖它，即官方 `armature.advanceTime(0)` 直调形态）。
 - 既有测试兼容性：`pose_golden`/`armature_unit` 不挂钟、只用 build 收尾 advance 与 `advance_one`——改造后必须**原样全绿**（任务 1 完成条件已含 workspace 回归）。
@@ -187,12 +191,15 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 
 1. 设计并实现 `ClockId`、`AnimatableHandle`、`ClockArena/WorldClock` 和窄 runtime context。Armature/Clock 均由 runtime arena 拥有；禁止 trait-object ownership。
 2. 提供统一关系入口：attach/detach armature、clock parent attach/detach、clear、dispose。armature 的 clock back-reference 和成员表必须原子式维护。
-3. 实现 `WorldClock.advance_time` 的 F4.8/F4.24 语义与 runtime dispatch。WorldClock 保持时间策略；runtime 按 handle 解析并推进对象。
-4. 接入 `DragonBones.advance_time` 三段顺序：objects flush（Rust 暂无对象池，可空操作）→ clock advance → events flush。dt=0 不跳过外层两段。事件 seam（P1-1 已定）：
-   - `buffer_event` 真入队（去重按 TS:334-338），`buffer_object` 本阶段 no-op 占位；
+3. 实现 `WorldClock::update_time`（F4.8/F4.24 时间策略）与 runtime dispatch。WorldClock 保持时间策略；runtime 按 handle 解析并推进对象。
+4. 接入 `DragonBones.advance_time` 三段顺序：objects flush（Rust 暂无对象池，可空操作）→ clock advance → events flush。dt=0 不跳过外层两段。事件 seam（`S4-Event`）：
+   - `buffer_event` 真入队；TS:334-338 的 `indexOf` 是对象身份去重，不是字段内容去重。阶段 4 按值拥有事件时，每次产生的新事件直接追加，禁止用 `PartialEq`/`Vec::contains` 去掉同值事件；若引入事件 handle，仅对同一 handle 去重。`buffer_object` 本阶段 no-op 占位；
    - flush 点把队列**整体移入“本帧已 flush”缓冲**：`take_flushed_events() -> Vec<EventObject>`（取走即清；或 `advance_time` 直接返回本帧快照，二选一），`BaseFactory` 透传该 seam。flush 本身**不 dispatch、不调用任何 listener**，禁止“静默清空后无法验证”；
+   - 每次 flush **替换**上一帧快照，不追加；本帧事件为空也必须用空快照替换。`take_flushed_events()` 取走后缓冲为空，重复取返回空；dt=0 也执行这一 flush 规则。若选直接返回快照，保持同样的逐次调用边界；
    - 注意可见性：`tests/` 是集成测试（外部 crate），`pub(crate)` 看不到——seam 用 `pub` + `#[doc(hidden)]`（或 dev-feature 门控），不要 `pub(crate)`；
    - 阶段 5 把 flush 的“移入缓冲”替换为 `dispatchDBEvent` + SOUND 双发 + 池化回收，事件产生路径与队列顺序保持不变。
+
+   **S4-Event 验收**：分别产生的两条同值事件都保留；有事件帧之后的无事件帧快照为空；同帧重复 take 第二次为空；dt=0 能 flush 已缓冲事件且不推进骨架。listener 闸门的正/反向用例在任务 7 验证。
 5. 接入 Armature clock propagation 两处：根挂钟传播至已有 child（Armature.ts:904-910）；Slot display child 切换时继承 parent clock（Slot.ts:541/549）。buildArmature 不自动挂钟。dispose/clear 必须 detach。
 
 **必须覆盖的 clock 测试**（不依赖动画数据）：
@@ -217,9 +224,9 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 
 1. `AnimationConfig::clear/copy_from` 对照 `AnimationConfig.ts:279-296`：`fadeOutMode=All`、`timeScale=-100`、`playTimes=-1`、`autoFadeOutTime=-1` 等默认逐字段测试。
 2. 核对 `AnimationData`/`TimelineData` 已有模型字段；不因本阶段重写 model。
-3. Animation 拥有 `Vec<AnimationState>`，状态引用使用 `StateIdx`。按需实现有序动画表和 blend state lookup；lookup 容器 iteration 不参与结果。
+3. Animation 拥有状态 slot 存储与独立 `play_order`，引用使用 §1.4 的稳定 `StateId`；采用 slot 复用时同时实现 generation 检查，否则落实禁止复用和旧 ID 失效规则。按需实现有序动画表和 blend state lookup；lookup 容器 iteration 不参与结果。
 4. 先立 API 签名与类型，不留一组无调用者的 `todo!()` API；逐个由后续任务填体。签名按 `animation.md §1.3`，特别是 play 的 `play_times: i32`、`stop(Option<&str>)`、fadeIn 的参数。
-5. `Animation::on_clear` 对照 TS `_onClear`，替换 Armature 清理路径中旧 `reset()+init`（DD-4.8）。
+5. `Animation::on_clear` 对照 `Animation.ts:68-100`：清理 states、播放顺序、动画数据绑定、blend states 与 config，复位 timeScale/inheritTimeScale/dirty 等字段；替换 Armature 清理路径中旧 `reset()+init`。同步使旧状态 ID 失效；`reset` 与 `on_clear` 的不同语义不得合并。
 6. config 双借用采用值语义、本地 config 再写回或等价方案；`play_config` 的归一化写回不能丢。
 
 ## 任务 3 — BaseTimelineState 与可独立验证的时间算法
@@ -241,7 +248,7 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 3. `_advanceFadeTime` 的线性 fade、负时间取正、fade event 入队时点和 parent/actionEnabled 条件按 F4.10。
 4. `advance_time` 顺序按 `AnimationState.ts:808-1070`：fade → playhead/timeScale → timeline rebuild → action 轴（在 weight early-return 前）→ 固定组更新 → fade complete/auto fade。
 5. BlendState 保留每帧 reset、预算权重计算、dirty 首写者 pose 初始化和 target 去重（F4.19）；用确定性容器/循环。
-6. cache path 按 F4.15 保留结构；仅实现 cacheFrameRate=0 下不会进入的分支时，注释明确 P1-4 未完成，不宣称缓存支持。
+6. cache path 按 F4.15 保留结构；仅实现 cacheFrameRate=0 下不会进入的分支时，须在量化/写入分支就地注释明确 P1-4 未完成及其当前不可达条件，不宣称缓存支持。
 7. `fade_out` 的 longer-fade guard、progress continuity、五种 fadeOutMode 过滤逐项覆盖（F4.12）。
 
 **单测**：fade in/out 状态转移、pauseFadeIn、fade 独立于 state timeScale、weight=0 时 action 仍执行、blend 首写者、相同 target 去重、fade-out 连续性。
@@ -253,7 +260,7 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 1. `advance_time`：负 dt 取正只在此层；父继承 timeScale 读取同帧 runtime 状态；blend states reset；单/多/零 state 分支和缓存 frame index 更新顺序按 TS。
 2. `play_config`：查表失败、Single 复用、config normalize 写回、fade-out filtering、state 创建/插入、child animation inheritance、子动画状态创建顺序逐项移植。
 3. `play`、`fade_in`、`goto_and_play_*`、`goto_and_stop_*`、`stop` 和查询 API 逐个映射 TS 默认/副作用；`play` 与 `fadeIn` 不能共用错误的默认 fadeOutMode。
-4. 父子 AnimationState 用 `StateIdx`/owner handle，不保存跨 arena 引用。RuntimeCtx 只在需要访问其他 Armature/状态时提供窄查询/命令。
+4. 父子 AnimationState 用 `StateId`/owner handle，不保存跨 arena 引用。RuntimeCtx 只在需要访问其他 Armature/状态时提供窄查询/命令。
 5. 子骨架 clock membership 来自任务 1 的 runtime 关系入口；Animation 不直接改 clock 成员表。
 
 **单测**：config normalize 写回、Single 早退不改 config、play vs fadeIn 淡出范围、gotoAndStop freeze、stop 单状态/全部、get_state 倒序、isCompleted 空列表 false、child animation inheritance。
@@ -304,8 +311,11 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 事件验证口径（任务 1.4 固定的 seam，逐帧执行）：
 
 1. harness 在 armature proxy 上为需验证的 **9 类事件注册探针**，使对应 `hasDBEventListener` 为真——探针只为打开入队闸门，flush 不 dispatch，测试期间不会被调用；
+   注册必须发生在 `goto_and_play_by_time` 等可能产生 fade 事件的播放入口**之前**（对照 `jsdump.mjs:103-117`），播放入口产生的事件保留到第一次 runtime flush；探针回调可直接 panic，以证明本阶段未 dispatch；
 2. 每帧推进后用 `take_flushed_events()` 取本帧快照，与 golden 的 `frames[i].events` 按 `(type, name, bone, slot)` **逐帧全等**比较（`golden_events` 断言可直接复用参照；事件同帧 flush，时序与 jsdump 一致），比较后丢弃；
 3. 正式 dispatch 对拍（调用真实 listener 回调）留阶段 5；阶段 4 的验收目标是事件产生条件、入队时机与队列顺序正确，且全程不调用 listener。
+
+另加 listener 闸门反向测试：不注册 listener 时，Frame 与生命周期事件按官方各自闸门不入队；Sound action 即使没有 listener 仍入队（仍须满足 actionEnabled 等外层条件）；Play action 不经事件队列且不受 listener 开关影响。该测试不能用“事件队列总是为空”作为无 listener 场景的断言。
 
 容差初始 `1e-9 * (1 + |want|)`；只有证实是系统 libm 差异后才按 requirements 降至 `1e-6 * (1 + |want|)`，在验收记录报告最大绝对/相对误差，不静默放宽。
 
@@ -313,7 +323,7 @@ Runtime/时钟重构会改动阶段 3 已提交的以下接缝，任务 1 开工
 
 1. gotoAndStopByFrame 后时间推进姿态冻结；同帧 gotoAndPlay 恢复结果与首采样一致。
 2. resetToPose 让未被动画覆盖的 bone/slot 回到 model pose；若素材无未覆盖目标，用合成骨骼/slot 测试。
-3. 子骨架 inheritAnimation 的 StateIdx 创建、clock propagation 和父子时间缩放顺序。
+3. 子骨架 inheritAnimation 的 StateId 创建、clock propagation 和父子时间缩放顺序。
 4. state timeScale=2 的前 60 帧与正常前 120 帧对拍；反向状态 timeScale 覆盖负向推进。
 5. WorldClock 成员变更/嵌套用例使用任务 1 的 runtime tests，不在 golden harness 里另造另一套驱动。
 
@@ -340,9 +350,9 @@ node tools/gen_pose.mjs
 2. clock 行为测试全绿：显式成员资格、timeScale、零早退、成员 add/remove/clear、child propagation、dispose、嵌套 clock/contains 与 cycle 防护。
 3. gotoAndStopByFrame、resetToPose、child animation inheritance、AnimationState timeScale 测试通过。
 4. 阶段 0-3 回归全绿；clippy 无警告。
-5. 阶段 4 范围内无未解释 `todo!()`；P1 cache 的保留分支已单独标注。
+5. 阶段 4 范围内无未解释 `todo!()`；P1 cache 的保留/量化/写入分支须就地标注 P1-4 与不可达条件（见任务 4.6）。
 6. 任何未实现的官方可观察行为都写入差异登记；不把“素材没覆盖”当作删实现的理由。
-7. 事件 enqueue 验证（P1-1 seam）：9 类事件逐帧 `(type, name, bone, slot)` 快照与 golden 一致；全程未调用 listener（正式派发对拍属阶段 5）。
+7. 事件 enqueue 验证（`S4-Event`）：9 类事件逐帧 `(type, name, bone, slot)` 快照与 golden 一致；同值独立事件不被吞掉、逐帧快照替换/重复 take/dt=0 flush 测试通过，listener 闸门正/反向测试通过；全程未调用 listener（正式派发对拍属阶段 5）。
 
 ## 常见错误速查
 

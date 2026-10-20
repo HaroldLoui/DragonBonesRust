@@ -17,6 +17,7 @@ pub mod armature;
 pub mod bone;
 pub mod constraint;
 pub mod i_armature_proxy;
+pub mod runtime_ctx;
 pub mod slot;
 pub mod surface;
 pub mod transform_object;
@@ -25,6 +26,7 @@ pub use armature::Armature;
 pub use bone::Bone;
 pub use constraint::Constraint;
 pub use i_armature_proxy::{ArmatureProxy, DbEventListener, ListenerId, NullArmatureProxy};
+pub use runtime_ctx::{RuntimeCtx, RuntimeCtxError};
 pub use slot::{DisplayFrame, NullSlotAdapter, Slot, SlotRenderAdapter, SlotUpdateCtx};
 pub use transform_object::TransformObject;
 
@@ -47,6 +49,10 @@ pub struct BoneIdx(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SlotIdx(pub u32);
 
+/// Constraint identity is creation order and remains stable for the armature lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstraintIdx(pub u32);
+
 macro_rules! impl_idx {
     ($t:ty) => {
         impl $t {
@@ -61,6 +67,7 @@ macro_rules! impl_idx {
 impl_idx!(ArmatureIdx);
 impl_idx!(BoneIdx);
 impl_idx!(SlotIdx);
+impl_idx!(ConstraintIdx);
 
 /// core 不认识引擎显示对象（raw / mesh / 子骨架 display）→ 占位枚举，
 /// 阶段 7 由 Bevy 适配层映射成实体（渲染契约隔离，关键结论 2 / D-3.4）。
@@ -74,35 +81,4 @@ pub enum DisplayHandle {
     Mesh,
     /// 子骨架显示（TS `_display instanceof Armature` 分支，`Slot.ts:510-513`）。
     Armature(ArmatureIdx),
-}
-
-/// 跨骨架访问句柄（D-3.2 索引解环）。
-///
-/// 驱动方 `BaseFactory::advance_time` 先把当前骨架 `take` 出 arena 再调用
-/// [`Armature::advance_time`]，因此推进期间 `armatures[self_idx]` 恒为 `None`：
-/// 骨架**无法经 world 访问自身**，自身状态（如 `_bufferAction`）必须以参数传入
-/// （阶段 3 借用策略，见指南任务 6 坑 4）。
-///
-/// 父骨架先于子骨架 build → arena 序中父索引 < 子索引（D-3.2）；alpha 传播、
-/// 子骨架接线、action 队列（阶段 4）都经本句柄解析。
-pub struct ArenaCtx<'a> {
-    /// 骨架 arena（当前推进的骨架槽位为 `None`）。
-    pub armatures: &'a mut Vec<Option<Armature>>,
-    /// 当前推进的骨架索引。
-    pub self_idx: ArmatureIdx,
-}
-
-impl ArenaCtx<'_> {
-    /// 按索引读取骨架（被取出的 `self_idx` 返回 `None`）。
-    #[must_use]
-    pub fn armature(&self, idx: ArmatureIdx) -> Option<&Armature> {
-        self.armatures.get(idx.index()).and_then(|a| a.as_ref())
-    }
-
-    /// 按索引取可变骨架（被取出的 `self_idx` 返回 `None`）。
-    pub fn armature_mut(&mut self, idx: ArmatureIdx) -> Option<&mut Armature> {
-        self.armatures
-            .get_mut(idx.index())
-            .and_then(|a| a.as_mut())
-    }
 }

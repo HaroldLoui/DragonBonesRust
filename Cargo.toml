@@ -9,3 +9,4 @@ edition = "2024"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 indexmap = "2"
 log = "0.4"
+thiserror = "2"

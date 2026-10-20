@@ -11,16 +11,70 @@
 mod common;
 
 use common::ir_snapshot::{asset_root, read_json, tex_stem};
-use dragonbones_core::armature::{Armature, ArmatureIdx, DisplayHandle, NullArmatureProxy, Slot, SlotIdx};
+use dragonbones_core::animation::world_clock::AnimatableHandle;
+use dragonbones_core::armature::{
+    Armature, ArmatureIdx, ArmatureProxy, Bone, BoneIdx, Constraint, DbEventListener,
+    DisplayHandle, ListenerId, NullArmatureProxy, Slot, SlotIdx,
+};
 use dragonbones_core::core::enums::ActionType;
+use dragonbones_core::event::EventObject;
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
 use dragonbones_core::model::{ActionData, ArmatureData, DisplayData, DisplayKind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DRAGON_KEY: &str = "Dragon_ske";
 const PARENT_ARMATURE: &str = "Dragon";
 const CHILD_ARMATURE: &str = "ChildA";
+
+struct AdvanceCounterProxy {
+    inner: NullArmatureProxy,
+    advances: Arc<AtomicUsize>,
+}
+
+impl AdvanceCounterProxy {
+    fn new(advances: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: NullArmatureProxy::new(),
+            advances,
+        }
+    }
+}
+
+impl ArmatureProxy for AdvanceCounterProxy {
+    fn db_init(&mut self, armature: ArmatureIdx) {
+        self.inner.db_init(armature);
+    }
+
+    fn db_clear(&mut self) {
+        self.inner.db_clear();
+    }
+
+    fn db_update(&mut self) {
+        self.advances.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn dispose(&mut self, dispose_proxy: bool) {
+        self.inner.dispose(dispose_proxy);
+    }
+
+    fn add_db_event_listener(&mut self, ty: &str, listener: DbEventListener) -> ListenerId {
+        self.inner.add_db_event_listener(ty, listener)
+    }
+
+    fn remove_db_event_listener(&mut self, id: ListenerId) {
+        self.inner.remove_db_event_listener(id);
+    }
+
+    fn has_db_event_listener(&mut self, ty: &str) -> bool {
+        self.inner.has_db_event_listener(ty)
+    }
+
+    fn dispatch_db_event(&mut self, ty: &str, event: &EventObject) {
+        self.inner.dispatch_db_event(ty, event);
+    }
+}
 
 /// 按**创建序身份**取槽（`SlotIdx` 是身份而非排序后位置——槽排序重排后不可作
 /// 下标，见 `armature.rs` 排序处 D-4.29 语义注）。
@@ -45,7 +99,10 @@ fn dragon_factory() -> (BaseFactory, String) {
         .parse_dragon_bones_data(&ske, &key)
         .unwrap_or_else(|| panic!("读 Dragon 素材失败：parse_dragon_bones_data 返回 None"));
     let atlas_ok = factory.parse_texture_atlas_data(&tex, &key);
-    assert!(atlas_ok, "读 Dragon 图集失败：parse_texture_atlas_data 返回 false");
+    assert!(
+        atlas_ok,
+        "读 Dragon 图集失败：parse_texture_atlas_data 返回 false"
+    );
     (factory, key)
 }
 
@@ -161,13 +218,12 @@ fn inject_child_display(factory: &mut BaseFactory, key: &str, inherit_animation:
     let (slot_name, display_index) = candidates
         .into_iter()
         .find(|(name, display_index)| {
-            skin.displays.get(name).is_some_and(|list| {
-                usize::try_from(*display_index).is_ok_and(|i| i < list.len())
-            })
+            skin.displays
+                .get(name)
+                .is_some_and(|list| usize::try_from(*display_index).is_ok_and(|i| i < list.len()))
         })
         .unwrap_or_else(|| panic!("找不到「显示帧存在且 display_index 合法」的槽可注入子骨架显示"));
-    let frame_index =
-        usize::try_from(display_index).expect("display_index >= 0（候选已过滤）");
+    let frame_index = usize::try_from(display_index).expect("display_index >= 0（候选已过滤）");
 
     let displays = skin
         .displays
@@ -236,6 +292,33 @@ fn sub_armature_wiring_inherit_variants_and_dispose() {
         "inherit_animation = false：build 收尾 advance 后父骨架 actions 队列应已清空（action 被 advance ⑦ 消费）"
     );
 
+    // 根 Armature clock setter 会把 clock 传播给当前已显示的 child armature。
+    let root_clock = factory.root_clock();
+    factory
+        .attach_armature(root_clock, parent_idx)
+        .expect("挂接父骨架到 root clock");
+    assert_eq!(factory.armature(parent_idx).clock(), Some(root_clock));
+    assert_eq!(factory.armature(child_idx).clock(), Some(root_clock));
+    assert!(factory.clock_contains(root_clock, AnimatableHandle::Armature(child_idx)));
+
+    factory
+        .detach_armature(parent_idx)
+        .expect("摘除父骨架应传播到 child");
+    assert_eq!(factory.armature(parent_idx).clock(), None);
+    assert_eq!(factory.armature(child_idx).clock(), None);
+    factory
+        .attach_armature(root_clock, parent_idx)
+        .expect("重新挂接以验证 dispose 会先 detach");
+
+    slot_of_mut(factory.armature_mut(parent_idx), slot_idx)
+        .expect("child display 所在槽")
+        .set_display_index(-1, false);
+    factory.advance_one(parent_idx, 0.0);
+    assert_eq!(factory.armature(parent_idx).clock(), Some(root_clock));
+    assert_eq!(factory.armature(child_idx).clock(), None);
+    assert_eq!(factory.armature(child_idx).parent, None);
+    assert!(!factory.clock_contains(root_clock, AnimatableHandle::Armature(child_idx)));
+
     // e) dispose 父骨架 → 子骨架 arena 槽位 None（递归释放，D-3.1）
     factory.dispose_armature(parent_idx);
     assert!(
@@ -272,6 +355,57 @@ fn sub_armature_wiring_inherit_variants_and_dispose() {
         factory.armature(parent_idx).actions.is_empty(),
         "inherit_animation = true：父骨架 actions 恒空（Slot._UpdateDisplay 缓存的 action 已被 advance ⑦ 消费）"
     );
+}
+
+/// Clock membership changes made by a Slot during its parent's advance obey
+/// the fixed-start-boundary rule: an added child waits until next frame, while
+/// a child removed before its turn is skipped in the current frame.
+#[test]
+fn slot_clock_switch_respects_current_clock_iteration_boundary() {
+    let (mut factory, key) = dragon_factory();
+    inject_child_display(&mut factory, &key, true);
+    let parent_idx = build_dragon(&mut factory, &key);
+    let (child_idx, slot_idx) = find_child_slot(&factory, parent_idx);
+    let display_index = slot_of(factory.armature(parent_idx), slot_idx)
+        .expect("child display slot")
+        .display_index;
+    let child_advances = Arc::new(AtomicUsize::new(0));
+
+    let mut proxy = AdvanceCounterProxy::new(Arc::clone(&child_advances));
+    proxy.db_init(child_idx);
+    factory.armature_mut(child_idx).proxy = Box::new(proxy);
+
+    // First make the slot empty while the parent is not clocked.
+    slot_of_mut(factory.armature_mut(parent_idx), slot_idx)
+        .expect("child display slot")
+        .set_display_index(-1, false);
+    factory.advance_one(parent_idx, 0.0);
+    assert_eq!(factory.armature(child_idx).clock(), None);
+
+    let root_clock = factory.root_clock();
+    factory
+        .attach_armature(root_clock, parent_idx)
+        .expect("attach parent; empty slot means child is not a member");
+    slot_of_mut(factory.armature_mut(parent_idx), slot_idx)
+        .expect("child display slot")
+        .set_display_index(display_index, false);
+
+    // Parent update attaches the child after the root clock captured its member snapshot.
+    factory.advance_time_with(1.0 / 24.0, 100.0);
+    assert_eq!(factory.armature(child_idx).clock(), Some(root_clock));
+    assert_eq!(child_advances.load(Ordering::SeqCst), 0);
+
+    // The child is now in the snapshot and advances on the next tick.
+    factory.advance_time_with(1.0 / 24.0, 100.1);
+    assert_eq!(child_advances.load(Ordering::SeqCst), 1);
+
+    // Parent update removes the child before the child's captured turn; it must be skipped.
+    slot_of_mut(factory.armature_mut(parent_idx), slot_idx)
+        .expect("child display slot")
+        .set_display_index(-1, false);
+    factory.advance_time_with(1.0 / 24.0, 100.2);
+    assert_eq!(factory.armature(child_idx).clock(), None);
+    assert_eq!(child_advances.load(Ordering::SeqCst), 1);
 }
 
 /// R5 / F3.10：槽排序稳定性——复合键 `zIndex*1000+zOrder` 平局保持原序（稳定排序）、
@@ -377,6 +511,90 @@ fn slot_sort_stability_and_z_index_rewrite() {
     );
 }
 
+#[test]
+fn z_order_timeline_reorders_by_model_slot_identity_and_restores_original_order() {
+    let (mut factory, key) = dragon_factory();
+    let armature_idx = build_dragon(&mut factory, &key);
+    let sorted_names = factory
+        .armature(armature_idx)
+        .armature_data()
+        .sorted_slots
+        .clone();
+    let frame_indices: Vec<i32> = (0..sorted_names.len())
+        .rev()
+        .map(|index| i32::try_from(index).expect("slot index fits i32"))
+        .collect();
+
+    factory
+        .armature_mut(armature_idx)
+        .sort_z_order(Some(&frame_indices), 0);
+    factory.advance_one(armature_idx, 0.0);
+    let ordered: Vec<_> = factory
+        .armature(armature_idx)
+        .slots
+        .iter()
+        .map(|slot| (slot.slot_name.as_str(), slot.z_order))
+        .collect();
+    for (position, (name, z_order)) in ordered.iter().enumerate() {
+        assert_eq!(*name, sorted_names[sorted_names.len() - 1 - position]);
+        assert_eq!(
+            *z_order,
+            i32::try_from(position).expect("position fits i32")
+        );
+    }
+
+    factory.armature_mut(armature_idx).sort_z_order(None, 0);
+    factory.advance_one(armature_idx, 0.0);
+    assert_eq!(
+        factory
+            .armature(armature_idx)
+            .slots
+            .iter()
+            .map(|slot| slot.slot_name.as_str())
+            .collect::<Vec<_>>(),
+        sorted_names.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn constraint_invalid_update_marks_root_and_optional_chain_only() {
+    let mut bones = Vec::new();
+    for index in 0..3 {
+        bones.push(Bone {
+            idx: BoneIdx(index),
+            transform_dirty: false,
+            ..Bone::default()
+        });
+    }
+    let mut constraint = Constraint {
+        root: BoneIdx(1),
+        bone: Some(BoneIdx(2)),
+        ..Constraint::default()
+    };
+
+    constraint.invalid_update(&mut bones);
+    assert_eq!(
+        bones
+            .iter()
+            .map(|bone| bone.transform_dirty)
+            .collect::<Vec<_>>(),
+        [false, true, true]
+    );
+
+    for bone in &mut bones {
+        bone.transform_dirty = false;
+    }
+    constraint.bone = None;
+    constraint.invalid_update(&mut bones);
+    assert_eq!(
+        bones
+            .iter()
+            .map(|bone| bone.transform_dirty)
+            .collect::<Vec<_>>(),
+        [false, true, false]
+    );
+}
+
 /// `invalid_update` 传播（指南 3.3 转述勘误）：只置目标骨自身 `transform_dirty`，
 /// 不沿父/子传播；`None` + `update_slot = true` 才全骨全槽。
 #[test]
@@ -414,7 +632,9 @@ fn invalid_update_sets_only_target_bone_then_all() {
     };
 
     // ---- ① 指名 + update_slot = false：只脏目标骨 ----
-    factory.armature_mut(idx).invalid_update(Some(&target_name), false);
+    factory
+        .armature_mut(idx)
+        .invalid_update(Some(&target_name), false);
 
     let dirtied_bones = bones_with_dirty(&factory, idx, true);
     assert_eq!(
@@ -474,7 +694,9 @@ fn display_index_negative_returns_early_in_slot_update() {
             .filter(|s| s.display.is_some() && s.display_index >= 0);
         let target = valid
             .next()
-            .unwrap_or_else(|| panic!("骨架无 display 正常（display 非 None 且 displayIndex >= 0）的槽"))
+            .unwrap_or_else(|| {
+                panic!("骨架无 display 正常（display 非 None 且 displayIndex >= 0）的槽")
+            })
             .slot_name
             .clone();
         let sibling = valid
@@ -546,7 +768,8 @@ fn display_index_negative_returns_early_in_slot_update() {
 }
 
 /// S4.5 回归：`BaseFactory::advance_time(0.0)` 对齐 `WorldClock.advanceTime(0.0)`
-/// 早退（WorldClock.ts:114-116）= 全局 no-op，不推进任何骨架；
+/// **clock 内层**早退（WorldClock.ts:114-116）：挂钟成员不被推进；但外层
+/// objects/events 两段仍执行（04-stage4.md §1.6：0 早退已下移到 clock 层）。
 /// `advance_one(idx, 0.0)` 才是"跑一遍更新/排序"（= TS 单骨架 `armature.advanceTime(0)`，
 /// build 收尾 BaseFactory.ts:713 同款）。
 #[test]
@@ -560,12 +783,20 @@ fn advance_time_zero_is_noop_while_advance_one_drives() {
         "前置失败：build 收尾后 slots_dirty 应已被消费"
     );
 
-    // ① 手动置脏 + 全局 advance_time(0.0) → 应原样保留（no-op）
+    // 挂到 root clock：dt=0 时 clock 内层早退，成员不得推进（脏标记保留）。
+    let root = factory.root_clock();
+    factory
+        .attach_armature(root, idx)
+        .expect("挂接 Dragon 到 root clock 以验证 dt=0 不推进成员");
+    assert_eq!(factory.armature(idx).clock(), Some(root));
+
+    // ① 手动置脏 + 全局 advance_time(0.0) → 应原样保留（成员未推进）
     factory.armature_mut(idx).slots_dirty = true;
     factory.advance_time(0.0);
     assert!(
         factory.armature(idx).slots_dirty,
-        "advance_time(0.0) 应为 no-op（WorldClock.ts:114-116 早退）：slots_dirty 不应被消费"
+        "advance_time(0.0) 的 clock 内层早退（WorldClock.ts:114-116）不应推进挂钟成员，\
+         slots_dirty 必须保留"
     );
 
     // ② advance_one(idx, 0.0) → 主循环照跑（Armature::advanceTime 无 0 值早退），脏标记被消费

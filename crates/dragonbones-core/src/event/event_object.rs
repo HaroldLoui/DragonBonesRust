@@ -48,7 +48,7 @@ pub struct EventObject {
     pub action_data: Option<ActionData>,
     /// 对齐 `data: UserData | null`（EventObject.ts:268），`_onClear` = null。
     pub data: Option<Box<UserData>>,
-    // TODO 阶段 4/5: animation_state（EventObject.ts:248）
+    // Deliberately omitted per F4.27: TS writes this reference but core/golden never reads it.
 }
 
 impl EventObject {

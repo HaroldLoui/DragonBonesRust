@@ -28,9 +28,9 @@
 //!   登记在此勿直接裸下标。
 //!
 //! 借用契约（阶段 3，见指南任务 6 / 笔记 C 节）：推进期间**自身骨架不在 arena**
-//! （`ArenaCtx::self_idx` 槽位为 `None`）——`update` 内凡“访问自身骨架”的需求
+//! （`RuntimeCtx` 标记的当前 Armature 槽位为 `None`）——`update` 内凡“访问自身骨架”的需求
 //! 一律走 [`SlotUpdateCtx`]（actions / idx / cacheFrameRate），访问子/父骨架走
-//! [`ArenaCtx`]；**不要**试图 `world.armature(ctx.armature)`。
+//! [`RuntimeCtx`]；**不要**试图 `world.armature(ctx.armature)`。
 //!
 //! 数据引用形态（D-3.3）：运行时不借 data 生命周期——`DisplayFrame` 内的
 //! `DisplayData` / `TextureData` 为**值克隆**（data 解析后不可变，F3.3，值拷贝
@@ -39,7 +39,8 @@
 use std::sync::Arc;
 
 use super::transform_object::TransformObject;
-use super::{Armature, ArenaCtx, ArmatureIdx, Bone, BoneIdx, DisplayHandle, SlotIdx};
+use super::{Armature, ArmatureIdx, Bone, BoneIdx, DisplayHandle, RuntimeCtx, SlotIdx};
+use crate::animation::world_clock::ClockId;
 use crate::core::dragon_bones::DragonBones;
 use crate::core::enums::{BlendMode, BoneType, DisplayType};
 use crate::event::EventObject;
@@ -152,7 +153,8 @@ impl DisplayFrame {
         }
 
         // :51-60 Mesh / Path 才有 geometry，否则返回
-        let raw_geometry_data: &GeometryData = match self.raw_display_data.as_ref().map(|d| &d.kind) {
+        let raw_geometry_data: &GeometryData = match self.raw_display_data.as_ref().map(|d| &d.kind)
+        {
             Some(DisplayKind::Mesh { geometry, .. }) => geometry,
             Some(DisplayKind::Path { geometry, .. }) => geometry,
             _ => return,
@@ -167,7 +169,8 @@ impl DisplayFrame {
 
         // :70-73 长度置位后逐个填 0.0
         self.deform_vertices.clear();
-        self.deform_vertices.resize(vertex_count.max(0) as usize, 0.0);
+        self.deform_vertices
+            .resize(vertex_count.max(0) as usize, 0.0);
     }
 
     /// 对齐 `DisplayFrame.getGeometryData()`（Slot.ts:76-98）——
@@ -235,9 +238,9 @@ impl DisplayFrame {
 }
 /// `Slot.update` 的逐槽上下文（任务 6：Armature 侧循环每槽构造一次）。
 ///
-/// 推进期间自身骨架不在 arena（`ArenaCtx::self_idx` 槽位为 `None`，阶段 3
+/// 推进期间自身骨架不在 arena（`RuntimeCtx` 当前 Armature 槽位为 `None`，阶段 3
 /// 借用契约）——凡“访问自身骨架”的需求走本结构（actions / idx / cacheFrameRate），
-/// 访问子/父骨架走 [`ArenaCtx`]。
+/// 访问子/父骨架走 [`RuntimeCtx`]。
 pub struct SlotUpdateCtx<'a> {
     /// 父骨（按 `Slot::parent` 取；TS `_parent`，init 后必非空——Slot.ts:656-663）。
     pub parent: &'a Bone,
@@ -249,6 +252,8 @@ pub struct SlotUpdateCtx<'a> {
     pub actions: &'a mut Vec<EventObject>,
     /// 自身骨架索引（事件回指 Slot.ts:569、子骨架 parent 接线 Slot.ts:548）。
     pub armature: ArmatureIdx,
+    /// 自身骨架当前 clock；Slot.ts:549 将其继承给新 child armature。
+    pub clock: Option<ClockId>,
     /// 自身骨架 cacheFrameRate（Slot.ts:552 `this._armature.cacheFrameRate`；
     /// 阶段 3 data 未设 cacheFrames 时为 0）。
     pub cache_frame_rate: f64,
@@ -395,39 +400,39 @@ impl Default for Slot {
             // :328 `_parent = null as any`——契约 `parent: BoneIdx` 非 Option（数据必有
             // 骨），未初始化槽在 init 时重写；0 占位无消费者（update 前必 init）。
             parent: BoneIdx(0),
-            display_controller: None,        // :294
-            display_data_dirty: false,       // :296
-            display_dirty: false,            // :297
-            geometry_dirty: false,           // :298
-            texture_dirty: false,            // :299
-            visible_dirty: false,            // :300
-            blend_mode_dirty: false,         // :301
-            z_order_dirty: false,            // :302
-            color_dirty: false,              // :303
-            vertices_dirty: false,           // :304
-            transform_dirty: false,          // :305
-            visible: true,                   // :306
-            blend_mode: BlendMode::Normal,   // :307
-            display_index: -1,               // :308
-            animation_display_index: -1,     // :309
-            z_order: 0,                      // :310
-            z_index: 0,                      // :311
-            cached_frame_index: -1,          // :312
-            pivot_x: 0.0,                    // :313
-            pivot_y: 0.0,                    // :314
-            local_matrix: Matrix::default(), // :315 `.identity()`
+            display_controller: None,                   // :294
+            display_data_dirty: false,                  // :296
+            display_dirty: false,                       // :297
+            geometry_dirty: false,                      // :298
+            texture_dirty: false,                       // :299
+            visible_dirty: false,                       // :300
+            blend_mode_dirty: false,                    // :301
+            z_order_dirty: false,                       // :302
+            color_dirty: false,                         // :303
+            vertices_dirty: false,                      // :304
+            transform_dirty: false,                     // :305
+            visible: true,                              // :306
+            blend_mode: BlendMode::Normal,              // :307
+            display_index: -1,                          // :308
+            animation_display_index: -1,                // :309
+            z_order: 0,                                 // :310
+            z_index: 0,                                 // :311
+            cached_frame_index: -1,                     // :312
+            pivot_x: 0.0,                               // :313
+            pivot_y: 0.0,                               // :314
+            local_matrix: Matrix::default(),            // :315 `.identity()`
             color_transform: ColorTransform::default(), // :316 `.identity()`
-            display_frames: Vec::new(),      // :317 `.length = 0`
-            geometry_bones: Vec::new(),      // :318 `.length = 0`
-            display_frame: None,             // :320
-            geometry_data: None,             // :321
-            bounding_box_data: None,         // :322
-            texture_data: None,              // :323
-            raw_display: DisplayHandle::Null,   // :324
-            mesh_display: DisplayHandle::Null,  // :325
-            display: None,                   // :326
-            child_armature: None,            // :327
-            cached_frame_indices: None,      // :329
+            display_frames: Vec::new(),                 // :317 `.length = 0`
+            geometry_bones: Vec::new(),                 // :318 `.length = 0`
+            display_frame: None,                        // :320
+            geometry_data: None,                        // :321
+            bounding_box_data: None,                    // :322
+            texture_data: None,                         // :323
+            raw_display: DisplayHandle::Null,           // :324
+            mesh_display: DisplayHandle::Null,          // :325
+            display: None,                              // :326
+            child_armature: None,                       // :327
+            cached_frame_indices: None,                 // :329
             // Rust 侧（D-3.3；on_clear 保活 Arc、清空 armature_name）
             data: Arc::new(DragonBonesData::default()),
             armature_name: String::new(),
@@ -555,7 +560,7 @@ impl Slot {
         &mut self,
         cache_frame_index: i32,
         ctx: &mut SlotUpdateCtx<'_>,
-        world: &mut ArenaCtx<'_>,
+        world: &mut RuntimeCtx<'_>,
     ) {
         // ---------- ① displayData 脏（:679-682）----------
         if self.display_data_dirty {
@@ -624,7 +629,8 @@ impl Slot {
 
             if self.vertices_dirty // :727 外部显式改顶点
                 || (is_skinned && self.is_bones_update(ctx.bones)) // :728 蒙皮：任一 geometryBone 脏
-                || (is_surface && ctx.parent.children_transform_dirty) // :729
+                || (is_surface && ctx.parent.children_transform_dirty)
+            // :729
             {
                 self.vertices_dirty = false; // :731 先清再写，允许 _updateMesh 内部重置
                 self.adapter.update_mesh(); // :732
@@ -943,7 +949,7 @@ impl Slot {
 
     /// 对齐 `_updateDisplay()`（Slot.ts:503-581）——display / childArmature 切换
     /// 与子骨架接线（update ② 调用）。
-    fn update_display(&mut self, ctx: &mut SlotUpdateCtx<'_>, world: &mut ArenaCtx<'_>) {
+    fn update_display(&mut self, ctx: &mut SlotUpdateCtx<'_>, world: &mut RuntimeCtx<'_>) {
         // :504 旧“有效显示”：display 为 null 时取 rawDisplay
         let prev_display = self.display.unwrap_or(self.raw_display);
         let prev_child_armature = self.child_armature; // :505
@@ -1000,13 +1006,27 @@ impl Slot {
         // ---- Update child armature（:537-580）----
         if self.child_armature != prev_child_armature {
             if let Some(prev_idx) = prev_child_armature
-                && let Some(prev) = world.armature_mut(prev_idx)
+                && let Some(inherit_animation) = world.armature_mut(prev_idx).map(|prev| {
+                    prev.parent = None; // :540 解绑父插槽回指
+                    prev.inherit_animation
+                })
             {
-                prev.parent = None; // :540 解绑父插槽回指
-                // TODO 阶段 5（P0-12）: prev.clock = null（Slot.ts:541，WorldClock 字段）
-                if prev.inherit_animation {
+                if let Err(error) = world.move_armature_clock(prev_idx, None) {
+                    log::warn!(
+                        "slot {}: failed to detach previous child armature clock: {error}",
+                        self.slot_name
+                    );
+                    // 官方顺序是 parent 先、clock 后（Slot.ts:539-541），时钟迁移
+                    // 失败时回滚回指，保持“parent 回指与 clock 成员表一致”。
+                    if let Some(prev) = world.armature_mut(prev_idx) {
+                        prev.parent = Some((ctx.armature, self.idx));
+                    }
+                }
+                if inherit_animation {
                     // :542
-                    prev.animation.reset(); // :543
+                    if let Some(prev) = world.armature_mut(prev_idx) {
+                        prev.animation.reset(); // :543
+                    }
                 }
             }
 
@@ -1015,10 +1035,31 @@ impl Slot {
                 let actions = self.current_armature_display_actions();
                 let has_display_frame = self.display_frame.is_some(); // :559
 
-                if let Some(child) = world.armature_mut(child_idx) {
+                let previous_parent = world.armature(child_idx).and_then(|child| child.parent);
+                let child_exists = if let Some(child) = world.armature_mut(child_idx) {
                     child.parent = Some((ctx.armature, self.idx)); // :548（D-3.2 索引回指）
-                    // TODO 阶段 5: child.clock = self骨架 clock（Slot.ts:549）
-                    if child.inherit_animation {
+                    true
+                } else {
+                    false
+                };
+
+                if child_exists {
+                    if let Err(error) = world.move_armature_clock(child_idx, ctx.clock) {
+                        log::warn!(
+                            "slot {}: failed to attach child armature clock: {error}",
+                            self.slot_name
+                        );
+                        // 方案 a（保持 TS 可观察时序）：官方 Slot.ts:548 先写 parent、
+                        // 再写 clock（:549）。时钟迁移失败时回滚 parent 回指，避免
+                        // 回指与成员表不一致；成功路径的中间态可见性与 TS 相同。
+                        if let Some(child) = world.armature_mut(child_idx) {
+                            child.parent = previous_parent;
+                        }
+                    }
+
+                    if let Some(child) = world.armature_mut(child_idx)
+                        && child.inherit_animation
+                    {
                         // :550
                         if child.cache_frame_rate() == 0.0 {
                             // :551 Set child armature cache frameRate.
@@ -1050,7 +1091,7 @@ impl Slot {
                                 }
                             } else {
                                 // :575 TS `play()`（Animation.ts:506 默认 playTimes = -1）
-                                child.animation.play(None, -1.0);
+                                child.animation.play(None, -1);
                             }
                         }
                     }
@@ -1071,7 +1112,9 @@ impl Slot {
     pub fn is_bones_update(&self, bones: &[Bone]) -> bool {
         for bone in &self.geometry_bones {
             // TS:364 `bone !== null && bone._childrenTransformDirty`
-            if let Some(bone_idx) = bone && bones[bone_idx.index()].children_transform_dirty {
+            if let Some(bone_idx) = bone
+                && bones[bone_idx.index()].children_transform_dirty
+            {
                 return true;
             }
         }
@@ -1212,7 +1255,8 @@ impl Slot {
                 .and_then(|skin_name| armature_data.get_skin(skin_name)); // :826-827
             if let Some(default_raw_display_datas) = default_skin
                 .and_then(|skin| skin.get_displays(&self.slot_name)) // :828
-                .and_then(|displays| displays.get(index as usize)) // :829 `index < length`
+                .and_then(|displays| displays.get(index as usize))
+            // :829 `index < length`
             {
                 display_data = default_raw_display_datas.clone(); // :830
             }
@@ -1327,7 +1371,8 @@ impl Slot {
         if let Some(prev) = prev_display
             && prev != self.raw_display
             && prev != self.mesh_display
-            && !self.has_display(prev_display) // :899
+            && !self.has_display(prev_display)
+        // :899
         {
             if let DisplayHandle::Armature(_) = prev {
                 // :901-903 `(eachDisplay as Armature).dispose()` 在原版被注释掉——
@@ -1342,7 +1387,8 @@ impl Slot {
             && value != self.raw_display
             && value != self.mesh_display
             && !self.has_display(prev_display) // :912 原文就是 prevDisplay（疑似原版笔误，照抄）
-            && !matches!(value, DisplayHandle::Armature(_)) // :913 子骨架不 _initDisplay
+            && !matches!(value, DisplayHandle::Armature(_))
+        // :913 子骨架不 _initDisplay
         {
             self.adapter.init_display(value, true); // :915 isRetain = true
         }
@@ -1364,7 +1410,8 @@ impl Slot {
         let prev_count = self.display_frames.len(); // :1075
         if prev_count < value {
             // :1076 扩容（TS 从池借 DisplayFrame → Rust default，_onClear 等价）
-            self.display_frames.resize_with(value, DisplayFrame::default); // :1077-1081
+            self.display_frames
+                .resize_with(value, DisplayFrame::default); // :1077-1081
         } else if prev_count > value {
             // 官方 TS:1083-1089 收缩循环 `for (i = prevCount - 1; i < value; --i)` 的
             // 条件**恒假**（i 起步 ≥ value、步进为 --i → 永不进入循环体，上游 bug）：
@@ -1422,7 +1469,7 @@ impl Slot {
     /// （raw/mesh 不回池、由工厂拥有），最后字段复位（:294-329 逐行）。
     ///
     /// 偏差：
-    /// - `_on_clear` 拿不到 [`ArenaCtx`]（阶段 3 借用契约）→ 子骨架的 `dispose()`
+    /// - `_on_clear` 拿不到 [`RuntimeCtx`]（阶段 3 借用契约）→ 子骨架的 `dispose()`
     ///   （TS:279）**只记 TODO**，由 arena dispose 路径（任务 6/7：dispose 骨架时
     ///   经 `Slot::child_armature` 递归释放）承担；
     /// - DisplayFrame “回池”（TS:274 returnToPool → `_onClear`）在 Rust 为直接
@@ -1456,7 +1503,7 @@ impl Slot {
                 // 借用契约：自身骨架不在 arena），子骨架释放交给 arena dispose 路径。
                 // TODO 阶段 7 / arena 语义：dispose 骨架时经 `child_armature` 递归释放
                 log::warn!(
-                    "slot {}: child armature {} not disposed in on_clear (needs ArenaCtx, Slot.ts:279)",
+                    "slot {}: child armature {} not disposed in on_clear (needs RuntimeCtx, Slot.ts:279)",
                     self.slot_name,
                     child_idx.0
                 );
@@ -1531,5 +1578,75 @@ impl std::ops::Deref for Slot {
 impl std::ops::DerefMut for Slot {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DisplayFrame, Slot, SlotUpdateCtx};
+    use crate::animation::world_clock::{ClockArena, ClockId, WorldClock};
+    use crate::armature::{
+        Armature, ArmatureIdx, Bone, DisplayHandle, NullArmatureProxy, RuntimeCtx,
+    };
+    use crate::model::DragonBonesData;
+    use std::sync::Arc;
+
+    fn armature(idx: ArmatureIdx) -> Armature {
+        Armature::new(
+            idx,
+            Arc::new(DragonBonesData::default()),
+            "slot-clock-test",
+            Box::new(NullArmatureProxy::new()),
+            DisplayHandle::Null,
+        )
+    }
+
+    #[test]
+    fn failed_child_clock_move_rolls_back_child_parent_reference() {
+        let parent_idx = ArmatureIdx(0);
+        let child_idx = ArmatureIdx(1);
+        let mut armatures = vec![Some(armature(parent_idx)), Some(armature(child_idx))];
+        armatures[child_idx.index()]
+            .as_mut()
+            .expect("child armature")
+            .inherit_animation = false;
+
+        let mut clocks = ClockArena::new();
+        let _valid = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
+        let mut pending_events = Vec::new();
+
+        let mut slot = Slot {
+            slot_name: "child-slot".to_string(),
+            ..Slot::default()
+        };
+        slot.display_frames.push(DisplayFrame {
+            display: Some(DisplayHandle::Armature(child_idx)),
+            ..DisplayFrame::default()
+        });
+        slot.display_frame = Some(0);
+
+        let bone = Bone::default();
+        let mut actions = Vec::new();
+        let mut ctx = SlotUpdateCtx {
+            parent: &bone,
+            bones: &[],
+            actions: &mut actions,
+            armature: parent_idx,
+            clock: Some(ClockId(99)), // 无效 ClockId，强制时钟迁移失败
+            cache_frame_rate: 0.0,
+        };
+
+        {
+            let mut world =
+                RuntimeCtx::new(&mut armatures, &mut clocks, &mut pending_events, None, None);
+            slot.update_display(&mut ctx, &mut world);
+        }
+
+        let child = armatures[child_idx.index()]
+            .as_ref()
+            .expect("child remains in arena");
+        assert_eq!(slot.child_armature, Some(child_idx));
+        assert_eq!(child.parent, None, "失败路径必须回滚 parent 回指");
+        assert_eq!(child.clock(), None, "失败的时钟迁移不得写 back-reference");
     }
 }

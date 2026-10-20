@@ -55,6 +55,39 @@ fn animation_config_defaults_match_on_clear() {
 }
 
 #[test]
+fn animation_config_copy_from_copies_every_field_and_bone_mask() {
+    let source = AnimationConfig {
+        pause_fade_out: false,
+        fade_out_mode: AnimationFadeOutMode::SameLayer,
+        fade_out_tween_type: TweenType::QuadOut,
+        fade_out_time: 0.35,
+        pause_fade_in: false,
+        action_enabled: false,
+        additive: true,
+        display_control: false,
+        reset_to_pose: false,
+        fade_in_tween_type: TweenType::QuadInOut,
+        play_times: 3,
+        layer: 4,
+        position: 0.25,
+        duration: 1.5,
+        time_scale: -2.0,
+        weight: 0.75,
+        fade_in_time: 0.2,
+        auto_fade_out_time: 0.4,
+        name: "state-name".into(),
+        animation: "animation-name".into(),
+        group: "group-name".into(),
+        bone_mask: vec!["root".into(), "arm".into()],
+    };
+    let mut target = AnimationConfig::default();
+
+    target.copy_from(&source);
+
+    assert_eq!(target, source);
+}
+
+#[test]
 fn timeline_data_defaults() {
     let t = TimelineData::default();
     assert_eq!(t.timeline_type, TimelineType::BoneAll);

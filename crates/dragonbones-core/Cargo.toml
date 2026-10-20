@@ -7,3 +7,4 @@ edition = "2024"
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+thiserror = { workspace = true }

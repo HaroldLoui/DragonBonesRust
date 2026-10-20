@@ -907,13 +907,13 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 | `armature/Slot.ts` | 1203 | `armature/slot.rs` |
 | `armature/Constraint.ts` | 717 | `armature/constraint.rs` |
 | `armature/TransformObject.ts` | 154 | `armature/transform_object.rs` |
-| `armature/IArmatureProxy.ts` | 93 | `armature/proxy.rs` |
-| `animation/Animation.ts` | 887 | `animation/animation.rs` |
+| `armature/IArmatureProxy.ts` | 93 | `armature/i_armature_proxy.rs` |
+| `animation/Animation.ts` | 887 | `animation/player.rs` |
 | `animation/AnimationState.ts` | 1445 | `animation/animation_state.rs` |
-| `animation/BaseTimelineState.ts` | 500 | `animation/base_timeline.rs` |
-| `animation/TimelineState.ts` | 931 | `animation/timeline_state.rs` |
+| `animation/BaseTimelineState.ts` | 500 | `animation/timeline_state.rs`（基类时间/帧/tween 算法） |
+| `animation/TimelineState.ts` | 931 | `animation/timeline_state.rs`（共享类型）+ `animation/timeline_states/*`（16 个具体轴） |
 | `animation/WorldClock.ts` | 240 | `animation/world_clock.rs` |
-| `animation/IAnimatable.ts` | 76 | `animation/animatable.rs` |
+| `animation/IAnimatable.ts` | 76 | `animation/world_clock.rs`（`AnimatableHandle`；无独立 trait 模块） |
 | `model/AnimationConfig.ts` | 337 | `model/animation_config.rs` |
 | `model/AnimationData.ts` | 351 | `model/animation_data.rs` |
 | `model/ArmatureData.ts` | 654 | `model/armature_data.rs` |

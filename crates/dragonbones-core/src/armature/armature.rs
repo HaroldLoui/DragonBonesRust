@@ -4,7 +4,7 @@
 //! `invalid_update`、`on_clear`、`contains_point` / `intersects_segment`
 //! （均对齐 `armature/Armature.ts` 逐行翻译）。
 //!
-//! 借用策略（指南任务 6 坑 4）：骨架被 `take` 出 arena 后经 [`crate::armature::ArenaCtx`]
+//! 借用策略（指南任务 6 坑 4）：骨架被 `take` 出 arena 后经 [`crate::armature::RuntimeCtx`]
 //! 访问**其他**骨架；`advance_time` 内部用字段级解构（`let Self { … } = self`）把
 //! bones/slots/constraints/actions/animation/proxy 拆成互不冲突的切片借用。
 
@@ -12,8 +12,9 @@ use super::bone::Bone;
 use super::constraint::Constraint;
 use super::i_armature_proxy::ArmatureProxy;
 use super::slot::{Slot, SlotUpdateCtx};
-use super::{ArenaCtx, ArmatureIdx, BoneIdx, DisplayHandle, SlotIdx};
-use crate::animation::Animation;
+use super::{ArmatureIdx, BoneIdx, ConstraintIdx, DisplayHandle, RuntimeCtx, SlotIdx};
+use crate::animation::world_clock::ClockId;
+use crate::animation::{Animation, AnimationUpdateCtx};
 use crate::core::enums::ActionType;
 use crate::event::EventObject;
 use crate::geom::Point;
@@ -76,7 +77,9 @@ pub struct Armature {
     pub display: DisplayHandle,
     /// 对齐 `_parent`（Armature.ts:120，子骨架回指父插槽）——D-3.2 索引解环。
     pub parent: Option<(ArmatureIdx, SlotIdx)>,
-    // TODO 阶段 5（P0-12）: `_clock: WorldClock`（Armature.ts:116）、`_dragonBones`（:115）
+    /// Clock 回指（Armature.ts:116）；只允许经 runtime 关系操作更新。
+    pub(super) clock: Option<ClockId>,
+    // TODO 阶段 5（P0-12）: `_dragonBones`（Armature.ts:115）
     // TODO 阶段 6（P1-5）: `_replaceTextureAtlasData`（:110）、`_replacedTexture`（:111）
 }
 
@@ -100,29 +103,34 @@ impl Armature {
             idx,
             data,
             armature_name,
-            inherit_animation: true,   // _onClear Armature.ts:155
-            user_data: None,           // :156
-            lock_update: false,        // :158
-            slots_dirty: true,         // :159
-            z_order_dirty: false,      // :160
-            z_index_dirty: false,      // :161
-            alpha_dirty: true,         // :162
-            flip_x: false,             // :163
-            flip_y: false,             // :164
-            cache_frame_index: -1,     // :165
-            alpha: 1.0,                // :166
-            global_alpha: 1.0,         // :167
-            bones: Vec::new(),         // :168
-            slots: Vec::new(),         // :169
-            constraints: Vec::new(),   // :170
-            actions: Vec::new(),       // :171
+            inherit_animation: true,     // _onClear Armature.ts:155
+            user_data: None,             // :156
+            lock_update: false,          // :158
+            slots_dirty: true,           // :159
+            z_order_dirty: false,        // :160
+            z_index_dirty: false,        // :161
+            alpha_dirty: true,           // :162
+            flip_x: false,               // :163
+            flip_y: false,               // :164
+            cache_frame_index: -1,       // :165
+            alpha: 1.0,                  // :166
+            global_alpha: 1.0,           // :167
+            bones: Vec::new(),           // :168
+            slots: Vec::new(),           // :169
+            constraints: Vec::new(),     // :170
+            actions: Vec::new(),         // :171
             animation: Animation::new(), // :173
-            proxy,                     // :174
-            display,                   // :175
-            parent: None,              // :180
+            proxy,                       // :174
+            display,                     // :175
+            parent: None,                // :180
+            clock: None,                 // :116
         };
         armature.proxy.db_init(idx); // Armature.ts:288
-        armature.animation.init(idx); // Armature.ts:289-290（`animations` 数据表挂接阶段 4）
+        armature.animation.init(
+            idx,
+            Arc::clone(&armature.data),
+            armature.armature_name.clone(),
+        ); // Armature.ts:289-290（动画数据表只读绑定）
         armature
     }
 
@@ -144,6 +152,12 @@ impl Armature {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.armature_name
+    }
+
+    /// Clock currently advancing this Armature, if attached.
+    #[must_use]
+    pub fn clock(&self) -> Option<ClockId> {
+        self.clock
     }
 
     /// 对齐 `Armature.cacheFrameRate` getter（Armature.ts:765-767，读 data）。
@@ -214,13 +228,13 @@ impl Armature {
         }
     }
 
-    // TODO 阶段 4（结构预留，本阶段不实现）：对齐 `Armature._sortZOrder(slotIndices, offset)`
+    // 对齐 `Armature._sortZOrder(slotIndices, offset)`（Armature.ts:185-207）。
     //（Armature.ts:185-207）——按 `armatureData.sortedSlots` 序重发 zOrder：
     // `isOriginal = slotIndices === null`；`_zOrderDirty || !isOriginal` 时循环取
     // `slotIndex = isOriginal ? i : slotIndices[offset + i]`，下标越界（`<0 || >= l`）
     // **continue 跳过**，命中的槽 `slot._setZOrder(i)`；循环后置 `_slotsDirty = true`、
     // `_zOrderDirty = !isOriginal`。消费方 = ZOrder 时间轴 `TimelineState.ts:80/278/281`
-    //（阶段 4 接 TimelineState 时实现）。越界跳过会让个别槽保留旧 zOrder → 届时复核
+    // 越界跳过会让个别槽保留旧 zOrder → timeline golden 接入时复核
     // D-4.29 等键可达性（见 `advance_time` ③ 排序处注释）。
 
     /// 对齐 `Armature._addBone(value)`（Armature.ts:211-215）。
@@ -229,7 +243,11 @@ impl Armature {
     /// `idx = bones.len()`），重名说明数据异常 → `log::warn!` 后忽略本次推入。
     pub fn add_bone(&mut self, bone: Bone) {
         if self.bones.iter().any(|b| b.bone_name == bone.bone_name) {
-            log::warn!("duplicate bone `{}` in armature `{}`", bone.bone_name, self.armature_name);
+            log::warn!(
+                "duplicate bone `{}` in armature `{}`",
+                bone.bone_name,
+                self.armature_name
+            );
             return;
         }
         self.bones.push(bone);
@@ -238,14 +256,18 @@ impl Armature {
     /// 对齐 `Armature._addSlot(value)`（Armature.ts:219-223），同上（`Slot::init` 预置 idx）。
     pub fn add_slot(&mut self, slot: Slot) {
         if self.slots.iter().any(|s| s.slot_name == slot.slot_name) {
-            log::warn!("duplicate slot `{}` in armature `{}`", slot.slot_name, self.armature_name);
+            log::warn!(
+                "duplicate slot `{}` in armature `{}`",
+                slot.slot_name,
+                self.armature_name
+            );
             return;
         }
         self.slots.push(slot);
     }
 
     /// 对齐 `Armature._addConstraint(value)`（Armature.ts:227-231）。
-    pub fn add_constraint(&mut self, constraint: Constraint) {
+    pub fn add_constraint(&mut self, mut constraint: Constraint) {
         if self.constraints.iter().any(|c| c.name == constraint.name) {
             log::warn!(
                 "duplicate constraint `{}` in armature `{}`",
@@ -254,7 +276,70 @@ impl Armature {
             );
             return;
         }
+        constraint.idx = ConstraintIdx(self.constraints.len() as u32);
         self.constraints.push(constraint);
+    }
+
+    /// Sorts slots into the animation's z-order and marks the slot list dirty.
+    /// `slot_indices == None` restores model order; otherwise indices are read
+    /// from the Step frame slice starting at `offset`.
+    pub fn sort_z_order(&mut self, slot_indices: Option<&[i32]>, offset: usize) {
+        let sorted_slot_names = self.armature_data().sorted_slots.clone();
+        let is_original = slot_indices.is_none();
+        if !self.z_order_dirty && is_original {
+            return;
+        }
+
+        let slot_count = sorted_slot_names.len();
+        for i in 0..slot_count {
+            let slot_index = if let Some(indices) = slot_indices {
+                let Some(index) = offset.checked_add(i).and_then(|index| indices.get(index)) else {
+                    continue;
+                };
+                *index
+            } else {
+                i as i32
+            };
+            let Ok(slot_data_index) = usize::try_from(slot_index) else {
+                continue;
+            };
+            if slot_data_index >= slot_count {
+                continue;
+            }
+            let slot_name = &sorted_slot_names[slot_data_index];
+            if let Some(slot) = self
+                .slots
+                .iter_mut()
+                .find(|slot| slot.slot_name == *slot_name)
+            {
+                slot.set_z_order(i as i32);
+            }
+        }
+
+        self.slots_dirty = true;
+        self.z_order_dirty = !is_original;
+    }
+
+    fn process_child_animation_requests(
+        animation: &mut Animation,
+        slots: &[Slot],
+        world: &mut RuntimeCtx<'_>,
+    ) {
+        for animation_name in animation.take_child_animation_requests() {
+            for slot in slots {
+                let Some(child_idx) = slot.child_armature else {
+                    continue;
+                };
+                let should_inherit = world.armature(child_idx).is_some_and(|child| {
+                    child.inherit_animation
+                        && child.animation.has_animation(&animation_name)
+                        && child.animation.get_state(&animation_name, -1).is_none()
+                });
+                if should_inherit && let Some(child) = world.armature_mut(child_idx) {
+                    child.animation.fade_in(&animation_name);
+                }
+            }
+        }
     }
 
     /// 对齐 `Armature.advanceTime(passedTime)`（`armature/Armature.ts:295-387`）——
@@ -266,9 +351,10 @@ impl Armature {
     /// - `:302/:306` 两个 warn-return 不可达——Rust 持 `Arc<DragonBonesData>`，
     ///   `_armatureData === null` / 数据被 factory.clear 的分支不存在
     ///   （`model_mapping.md` §4 数据销毁语义偏差）→ 不复刻，直接继续。
-    /// - `:313` `animation.advanceTime` 阶段 3 为 no-op 占位（阶段 4 接 fade 状态机）。
-    /// - `:377-378` 附近非 Play action 的事件派发（bufferEvent）阶段 5——本阶段
-    ///   队列恒空，结构保留 + TODO。
+    /// - `:313` AnimationState 的 fade/playhead、Action/ZOrder 与 timeline cursor 在阶段 4
+    ///   接入；具体轴的 pose/value blend 由任务 6 实现。
+    /// - 阶段 4 的 Frame/Sound 与生命周期事件只缓冲到 RuntimeCtx；正式 listener dispatch
+    ///   和可能的同步重入留阶段 5。
     ///
     /// 借用方案：字段级解构（`let Self { … } = self`）后各段只碰拆出的字段；
     /// `cache_frame_rate()` / `idx` 依赖 `&self`（`armature_data()` 读 data），在
@@ -279,7 +365,7 @@ impl Armature {
     ///   （父索引 < 子索引），属数据装配错误。
     /// - 插槽父骨索引越界（`bones.get(…)` 失败）：`Slot::init` 按名解析必成功
     ///   （Slot.ts:662 "Never;" 分支），越界同属数据错误。
-    pub fn advance_time(&mut self, passed_time: f64, world: &mut ArenaCtx<'_>) {
+    pub fn advance_time(&mut self, passed_time: f64, world: &mut RuntimeCtx<'_>) {
         if self.lock_update {
             return; // :296-298 重入/已 dispose 锁
         }
@@ -290,11 +376,25 @@ impl Armature {
         // 局部量预取：解构后 `self` 不可用（`cache_frame_rate()` 读 `armature_data()`）
         let cache_frame_rate = self.cache_frame_rate();
         let armature_idx = self.idx;
+        let current_clock = self.clock;
+        let data = self.data.as_ref();
+        let armature_data = data
+            .armatures
+            .get(&self.armature_name)
+            .expect("armature data not found (advance_time invariant)");
+        let parent_inherit_time_scale = if self.inherit_animation {
+            self.parent
+                .and_then(|(parent_idx, _)| world.armature(parent_idx))
+                .map(|parent| parent.animation.inherit_time_scale())
+        } else {
+            None
+        };
 
         // 字段级解构借用（指南任务 6 借用策略）：避免 self 整体借用冲突
         let Self {
             lock_update,
             slots_dirty,
+            z_order_dirty,
             z_index_dirty,
             alpha_dirty,
             alpha,
@@ -313,9 +413,46 @@ impl Armature {
         } = self;
 
         // ---- ② 更新动画（:312-313）----
-        // 阶段 3 no-op 占位；TS 内部会改 `_cacheFrameIndex`、可能置
-        // `_alphaDirty` / `_zIndexDirty`（阶段 4 接入后顺序不变）。
-        animation.advance_time(passed_time);
+        if animation.take_cache_frame_invalidation() {
+            *cache_frame_index = -1;
+        }
+        let fade_events = {
+            let mut animation_context = AnimationUpdateCtx {
+                armature_idx,
+                armature_data,
+                bones,
+                slots,
+                constraints,
+                actions,
+                cache_frame_index,
+                alpha_dirty,
+                slots_dirty,
+                z_order_dirty,
+                z_index_dirty,
+                proxy: proxy.as_mut(),
+            };
+            animation.advance_time_with_context(
+                passed_time,
+                parent_inherit_time_scale,
+                &mut animation_context,
+                world,
+            )
+        };
+        if animation.take_cache_frame_invalidation() {
+            *cache_frame_index = -1;
+        }
+        for (event, event_active) in fade_events {
+            let event_type = event.event_type();
+            if event_active && proxy.has_db_event_listener(event_type) {
+                let event_object = EventObject {
+                    event_type: event_type.to_owned(),
+                    armature: Some(armature_idx),
+                    ..EventObject::default()
+                };
+                world.buffer_event(event_object);
+            }
+        }
+        Self::process_child_animation_requests(animation, slots, world);
 
         // ---- ③ 排序插槽（:315-326）----
         if *slots_dirty || *z_index_dirty {
@@ -328,7 +465,7 @@ impl Armature {
             //（parser 按槽序 0..n-1，object_data_parser.rs:579-583；本分支 `:318-322`
             // `_setZOrder` 回写 0..n-1；ZOrder 时间轴按 data 序经 `_sortZOrder` 重发，
             // TimelineState.ts:278）。
-            // 阶段 5/6 接 `_sortZOrder` 的越界 continue（Armature.ts:192-194）时**复核**
+            // timeline golden 接入后，对 `_sortZOrder` 越界 continue（Armature.ts:192-194）**复核**
             // ——跳过越界下标会让个别槽保留旧 zOrder，可能与新写回的序号撞键。
             // ★ 同处登记 `SlotIdx` 语义：`Slot.idx` = **创建序身份**（`Slot::init` 预置），
             // 本次重排后数组位置会变、身份不可变（官方对象引用语义）——**任何**重排后
@@ -418,6 +555,7 @@ impl Armature {
                     bones,
                     actions,
                     armature: armature_idx,
+                    clock: current_clock,
                     // TS 循环内读 `armature.cacheFrameRate`（Slot.ts:552）；data
                     // advance 期间不可变 → 解构前预取等价
                     cache_frame_rate,
@@ -428,16 +566,12 @@ impl Armature {
 
         // ---- ⑦ action 队列（:352-383）----
         if !actions.is_empty() {
-            // TODO 阶段 5（P0-12）：非 Play 分支一旦在此派发事件（Frame/Sound），监听器
-            // 可能同步 `buffer_action` → 届时把本段改 **drain-后处理**形态（官方 `for..of`
-            // 按索引迭代、迭代中 push 的新 action 同轮就被吃到；Rust `actions.iter()`
-            // 期间 Vec 被改会 panic）。实测本版官方 `advanceTime` 对非 Play **不派发**、
-            // 只 `:379 returnToPool`——Frame/Sound 事件在 TimelineState.ts:51-60 走
-            // `_dragonBones.bufferEvent` 直发不经 `_actions`；阶段 3 队列恒空。
+            // 阶段 4 只缓冲 Frame/Sound 事件，不会同步调用 listener，因此不会在这里重入
+            // 并修改 actions。阶段 5 若 listener dispatch 带来可重入 action，再评估 drain 语义。
             for action in actions.iter() {
                 if let Some(action_data) = action.action_data.as_ref() {
-                    // :355-376 只处理 Play；非 Play 分支官方无派发（见上 TODO；
-                    // 原注「TS :377-378 附近派发」失实，已按实测更正）
+                    // :355-376 只处理 Play；非 Play 的 Frame/Sound 已在 TimelineState
+                    // 更新时写入事件缓冲，不经 Armature action queue。
                     if action_data.action_type == ActionType::Play {
                         if let Some(slot_idx) = action.slot {
                             // :357-361 动作挂在插槽 → 播该槽的子骨架
@@ -448,8 +582,8 @@ impl Armature {
                                 .and_then(|slot| slot.child_armature)
                                 && let Some(child_armature) = world.armature_mut(child_idx)
                             {
-                                // fadeIn 默认 fadeInTime = -1.0（Animation.ts:568）
-                                child_armature.animation.fade_in(&action_data.name, -1.0);
+                                // fadeIn defaults (Animation.ts:568-570).
+                                child_armature.animation.fade_in(&action_data.name);
                             }
                         } else if let Some(bone_idx) = action.bone {
                             // :363-372 挂在骨骼 → 该骨名下所有槽的子骨架
@@ -458,12 +592,12 @@ impl Armature {
                                     && let Some(child_idx) = slot.child_armature
                                     && let Some(child_armature) = world.armature_mut(child_idx)
                                 {
-                                    child_armature.animation.fade_in(&action_data.name, -1.0);
+                                    child_armature.animation.fade_in(&action_data.name);
                                 }
                             }
                         } else {
                             // :373-374 无目标 → 播自身
-                            animation.fade_in(&action_data.name, -1.0);
+                            animation.fade_in(&action_data.name);
                         }
                     }
                 }
@@ -472,6 +606,7 @@ impl Armature {
             }
             actions.clear(); // :382 `actions.length = 0`
         }
+        Self::process_child_animation_requests(animation, slots, world);
 
         // ---- ⑧ 解锁 + 通知代理（:385-386）----
         *lock_update = false; // :385
@@ -525,8 +660,11 @@ impl Armature {
     /// `Default` = 约束 `_onClear` 复位值（Constraint.ts:49-54/:84-91，constraint.rs
     /// `Default` 实现）；EventObject / Animation 的回池 → drop / `reset()`（见各行注释）。
     pub fn on_clear(&mut self) {
-        // TODO 阶段 5（P0-12）：`:123-124` clock remove——`_clock` 字段未落地
-        // （WorldClock 归阶段 5）。
+        // TS :123-124 先从 clock 摘除；arena owner 必须在调用 on_clear 前完成关系 detach。
+        debug_assert!(
+            self.clock.is_none(),
+            "detach Armature from its clock before on_clear"
+        );
 
         for bone in self.bones.iter_mut() {
             bone.on_clear(); // :127-129 `bone.returnToPool()`
@@ -543,17 +681,8 @@ impl Armature {
         // :139-141 `action.returnToPool()` → drop（D-4.1 池语义偏差）
         self.actions.clear();
 
-        // :143-145 `_animation.returnToPool()` → `Animation._onClear()`
-        //（Animation.ts:68-100：回池 states、清 `_animations/_blendStates/
-        // _animationConfig`、`timeScale = 1.0`、`_inheritTimeScale = 1.0` 等）——
-        // Rust 现用 `reset()`（≈ Animation.ts:280-289，欠清 timeScale /
-        // _inheritTimeScale 等）+ `init(idx)` 重挂 armature 回指（TS :173 把
-        // `_animation` 置 null，Rust 不可 null；“清空 + 回指”≈ 池清空后再借出的
-        // 状态，D-3.1 偏差）。
-        // TODO 阶段 4：Animation 补 `on_clear()` 后替换此处调用（对照
-        // Animation.ts:68-100）。不改运行时行为。
-        self.animation.reset();
-        self.animation.init(self.idx);
+        // :143-145 `_animation.returnToPool()` → `Animation._onClear()`.
+        self.animation.on_clear();
 
         self.proxy.db_clear(); // :147-149 代理清场（引擎侧）
 
@@ -588,8 +717,7 @@ impl Armature {
         // TODO 阶段 6（P1-5）：`:176` `_replaceTextureAtlasData = null`、
         // `:177` `_replacedTexture = null`——字段未落地。
         // TODO 阶段 5（P0-12）：`:178` `_dragonBones = null`——字段未落地。
-        // TODO 阶段 5（P0-12）：`:179` `_clock = null`——`_clock` 字段未落地
-        //（WorldClock 归阶段 5，与 `:123-124` remove TODO 同批）。
+        // :179 `_clock = null` 已由 BaseFactory 的关系 detach 在 on_clear 前完成。
         self.parent = None; // :180
     }
 
@@ -668,7 +796,11 @@ impl Armature {
                 // :510
 
                 // :512-527 A 点：距起点距离最小者（竖直线段用 y 差，否则 x 差）
-                let mut d = if is_v { point_a.y - y_a } else { point_a.x - x_a };
+                let mut d = if is_v {
+                    point_a.y - y_a
+                } else {
+                    point_a.x - x_a
+                };
                 if d < 0.0 {
                     d = -d;
                 }

@@ -47,7 +47,7 @@
 //! 本库 4 个 IK 的 target 均为独立效果骨（`sortBones` wait_constraint 还保证
 //! `idx < root`），不可达；偏差登记见阶段 3 报告。
 
-use super::{Bone, BoneIdx};
+use super::{Bone, BoneIdx, ConstraintIdx};
 use crate::core::enums::ConstraintType;
 use crate::geom::transform::{PI, normalize_radian};
 use crate::model::{ConstraintData, ConstraintKind};
@@ -58,13 +58,15 @@ use crate::model::{ConstraintData, ConstraintKind};
 /// - `name` / `order` ← `ConstraintData`（基类 `name` getter :60-62；`order` 随数据登记）；
 /// - `target` / `root` / `bone` ← `init`（:192-194）按名解析成 `BoneIdx`（D-3.1 索引化）；
 /// - `weight` / `bend_positive` ← `IKConstraintData`（:199-200；时间轴状态位，
-///   阶段 5 `IKConstraintTimelineState` 会改写，TimelineState.ts:971-972）；
+///   阶段 6 `IKConstraintTimelineState` 会改写，TimelineState.ts:971-972）；
 /// - `kind` ← `ConstraintData.type`（BaseFactory.ts:229 switch 的判定字段）。
 ///
 /// 与旧 stub 的字段变更：`name` / `root` / `order` 保留，新增
 /// `target` / `bone` / `weight` / `bend_positive` / `kind`（见阶段 3 报告）。
 #[derive(Debug, Clone)]
 pub struct Constraint {
+    /// Stable creation-order identity; constraints are never reordered.
+    pub idx: ConstraintIdx,
     /// 约束名（= `ConstraintData.name`）。
     pub name: String,
     /// 根骨索引（TS `_root`，Constraint.ts:193 按名解析；`Bone::update` 里
@@ -92,6 +94,7 @@ impl Default for Constraint {
     /// `_bendPositive = false`、`_weight = 1.0`、type = IK。
     fn default() -> Self {
         Self {
+            idx: ConstraintIdx(0),
             name: String::new(),
             root: BoneIdx(0),
             order: 0,
@@ -219,6 +222,15 @@ impl Constraint {
         }
     }
 
+    /// Matches `Constraint.invalidUpdate()` (Constraint.ts:218-224): mark the
+    /// root and optional chain bone dirty so their next update recomputes transforms.
+    pub fn invalid_update(&self, bones: &mut [Bone]) {
+        bones[self.root.index()].invalid_update();
+        if let Some(chain_bone) = self.bone {
+            bones[chain_bone.index()].invalid_update();
+        }
+    }
+
     /// `IKConstraint.update()`（Constraint.ts:206-216）逐行 + `_computeA`/`_computeB`
     /// 的调用面组织（借用切分见模块文档）。
     fn update_ik(
@@ -230,7 +242,7 @@ impl Constraint {
         flip_y: bool,
     ) {
         // 局部拷贝（TS `this._weight`/`this._bendPositive` 的读点在下方各行；
-        // 时间轴（阶段 5）写这两个字段，与骨表借用无关）
+        // 时间轴（阶段 6）写这两个字段，与骨表借用无关）
         let root_idx = self.root;
         let target_idx = self.target;
         let weight = self.weight;

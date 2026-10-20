@@ -4,8 +4,7 @@
 //! （= `tools/jsdump.mjs` 的 `NullFactory`：proxy 由调用方注入、槽走 [`NullSlotAdapter`]、
 //! 图集建空壳），见文件尾 `TODO 阶段7：FactoryAdapter`（D-3.4 第三组契约取舍）。
 //!
-//! `BaseFactory` 同时充当**运行时世界**（D-3.1：`armatures` arena + `free` 空位复用栈，
-//! 阶段 5 WorldClock 挂这里）。
+//! `BaseFactory` 同时充当**运行时世界**（D-3.1：Armature arena、Clock arena 和事件队列）。
 //!
 //! 主要对齐点（行号基准 = `DragonBonesJS/DragonBones/src/dragonBones/factory/BaseFactory.ts`）：
 //! - [`BuildArmaturePackage`]：1017-1027
@@ -15,9 +14,12 @@
 //! - [`BaseFactory::_build_child_armature`] / [`BaseFactory::_get_slot_display`]：254-256 / 258-322
 //! - [`BaseFactory::build_armature`]：701-716（F3.11 收尾 `invalidUpdate` + `advanceTime(0.0)`）
 
+use crate::animation::world_clock::{
+    AnimatableHandle, ClockArena, ClockError, ClockId, WorldClock, wall_clock_seconds,
+};
 use crate::armature::{
-    ArenaCtx, Armature, ArmatureIdx, ArmatureProxy, Bone, Constraint, DisplayHandle,
-    NullArmatureProxy, NullSlotAdapter, Slot, SlotIdx,
+    Armature, ArmatureIdx, ArmatureProxy, Bone, Constraint, DisplayHandle, NullArmatureProxy,
+    NullSlotAdapter, RuntimeCtx, RuntimeCtxError, Slot, SlotIdx,
 };
 use crate::core::enums::ConstraintType;
 use crate::event::EventObject;
@@ -28,6 +30,7 @@ use crate::model::{
 use crate::parser::ObjectDataParser;
 use indexmap::IndexMap;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// 对齐 `BuildArmaturePackage`（BaseFactory.ts:1017-1027，字段照抄；普通类不进池，
@@ -75,7 +78,6 @@ impl BuildArmaturePackage {
 /// （TS 是 abstract + 3 抽象方法；Null 语义内联见文件尾 TODO 阶段7）。
 ///
 /// 字段照抄 TS:52-57（见各字段注释）；`BaseFactory` 同时是 arena 运行时世界（D-3.1）。
-#[derive(Default)]
 pub struct BaseFactory {
     /// 对齐 `autoSearch`（TS:52，`@private`，默认 false）——fill ②/④ 与
     /// `_getTextureData` ② 段的回退总闸。
@@ -87,26 +89,376 @@ pub struct BaseFactory {
     /// 对齐 `_textureAtlasDataMap`（TS:55）——**value 是数组**（笔记 A.2-4：同名可挂
     /// 多个 atlas，`_getTextureData` 86-91 逐个遍历）→ `IndexMap<String, Vec<TextureAtlasData>>`。
     pub atlas_map: IndexMap<String, Vec<TextureAtlasData>>,
-    /// 骨架 arena（D-3.1）：`None` = 已 dispose 的空位；阶段 5 WorldClock 挂这里。
+    /// 骨架 arena（D-3.1）：`None` = 已 dispose 的空位。
     pub armatures: Vec<Option<Armature>>,
     /// 空位复用栈（D-3.1 池语义的 arena 版）：`dispose_armature` push、
     /// [`BaseFactory::alloc_armature_slot`] 挑 `> min` 的取出。
     pub free: Vec<u32>,
+    /// Runtime Clock arena, uniquely owned beside the armature arena.
+    clocks: ClockArena,
+    /// Default/root clock corresponding to `DragonBones.clock`.
+    root_clock: ClockId,
+    /// Events waiting for the next runtime flush.
+    pending_events: Vec<EventObject>,
+    /// Most recent event batch moved out of the pending queue by advance_time.
+    flushed_events: Vec<EventObject>,
     /// 对齐 `_dataParser`（TS:57；TS 构造可注入 DataParser，Rust 恒 `ObjectDataParser`）。
     /// TS 的 `static _objectParser/_binaryParser` 惰性单例（:47-48）→ Rust 每工厂一个
     /// 实例（笔记 A.2-1 允许；JS 共享语义在单工厂场景等价）。
     pub parser: ObjectDataParser,
-    // TODO 阶段 5（P0-12）: TS:56 `_dragonBones`——由具体子类/外部注入（jsdump.mjs:94
-    //   `factory._dragonBones = new db.DragonBones(em)`），`clear()/remove*` 的
-    //   `bufferObject` 与 `clock` getter（TS:1007-1009）都委托它，WorldClock 落地后补。
+    // TODO 阶段 5（P0-12）: TS `_dragonBones` 的全局 eventManager dispatch；阶段 4 的
+    //   clock 与 event queue 由本 Factory 唯一持有，flush seam 不调用 listener。
     // TODO 阶段 6（P1-5）: `BinaryDataParser`（TS:354 `rawData instanceof ArrayBuffer`
     //   强制走二进制 parser）——Rust 侧无此实现（阶段 2 只做 JSON 路径）。
+}
+
+/// One prevalidated Armature clock move used to make tree updates atomic.
+#[derive(Debug, Clone, Copy)]
+struct ArmatureClockMove {
+    armature: ArmatureIdx,
+    from: Option<ClockId>,
+    to: Option<ClockId>,
+}
+
+impl Default for BaseFactory {
+    fn default() -> Self {
+        let mut clocks = ClockArena::new();
+        let root_clock = clocks.insert(WorldClock::new(0.0));
+
+        Self {
+            auto_search: false,
+            data_map: IndexMap::new(),
+            atlas_map: IndexMap::new(),
+            armatures: Vec::new(),
+            free: Vec::new(),
+            clocks,
+            root_clock,
+            pending_events: Vec::new(),
+            flushed_events: Vec::new(),
+            parser: ObjectDataParser::default(),
+        }
+    }
 }
 
 impl BaseFactory {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Default WorldClock corresponding to `DragonBones.clock`.
+    #[must_use]
+    pub fn root_clock(&self) -> ClockId {
+        self.root_clock
+    }
+
+    /// Creates an unattached custom clock.
+    pub fn create_clock(&mut self, time: f64) -> ClockId {
+        self.clocks.insert(WorldClock::new(time))
+    }
+
+    /// Looks up a clock by its arena handle.
+    #[must_use]
+    pub fn clock(&self, id: ClockId) -> Option<&WorldClock> {
+        self.clocks.get(id)
+    }
+
+    /// Mutates public clock controls such as `time_scale` without exposing its relationships.
+    pub fn clock_mut(&mut self, id: ClockId) -> Option<&mut WorldClock> {
+        self.clocks.get_mut(id)
+    }
+
+    /// Attaches an Armature and currently displayed descendants to a clock.
+    /// Newly built Armatures remain unattached until this is called.
+    pub fn attach_armature(
+        &mut self,
+        clock: ClockId,
+        armature: ArmatureIdx,
+    ) -> Result<(), RuntimeCtxError> {
+        self.set_armature_clock_tree(armature, Some(clock))
+    }
+
+    /// Detaches an Armature and currently displayed descendants from their clocks.
+    pub fn detach_armature(&mut self, armature: ArmatureIdx) -> Result<(), RuntimeCtxError> {
+        self.set_armature_clock_tree(armature, None)
+    }
+
+    /// Attaches a child clock to a parent clock. Cycles are rejected.
+    pub fn attach_clock(&mut self, parent: ClockId, child: ClockId) -> Result<(), ClockError> {
+        self.clocks.attach_clock(parent, child)
+    }
+
+    /// Detaches a child clock from its parent, if attached.
+    pub fn detach_clock(&mut self, child: ClockId) -> Result<bool, ClockError> {
+        self.clocks.detach_clock(child)
+    }
+
+    /// Clears direct Clock members and synchronizes all back-references.
+    ///
+    /// Collects and validates the whole direct-member set (including every
+    /// displayed descendant tree) before clearing anything, so an inconsistent
+    /// relationship cannot leave a partially cleared clock.
+    pub fn clear_clock(&mut self, clock: ClockId) -> Result<(), RuntimeCtxError> {
+        let members = self
+            .clocks
+            .get(clock)
+            .ok_or(ClockError::InvalidClockId)?
+            .active_members();
+
+        // Validate direct back-references before changing any relationships.
+        for handle in &members {
+            let is_consistent = match *handle {
+                AnimatableHandle::Armature(id) => self
+                    .armatures
+                    .get(id.index())
+                    .and_then(Option::as_ref)
+                    .is_some_and(|armature| armature.clock() == Some(clock)),
+                AnimatableHandle::Clock(id) => self.clocks.parent(id) == Some(clock),
+            };
+            if !is_consistent {
+                return Err(ClockError::InconsistentRelationship.into());
+            }
+        }
+
+        // Build one plan for all Armature trees first; `visited` keeps a shared
+        // descendant from being planned twice.
+        let mut visited = HashSet::new();
+        let mut plan = Vec::new();
+        let mut direct_clocks = Vec::new();
+        for handle in &members {
+            match *handle {
+                AnimatableHandle::Armature(id) => {
+                    plan.extend(self.collect_armature_clock_plan(id, None, &mut visited)?);
+                }
+                AnimatableHandle::Clock(id) => direct_clocks.push(id),
+            }
+        }
+        self.validate_armature_clock_plan(&plan)?;
+        self.apply_armature_clock_plan(&plan)?;
+
+        for id in direct_clocks {
+            // A displayed child armature may already have detached this clock.
+            let detached = self.clocks.detach_clock(id)?;
+            debug_assert!(detached, "direct clock member was validated");
+        }
+
+        let remaining = self
+            .clocks
+            .clear_clock(clock)
+            .map_err(RuntimeCtxError::Clock)?;
+        debug_assert!(
+            remaining.is_empty(),
+            "all direct members were detached above"
+        );
+        Ok(())
+    }
+
+    /// Checks direct and transitive membership by following owner back-references.
+    #[must_use]
+    pub fn clock_contains(&self, clock: ClockId, value: AnimatableHandle) -> bool {
+        if self.clocks.get(clock).is_none() || value == AnimatableHandle::Clock(clock) {
+            return false;
+        }
+
+        let mut ancestor = match value {
+            AnimatableHandle::Armature(id) => self
+                .armatures
+                .get(id.index())
+                .and_then(Option::as_ref)
+                .and_then(Armature::clock),
+            AnimatableHandle::Clock(id) => self.clocks.parent(id),
+        };
+        let mut visited = HashSet::new();
+        while let Some(id) = ancestor {
+            if id == clock {
+                return true;
+            }
+            if !visited.insert(id) {
+                return false;
+            }
+            ancestor = self.clocks.parent(id);
+        }
+        false
+    }
+
+    /// Moves a whole displayed-Armature tree to `new_clock` atomically.
+    ///
+    /// The official setter (`Armature.ts:904-910`) mutates node by node and can
+    /// leave a partially updated tree if a later relationship is inconsistent.
+    /// Rust first collects the exact move list (preserving the TS early-out:
+    /// a node already on `new_clock` does not recurse into its children), then
+    /// validates every membership/back-reference and the target clocks' token
+    /// capacity before mutating anything. Execution cannot fail after that
+    /// validation; if it ever does, already-applied moves are compensated in
+    /// reverse order.
+    fn set_armature_clock_tree(
+        &mut self,
+        root: ArmatureIdx,
+        new_clock: Option<ClockId>,
+    ) -> Result<(), RuntimeCtxError> {
+        let current_clock = self
+            .armatures
+            .get(root.index())
+            .and_then(Option::as_ref)
+            .ok_or(RuntimeCtxError::InvalidArmature)?
+            .clock();
+
+        // The official clock setter returns immediately when the value is unchanged.
+        if current_clock == new_clock {
+            return self.move_armature_clock(root, new_clock);
+        }
+
+        let mut visited = HashSet::new();
+        let plan = self.collect_armature_clock_plan(root, new_clock, &mut visited)?;
+        self.validate_armature_clock_plan(&plan)?;
+        self.apply_armature_clock_plan(&plan)
+    }
+
+    /// Builds the ordered move list for [`Self::set_armature_clock_tree`].
+    ///
+    /// Uses the same stack/child order as the TS setter so the resulting
+    /// membership order is unchanged; no arena state is mutated.
+    fn collect_armature_clock_plan(
+        &self,
+        root: ArmatureIdx,
+        new_clock: Option<ClockId>,
+        visited: &mut HashSet<ArmatureIdx>,
+    ) -> Result<Vec<ArmatureClockMove>, RuntimeCtxError> {
+        let mut plan = Vec::new();
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+
+            let armature = self
+                .armatures
+                .get(id.index())
+                .and_then(Option::as_ref)
+                .ok_or(RuntimeCtxError::InvalidArmature)?;
+            let from = armature.clock();
+
+            if from == new_clock {
+                plan.push(ArmatureClockMove {
+                    armature: id,
+                    from,
+                    to: new_clock,
+                });
+                continue; // TS setter early-outs and does not recurse through this node.
+            }
+
+            let children: Vec<_> = armature
+                .slots
+                .iter()
+                .rev()
+                .filter_map(|slot| slot.child_armature)
+                .collect();
+            plan.push(ArmatureClockMove {
+                armature: id,
+                from,
+                to: new_clock,
+            });
+            pending.extend(children);
+        }
+        Ok(plan)
+    }
+
+    /// Validates every planned move against the current arena before any write:
+    /// the back-reference must equal the recorded `from`, the old clock must
+    /// own the member, the target clock must exist and not already own it, and
+    /// each target clock must be able to allocate the required member tokens.
+    fn validate_armature_clock_plan(
+        &self,
+        plan: &[ArmatureClockMove],
+    ) -> Result<(), RuntimeCtxError> {
+        let mut token_demand: HashMap<ClockId, u64> = HashMap::new();
+
+        for planned in plan {
+            let armature = self
+                .armatures
+                .get(planned.armature.index())
+                .and_then(Option::as_ref)
+                .ok_or(RuntimeCtxError::InvalidArmature)?;
+            if armature.clock() != planned.from {
+                return Err(ClockError::InconsistentRelationship.into());
+            }
+
+            if let Some(old_clock) = planned.from {
+                let old = self
+                    .clocks
+                    .get(old_clock)
+                    .ok_or(ClockError::InvalidClockId)?;
+                if !old.contains_member(AnimatableHandle::Armature(planned.armature)) {
+                    return Err(ClockError::InconsistentRelationship.into());
+                }
+            }
+
+            if planned.from != planned.to
+                && let Some(new_clock) = planned.to
+            {
+                let new = self
+                    .clocks
+                    .get(new_clock)
+                    .ok_or(ClockError::InvalidClockId)?;
+                if new.contains_member(AnimatableHandle::Armature(planned.armature)) {
+                    return Err(ClockError::InconsistentRelationship.into());
+                }
+                *token_demand.entry(new_clock).or_insert(0) += 1;
+            }
+        }
+
+        for (clock, demand) in token_demand {
+            let target = self.clocks.get(clock).ok_or(ClockError::InvalidClockId)?;
+            if !target.can_attach_count(demand) {
+                return Err(ClockError::MemberTokenExhausted.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Applies a validated plan. A failure here would mean the arena changed
+    /// between validation and execution; compensate the moves already applied
+    /// so callers never observe a half-updated tree.
+    fn apply_armature_clock_plan(
+        &mut self,
+        plan: &[ArmatureClockMove],
+    ) -> Result<(), RuntimeCtxError> {
+        for (applied, planned) in plan.iter().enumerate() {
+            if let Err(error) = self.move_armature_clock(planned.armature, planned.to) {
+                log::error!("clock relationship update failed after prevalidation: {error}");
+                for rollback in plan[..applied].iter().rev() {
+                    if let Err(rollback_error) =
+                        self.move_armature_clock(rollback.armature, rollback.from)
+                    {
+                        log::error!("clock relationship rollback failed: {rollback_error}");
+                    }
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn move_armature_clock(
+        &mut self,
+        armature: ArmatureIdx,
+        new_clock: Option<ClockId>,
+    ) -> Result<(), RuntimeCtxError> {
+        let current_clock = self
+            .armatures
+            .get(armature.index())
+            .and_then(Option::as_ref)
+            .ok_or(RuntimeCtxError::InvalidArmature)?
+            .clock();
+        let mut runtime = RuntimeCtx::new(
+            &mut self.armatures,
+            &mut self.clocks,
+            &mut self.pending_events,
+            None,
+            current_clock,
+        );
+        runtime.move_armature_clock(armature, new_clock)
     }
 
     // ------------------------------------------------------------------
@@ -434,7 +786,7 @@ impl BaseFactory {
     /// **不变量（D-3.2）**：子骨架必须分配到**大于父骨架 idx** 的槽位——父骨架先于子骨架
     /// build（子 build 发生在父的 `_buildSlots` 内），`min_exclusive = 父 idx` 保证
     /// arena 序里父 < 子；alpha 传播 / inheritTimeScale 等跨骨架索引依赖该序
-    /// （`docs/guide/03-stage3.md` D-3.2，`ArenaCtx` 访问契约）。
+    /// （`docs/guide/03-stage3.md` D-3.2，`RuntimeCtx` 访问契约）。
     ///
     /// 顶层 build 传 `min_exclusive = u32::MAX`（`build_armature`）作为**无约束哨兵**：
     /// 视作"任意空位皆可"→ 复用 `free` 栈的第一个空位，栈空才 push 新号——
@@ -472,13 +824,13 @@ impl BaseFactory {
     ///
     /// **不进 TypeId 池**（guide 坑 12）：Armature/Bone/Slot 随 arena 槽位生灭。
     ///
-    /// **时机差异（登记 D-4.x）**：官方 `Armature.dispose`（Armature.ts:265-270）只做
+    /// **时机差异（登记 D-4.31）**：官方 `Armature.dispose`（Armature.ts:265-270）只做
     /// `_lockUpdate = true` + `_dragonBones.bufferObject(this)`——进 `DragonBones`
     /// 缓冲队列、**下帧** `advanceTime` 才 flush `returnToPool`（＝ `_onClear`）；
     /// Rust `dispose_armature` 就地 `on_clear` + 置 `None` + `free.push`。
     /// 结果面等价（同一帧内该骨架已不可见/不可推进：TS 侧 `_lockUpdate` 挡推进、
     /// Rust 侧 take 后槽位 `None` 无人能取），但**清场时机提前半拍**（TS 的
-    /// buffer→flush 间隙内对象仍占池），登记为 D-4.x 池语义偏差（阶段 5 接
+    /// buffer→flush 间隙内对象仍占池），登记为 D-4.31 池语义偏差（阶段 5 接
     /// `bufferObject` 后收口）。
     pub fn dispose_armature(&mut self, idx: ArmatureIdx) {
         if self.armatures.get(idx.index()).is_none_or(Option::is_none) {
@@ -516,6 +868,52 @@ impl BaseFactory {
         // ② 逐个 on_clear + 置 None + free.push（BFS 序：自身先于后代 ≈ TS
         //    `bufferObject` 的入队序；后代可能已被上一轮清掉 → take 失败即跳过）
         for current in seen {
+            let current_idx = ArmatureIdx(current);
+            if self
+                .armatures
+                .get(current_idx.index())
+                .is_none_or(Option::is_none)
+            {
+                continue;
+            }
+
+            let detach_result = {
+                let mut runtime = RuntimeCtx::new(
+                    &mut self.armatures,
+                    &mut self.clocks,
+                    &mut self.pending_events,
+                    None,
+                    None,
+                );
+                runtime.move_armature_clock(current_idx, None)
+            };
+            if let Err(error) = detach_result {
+                log::warn!(
+                    "dispose_armature: failed to detach armature {} from its clock: {error}; forcing clock=None",
+                    current
+                );
+            }
+
+            // Recovery path: even if the relationship was already inconsistent,
+            // remove any residual Clock membership and force `clock = None`
+            // before releasing the arena slot. Otherwise the clock would keep a
+            // stale handle and the armature would stay permanently stuck.
+            {
+                let mut runtime = RuntimeCtx::new(
+                    &mut self.armatures,
+                    &mut self.clocks,
+                    &mut self.pending_events,
+                    None,
+                    None,
+                );
+                if !runtime.force_detach_armature_clock(current_idx) {
+                    log::warn!(
+                        "dispose_armature: armature {} unavailable during clock cleanup",
+                        current
+                    );
+                }
+            }
+
             let Some(slot) = self.armatures.get_mut(current as usize) else {
                 continue;
             };
@@ -898,7 +1296,7 @@ impl BaseFactory {
                         } else {
                             // TS:303 没有任何 action → 播子骨架默认动画
                             //（阶段 3 `Animation::play` no-op 占位，阶段 4 接）
-                            child.animation.play(None, -1.0);
+                            child.animation.play(None, -1);
                         }
                     }
                 }
@@ -1011,13 +1409,15 @@ impl BaseFactory {
     }
 
     /// 单骨架推进（take-out → [`Armature::advance_time`] → 放回）：
-    /// 推进期间 `armatures[idx]` 为 `None`，满足 [`ArenaCtx`] 的“自身不可经 world 访问”
+    /// 推进期间 `armatures[idx]` 为 `None`，满足 [`RuntimeCtx`] 的“自身不可经 world 访问”
     /// 借用契约（armature/mod.rs 模块文档）。
     ///
     /// `passed_time = 0.0` 照样走完整主循环（`Armature::advanceTime` 无 0 值早退）
     /// ——**直接驱动单骨架 = TS `armature.advanceTime(0)`**（build 收尾 BaseFactory.ts:713
-    /// 同款）：消费脏标记 / 槽排序 / 静姿态收敛。全局 [`Self::advance_time`] 对 0 是
-    /// no-op（WorldClock.ts:114 早退），要“跑一遍更新”就调本方法。
+    /// 同款）：消费脏标记 / 槽排序 / 静姿态收敛。全局 [`Self::advance_time`] 不是
+    /// “全局 no-op”：WorldClock 内层在缩放后 0 早退（**成员不推进**），但外层
+    /// objects flush 与 events 快照替换两段仍执行（04-stage4.md:175,198；
+    /// WorldClock.ts:114 只负责 clock 内层）。要“跑一遍骨架更新”就调本方法。
     pub fn advance_one(&mut self, idx: ArmatureIdx, passed_time: f64) {
         let Some(slot) = self.armatures.get_mut(idx.index()) else {
             return; // 越界：防御跳过（alloc 保证不存在）
@@ -1025,10 +1425,14 @@ impl BaseFactory {
         let Some(mut armature) = slot.take() else {
             return; // 空位（已 dispose）
         };
-        let mut world = ArenaCtx {
-            armatures: &mut self.armatures,
-            self_idx: idx,
-        };
+        let current_clock = armature.clock();
+        let mut world = RuntimeCtx::new(
+            &mut self.armatures,
+            &mut self.clocks,
+            &mut self.pending_events,
+            Some(idx),
+            current_clock,
+        );
         armature.advance_time(passed_time, &mut world);
         // `world` 无 Drop：其对 `self.armatures` 的借用在最后一次使用（上一行）后由 NLL 结束
         if let Some(slot) = self.armatures.get_mut(idx.index()) {
@@ -1037,28 +1441,161 @@ impl BaseFactory {
     }
 
     /// 对齐 `DragonBones.advanceTime`（DragonBones.ts:304-332）→ `WorldClock.advanceTime`
-    /// 的“逐 animatable 推进”段（阶段 5 由 WorldClock 接管并补 time/timeScale、
-    /// `_objects` 缓冲 flush 与事件派发）：遍历 arena 全部已 build 的骨架。
+    /// 的三段顺序（对象回收 flush → root Clock → 本帧 events flush）。对象池 flush
+    /// 暂为空操作；阶段 4 的 event flush 保存快照，不 dispatch listener。
     ///
-    /// **0 值早退（对齐官方全局语义）**：`WorldClock.advanceTime(0.0)` 在
-    /// `WorldClock.ts:114-116` `if (passedTime === 0.0) return;` 直接返回——不推进
-    /// 任何 animatable（node 实测 posedump 第二遍全局 advance 是 no-op）。
-    /// 想“跑一遍更新/排序”用 [`Self::advance_one`]（= TS 单骨架 `advanceTime(0)`）。
-    ///
-    /// 注：官方 `DragonBones.advanceTime`（DragonBones.ts:304-332）在委托 clock 前后
-    /// 还做 `_objects` 对象池 flush 与 `_events` 派发——阶段 5 WorldClock 接入时收口。
-    // TODO 阶段 5（P0-12）: WorldClock 语义（time 累计、passedTime<0 的 `Date.now()`
-    //   自动帧间隔、timeScale 缩放）与 `DragonBones` 的 _objects/_events 两段。
+    /// 不在此层对 `passed_time == 0` 早退：WorldClock 必须先刷新 system-time，缩放后
+    /// 再早退；外层的 object/event 两段仍运行。
     pub fn advance_time(&mut self, passed_time: f64) {
-        // WorldClock.ts:114-116（实测：posedump 第二遍 `advanceTime(0)` 在 JS 侧为 no-op）
-        if passed_time == 0.0 {
-            return;
+        let mut now = wall_clock_seconds;
+        self.advance_time_with_source(passed_time, &mut now);
+    }
+
+    /// Deterministic wall-clock seam for integration tests.
+    #[doc(hidden)]
+    pub fn advance_time_with(&mut self, passed_time: f64, now: f64) {
+        let mut now_source = || now;
+        self.advance_time_with_source(passed_time, &mut now_source);
+    }
+
+    /// Advances one clock subtree directly, mirroring the root-clock segment of
+    /// [`Self::advance_time`] (`WorldClock.ts:97-155`). Only this clock and its
+    /// nested members advance; the object/event flush phases are not run.
+    ///
+    /// This is the Rust equivalent of calling `WorldClock.advanceTime` on a
+    /// standalone clock. The time source is the wall clock, identical to
+    /// [`Self::advance_time`].
+    pub fn advance_clock(&mut self, clock: ClockId, passed_time: f64) -> Result<(), ClockError> {
+        let mut now = wall_clock_seconds;
+        let mut clock_path = Vec::new();
+        self.advance_clock_with(clock, passed_time, &mut now, &mut clock_path)
+    }
+
+    fn advance_time_with_source(&mut self, passed_time: f64, now: &mut impl FnMut() -> f64) {
+        self.flush_objects(); // DragonBones.ts:305-311; no object pool in this phase.
+
+        let mut clock_path = Vec::new();
+        if let Err(error) =
+            self.advance_clock_with(self.root_clock, passed_time, now, &mut clock_path)
+        {
+            log::warn!("root clock advance stopped: {error}");
         }
-        for index in 0..self.armatures.len() {
-            if self.armatures[index].is_some() {
-                self.advance_one(ArmatureIdx(index as u32), passed_time);
+
+        // Replace the previous snapshot even when no events were queued or dt was zero.
+        self.flushed_events = std::mem::take(&mut self.pending_events);
+    }
+
+    fn flush_objects(&mut self) {
+        // BaseObject buffer is not part of the stage 4 runtime yet.
+    }
+
+    /// Visits the fixed-start member snapshot in order, resolving each token
+    /// immediately before dispatch so runtime detach/reattach takes effect now.
+    fn visit_clock_members_with(
+        &mut self,
+        clock_id: ClockId,
+        member_time: f64,
+        mut advance: impl FnMut(&mut Self, AnimatableHandle, f64),
+    ) -> Result<(), ClockError> {
+        let snapshot = self
+            .clocks
+            .get(clock_id)
+            .ok_or(ClockError::InvalidClockId)?
+            .member_snapshot();
+
+        for (index, token) in snapshot {
+            let handle = self
+                .clocks
+                .get(clock_id)
+                .and_then(|clock| clock.active_member_at(index, token));
+            if let Some(handle) = handle {
+                advance(self, handle, member_time);
             }
         }
+
+        if let Some(clock) = self.clocks.get_mut(clock_id) {
+            clock.compact();
+        }
+        Ok(())
+    }
+
+    fn advance_clock_with(
+        &mut self,
+        clock_id: ClockId,
+        passed_time: f64,
+        now: &mut impl FnMut() -> f64,
+        clock_path: &mut Vec<ClockId>,
+    ) -> Result<(), ClockError> {
+        if clock_path.contains(&clock_id) {
+            // 官方 WorldClock.add()（WorldClock.ts:192-197）不检查环：环会让
+            // advanceTime 无限递归。Rust 在此跳过当前递归路径以避免栈溢出；
+            // 这是对官方的有意限制（D-4.33），不是 AnimationState graph 的
+            // D-4.32。
+            log::warn!("clock cycle encountered while advancing {:?}", clock_id);
+            return Ok(());
+        }
+
+        let member_time = self
+            .clocks
+            .get_mut(clock_id)
+            .ok_or(ClockError::InvalidClockId)?
+            .update_time(passed_time, now());
+        let Some(member_time) = member_time else {
+            return Ok(());
+        };
+
+        clock_path.push(clock_id);
+
+        let result = self.visit_clock_members_with(clock_id, member_time, |runtime, handle, dt| {
+            match handle {
+                AnimatableHandle::Armature(armature) => {
+                    if runtime
+                        .armatures
+                        .get(armature.index())
+                        .is_none_or(Option::is_none)
+                    {
+                        // Stale handle: remove it from this Clock and continue safely.
+                        if let Some(clock) = runtime.clocks.get_mut(clock_id) {
+                            clock.detach(handle);
+                        }
+                    } else {
+                        runtime.advance_one(armature, dt);
+                    }
+                }
+                AnimatableHandle::Clock(child) => {
+                    if runtime.clocks.get(child).is_none() {
+                        // ClockArena 不提供删除，合法 ClockId 永不失效；此分支只
+                        // 防御外部拼装的无效 id（正常流程不可达）。
+                        if let Some(clock) = runtime.clocks.get_mut(clock_id) {
+                            clock.detach(handle);
+                        }
+                    } else if let Err(error) =
+                        runtime.advance_clock_with(child, dt, now, clock_path)
+                    {
+                        log::warn!("nested clock advance stopped: {error}");
+                    }
+                }
+            }
+        });
+
+        clock_path.pop();
+        result
+    }
+
+    /// Buffers a new owned event for the next global-advance flush.
+    #[doc(hidden)]
+    pub fn buffer_event(&mut self, event: EventObject) {
+        self.pending_events.push(event);
+    }
+
+    /// Object-pool buffering placeholder; object pooling is outside this task.
+    #[doc(hidden)]
+    pub fn buffer_object(&mut self) {}
+
+    /// Takes the most recently flushed event batch; a repeated call returns empty.
+    #[doc(hidden)]
+    pub fn take_flushed_events(&mut self) -> Vec<EventObject> {
+        std::mem::take(&mut self.flushed_events)
     }
 }
 
@@ -1085,3 +1622,217 @@ impl BaseFactory {
 //     笔记 A.2-4）——Rust `atlas_map.get(name)` 直读，包装方法同批补
 //   - `update_texture_atlases`（TS:424-433）、`clear/remove*`（TS:647-666 / 516-524 /
 //     599-610，依赖 `_dragonBones.bufferObject` → 阶段 5 WorldClock 后接）
+
+#[cfg(test)]
+mod runtime_clock_tests {
+    use super::BaseFactory;
+    use crate::animation::world_clock::{AnimatableHandle, ClockError, ClockId};
+    use crate::armature::{
+        Armature, ArmatureIdx, DisplayHandle, NullArmatureProxy, RuntimeCtxError, Slot,
+    };
+    use crate::model::DragonBonesData;
+    use std::sync::Arc;
+
+    fn insert_armature(factory: &mut BaseFactory, idx: ArmatureIdx) -> ArmatureIdx {
+        let name = format!("clock-tree-test-{}", idx.0);
+        let armature = Armature::new(
+            idx,
+            Arc::new(DragonBonesData::default()),
+            name,
+            Box::new(NullArmatureProxy::new()),
+            DisplayHandle::Null,
+        );
+        if factory.armatures.len() <= idx.index() {
+            factory.armatures.resize_with(idx.index() + 1, || None);
+        }
+        factory.armatures[idx.index()] = Some(armature);
+        idx
+    }
+
+    fn link_child(factory: &mut BaseFactory, parent: ArmatureIdx, child: ArmatureIdx) {
+        let slot = Slot {
+            child_armature: Some(child),
+            ..Slot::default()
+        };
+        factory.armatures[parent.index()]
+            .as_mut()
+            .expect("parent armature")
+            .slots
+            .push(slot);
+    }
+
+    fn armature_members(factory: &BaseFactory, clock: ClockId) -> Vec<AnimatableHandle> {
+        factory
+            .clocks
+            .get(clock)
+            .expect("clock exists")
+            .active_members()
+    }
+
+    #[test]
+    fn members_added_removed_and_self_removed_during_visit_obey_snapshot_boundary() {
+        let mut factory = BaseFactory::new();
+        let clock_id = factory.root_clock();
+        let first = AnimatableHandle::Armature(ArmatureIdx(10));
+        let removed = AnimatableHandle::Armature(ArmatureIdx(11));
+        let added = AnimatableHandle::Armature(ArmatureIdx(12));
+        let clock = factory.clocks.get_mut(clock_id).expect("root clock");
+        clock.attach(first).expect("attach first");
+        clock.attach(removed).expect("attach second");
+
+        let mut visited = Vec::new();
+        factory
+            .visit_clock_members_with(clock_id, 1.0, |factory, handle, _| {
+                visited.push(handle);
+                if handle == first {
+                    let clock = factory.clocks.get_mut(clock_id).expect("root clock");
+                    assert!(clock.detach(removed), "remove member not yet visited");
+                    clock.attach(added).expect("add member during visit");
+                    assert!(clock.detach(first), "self-remove current member");
+                }
+            })
+            .expect("visit stable initial member snapshot");
+
+        assert_eq!(visited, [first]);
+        assert_eq!(
+            factory
+                .clocks
+                .get(clock_id)
+                .expect("root clock")
+                .active_members(),
+            [added]
+        );
+
+        visited.clear();
+        factory
+            .visit_clock_members_with(clock_id, 1.0, |_, handle, _| visited.push(handle))
+            .expect("visit next tick");
+        assert_eq!(visited, [added]);
+    }
+
+    fn inconsistent_tree() -> (
+        BaseFactory,
+        ArmatureIdx,
+        ArmatureIdx,
+        ClockId,
+        ClockId,
+        ClockId,
+    ) {
+        let mut factory = BaseFactory::new();
+        let parent = insert_armature(&mut factory, ArmatureIdx(0));
+        let child = insert_armature(&mut factory, ArmatureIdx(1));
+        link_child(&mut factory, parent, child);
+
+        let old_clock = factory.create_clock(0.0);
+        let rogue = factory.create_clock(0.0);
+        let target = factory.create_clock(0.0);
+        factory
+            .attach_armature(old_clock, parent)
+            .expect("attach parent tree");
+        factory
+            .attach_armature(rogue, child)
+            .expect("move child to rogue clock");
+        // 注入不一致：child 回指 rogue，但 rogue 成员表没有它。
+        assert!(
+            factory
+                .clocks
+                .get_mut(rogue)
+                .expect("rogue clock")
+                .detach(AnimatableHandle::Armature(child))
+        );
+
+        (factory, parent, child, old_clock, rogue, target)
+    }
+
+    #[test]
+    fn failed_tree_attach_leaves_every_clock_relationship_untouched() {
+        let (mut factory, parent, child, old_clock, rogue, target) = inconsistent_tree();
+
+        let error = factory
+            .attach_armature(target, parent)
+            .expect_err("inconsistent descendant must fail prevalidation");
+        assert_eq!(
+            error,
+            RuntimeCtxError::Clock(ClockError::InconsistentRelationship)
+        );
+
+        assert_eq!(factory.armature(parent).clock(), Some(old_clock));
+        assert_eq!(factory.armature(child).clock(), Some(rogue));
+        assert_eq!(
+            armature_members(&factory, old_clock),
+            vec![AnimatableHandle::Armature(parent)]
+        );
+        assert!(armature_members(&factory, target).is_empty());
+    }
+
+    #[test]
+    fn failed_clear_clock_does_not_partially_detach_members() {
+        let (mut factory, parent, child, clock, rogue, _target) = inconsistent_tree();
+
+        let error = factory
+            .clear_clock(clock)
+            .expect_err("inconsistent descendant must abort the whole clear");
+        assert_eq!(
+            error,
+            RuntimeCtxError::Clock(ClockError::InconsistentRelationship)
+        );
+
+        assert_eq!(factory.armature(parent).clock(), Some(clock));
+        assert_eq!(factory.armature(child).clock(), Some(rogue));
+        assert!(armature_members(&factory, clock).contains(&AnimatableHandle::Armature(parent)));
+    }
+
+    #[test]
+    fn dispose_force_clears_inconsistent_clock_membership() {
+        let (mut factory, parent, child, clock, rogue, _target) = inconsistent_tree();
+
+        factory.dispose_armature(parent);
+
+        assert!(factory.armatures[parent.index()].is_none());
+        assert!(factory.armatures[child.index()].is_none());
+        assert!(factory.free.contains(&parent.0));
+        assert!(factory.free.contains(&child.0));
+        assert!(!armature_members(&factory, clock).contains(&AnimatableHandle::Armature(parent)));
+        assert!(!armature_members(&factory, rogue).contains(&AnimatableHandle::Armature(child)));
+    }
+
+    #[test]
+    fn direct_clock_advance_matches_nested_member_advance() {
+        let mut nested = BaseFactory::new();
+        let root = nested.root_clock();
+        let nested_child = nested.create_clock(5.0);
+        nested
+            .attach_clock(root, nested_child)
+            .expect("attach nested clock");
+        nested.advance_time_with(0.25, 100.0);
+
+        let mut direct = BaseFactory::new();
+        let direct_child = direct.create_clock(5.0);
+        direct
+            .advance_clock(direct_child, 0.25)
+            .expect("advance standalone clock");
+
+        let nested_time = nested.clock(nested_child).expect("nested clock").time;
+        let direct_time = direct.clock(direct_child).expect("direct clock").time;
+        assert!((nested_time - direct_time).abs() < 1e-12);
+        assert!((direct_time - 5.25).abs() < 1e-12);
+        assert_eq!(
+            direct.advance_clock(ClockId(99), 0.1),
+            Err(ClockError::InvalidClockId)
+        );
+    }
+
+    #[test]
+    fn nested_clock_member_receives_scaled_time() {
+        let mut factory = BaseFactory::new();
+        let root = factory.root_clock();
+        let child = factory.create_clock(1.0);
+        factory.attach_clock(root, child).expect("attach child");
+
+        factory.clock_mut(root).expect("root").time_scale = 0.5;
+        factory.advance_time_with(1.0, 100.0);
+        assert!((factory.clock(root).expect("root").time - 0.5).abs() < 1e-12);
+        // 成员 clock 收到的是 root 缩放后的 dt（0.5），自身 timeScale=1 再加一次。
+        assert!((factory.clock(child).expect("child").time - 1.5).abs() < 1e-12);
+    }
+}
