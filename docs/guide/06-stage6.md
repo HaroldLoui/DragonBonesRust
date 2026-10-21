@@ -5,6 +5,23 @@
 > 行号以 `DragonBonesJS/DragonBones/src/dragonBones/` 当前 5.7 源码为准；素材引用的 demo 资源位于 `DragonBonesJS/Pixi/Demos/resource/`。
 > 预估 18–24 个工作日：dbbin 3–4、Path 4–5、cache 2–3、BoundingBox 2、replace 2–3、夹具/工具 3、收口 2。
 
+## 实现检查点（2026-10-21，进行中）
+
+已完成并入 master 的部分：
+
+| 任务 | 状态 | 证据 |
+|---|---|---|
+| 任务 1 夹具/工具/zIndex | ✅ | `testdata/dbbin`、`testdata/synthetic`、`Slot.z_index: f64`（D-4.35 关闭） |
+| 任务 2 dbbin | ✅ | `parser/binary_data_parser.rs`；`tests/dbbin.rs`：2 素材 IR 与 JSON 全等、9 动画×120 帧 pose 全等 |
+| 任务 3 IR 打包 | ✅ | `IrArrays::to_binary`；`tests/ir_binary.rs` 8 素材与 JS `data.binary` 逐字节相等 |
+| 任务 4 BoundingBox | ✅ | 三种算法 + Slot/Armature 命中；`tests/bounding_box.rs` 对 JS golden（含官方 `B.x/y` bug 锁定） |
+| 任务 5 PathConstraint | ⚠️ 部分 | 合成夹具 fixed/length/tangent 121 帧对 JS 全等；仅覆盖 path slot 父骨在 root 之前、链骨父为 root 的拓扑（D-6.5） |
+| 任务 6 cache | ⏳ 未完成 | 曾接入运行时 rate 但行为未对齐 JS，已整体回退；不得把“只设 rate”当完成 |
+| 任务 7 replace | ⏳ 未开始 | P1-5 仍缺 |
+| 任务 8 P1 审计 | ⚠️ 部分 | P1-6（ActionData/defaultActions）、P1-7 canvas、P1-8 14 BlendMode 测试已加；P1-9 审计未写 |
+
+> 注意：`preserve_order` 已加入 serde_json feature（dbbin header 的 bone/slot 时间轴顺序依赖 JSON 对象插入序）；阶段 2–5 全量测试与 golden 仍全绿。
+
 ---
 
 ## 目录
@@ -65,6 +82,7 @@
 | F6.4 | `_parseBinaryTimeline`：`keyFrameCount == 1` → `frameIndicesOffset = -1`；否则为 `animation.frameCount + 1` 个动画帧生成 `frameIndices`，逐帧指向 `iK-1`，最后一帧的 count 用 `animation.frameCount - frameStart`（:141-184） | `frameIndices` 是全局追加数组 |
 | F6.5 | 二进制 geometry：`geometry.offset = rawData.offset`；`weightOffset = intArray[offset + GeometryWeightOffset]`，`< -1` 时 `+= 65536`，`>=0` 才建 `WeightData`（:331-365） | `raw_books` 下标 → 骨名，与 JSON parser 一致 |
 | F6.6 | `BinaryDataParser extends ObjectDataParser`：仅覆写 `_parseAnimation/_parseGeometry/_parseArray/parseDragonBonesData`；骨架/bone/slot/skin/display 的静态解析完全复用（:27-438） | Rust 也应复用 `ObjectDataParser`，不要复制 2960 行 |
+| F6.6a | dbbin header 的 `bone`/`slot`/`constraint` 是**对象映射**，其键序决定 `frameIndices` 追加顺序；serde_json 默认 BTreeMap 会按字母序重排，导致 IR 与 JS 不等 | Cargo 的 `serde_json` 必须开 `preserve_order`（本项目已开） |
 | F6.7 | header UTF-8 用自定义 `_decodeUTF8`（容错/替换非法序列），非标准 `TextDecoder`（:38-139） | 官方导出数据均为合法 UTF-8；是否复刻非法字节行为见 D-6.6 |
 | F6.8 | requirements 的 P1-10 函数名 `_parserDragonBonesData` **不存在**；实际是 `ObjectDataParser._modifyArray`（:2215-2323）：把 7 组 IR 数组打包成 `data.binary`，padding 条件为四组 `length % 2` + `colorArray` 按 `timelineArray.length % 2`；**它不写 dbbin 头部** | P1-10 = IR 数组打包并存入 `data.binary`；不要误做完整 dbbin 导出 |
 | F6.9 | `_parseDeformFrame` 的 weighted 分支在官方就是 `// TODO`（:1975-1990）；Rust 现有 TODO 是忠实照抄 | 不实现加权 deform；登记“官方亦未实现” |
@@ -268,7 +286,7 @@ pub(crate) struct AnimationFrameCache {
 | **D-6.2** | `ArmatureData.cacheFrameRate` setter 运行时化：Factory rate 表 + Armature 字段；不修改 data | 同上；新 build 从表继承 |
 | **D-6.3** | Bone/Slot 的 `cachedFrameIndices` 从缓存表**克隆**，非引用共享 | Rust 所有权；同值 |
 | **D-6.4** | `Slot/Armature::contains_point/intersects_segment` 需要 `&mut self` | 官方会 `updateTransformAndMatrix`；签名破坏性变更 |
-| **D-6.5** | `Constraint` 改为分派枚举 + `ConstraintUpdateCtx` | Path 需要 slots/IR；IK 行为不变 |
+| **D-6.5** | Path 当前为“Armature 骨循环前预推进 + 仅支持 path slot 父骨早于 root、链骨父为 root”的实现；完整 `ConstraintUpdateCtx` 泛化与任意拓扑待补 | 借用收敛验证；合成夹具覆盖常见拓扑，但不能声称 Path 100% |
 | **D-6.6** | dbbin header 用标准 UTF-8 解码（非法字节直接失败或 lossy），不逐字节复刻 `_decodeUTF8` | 官方导出数据合法；非法数据行为登记 |
 | **D-6.7** | `DragonBonesData.binary`：JSON 路径存打包 IR，dbbin 路径存整份输入字节 | 对齐官方两条路径的不同来源（`_modifyArray` vs `_parseArray`） |
 | **D-6.8** | 数据删除 `remove*/clear` 立即释放，不进入 `pending_recycles` | 模型不池化（D-5.1） |

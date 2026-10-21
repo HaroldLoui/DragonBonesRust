@@ -607,7 +607,7 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.32 | TS `AnimationTimelines` 通过对象引用建立 parent/child 状态图，不防御数据环 | Rust 在关联前检查祖先链并拒绝会形成环的 StateId 关系；parent 回收时解除 child parent 并标记 child 可回收 | 属于避免递归/失效 StateId 关系的安全限制；正常 acyclic golden 行为全等，异常循环配置目前无官方素材/验收输入 |
 | D-4.33 | `DragonBones.bufferEvent` 按**对象身份** `indexOf` 去重（`DragonBones.ts:334-338`） | 事件按值拥有，`buffer_event` 每次产生新事件直接入 `VecDeque`，**不做内容去重**；两条同值独立事件都必须保留并各派发一次（S5-Event） | 值语义没有对象身份可比；按内容去重会吞掉同值事件（`runtime_ctx.rs` / `base_factory.rs` / `tests/event_dispatch.rs`） |
 | D-4.34 | clock 嵌套**自环/环**：官方 `WorldClock.add` 不防环，递归推进即无限递归（`WorldClock.ts:168-254`） | 关系入口 `attach_clock` 拒绝自环/祖先环（`ClockError::Cycle`）；clock 关系查询/推进保留 visited 防护 | 防止栈溢出；异常循环配置无官方素材，正常 acyclic 行为全等（world_clock.rs / base_factory.rs；与 D-4.32 的 AnimationState graph 环分开） |
-| D-4.35 | 运行时 `Slot.z_index` 为 `i32`（TS `_zIndex` 为 number；SlotZIndex blend 可产生小数、排序用原值） | 每步 SlotZIndex blend 后以 `(value * blend_weight) as i32` 截断为整数 | 阶段 3 字段形态；素材无 SlotZIndex 数据；阶段 6 接真实 zIndex 时间轴时复核/改 f64（timeline_states/slot.rs） |
+| D-4.35 | 运行时 `Slot.z_index` 为 `i32`（TS `_zIndex` 为 number；SlotZIndex blend 可产生小数、排序用原值） | **阶段 6 已关闭**：`SlotData.z_index` / `Slot.z_index` 改为 `f64`；排序键为 `f64`，SlotZIndex blend 不再截断 | `tests/armature_unit.rs` + `timeline_states/slot.rs` 分数测试 |
 | D-4.36 | 子骨架 animation inheritance 的状态创建：官方在 `playConfig` 内**同步**调用 `child.animation.fadeIn`（`Animation.ts:443-452`） | Rust 在 `play_config` 将请求压入 `pending_child_animations`，同一帧 `Armature::advance_time` 尾部通过 `process_child_animation_requests` 排空（`player.rs` / `armature.rs`） | 借用边界（play 路径不持 `RuntimeCtx`）；arena 序父<子保证同帧推进；`play()` 返回瞬间子状态尚未创建是该偏差的唯一可观察面 |
 | D-5.1 | 全局 `BaseObject` TypeId 池、`setMaxCount`/`clearPool`/`hashCode` 公共调参 | 删除；对象复用由 arena/free 栈与 `Vec` 容量承担，生命周期语义由 `pending_recycles` 承担 | 运行时零调用；无动画可观察行为（`core/base_object.rs` 已删除，`tests/pool.rs` 已移除） |
 | D-5.2 | `AnimationState` fade 完成后从活动表移除，但下一帧才 `bufferObject` 清场（Animation.ts:199,238） | `StateArena` 立即释放 + generation 失效 | 事件不存 `animationState`（D-4.20），parent/child 引用已解除；无观察面 |
@@ -615,6 +615,12 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-5.4 | listener 可通过 `event.armature.animation` 同步改状态/销毁骨架 | core 监听器只有 `Fn(&EventObject)`，不能取得 `&mut BaseFactory`；Bevy 层转成事件后由后续 system 执行变更 | 避免 `Rc<RefCell<BaseFactory>>` 与借用冲突；不影响数值 golden（无 golden 用 listener 改状态） |
 | D-5.5 | `bufferEvent` / `bufferObject` 的对象身份去重 | 值语义不去重（同值事件保留）；dispose 重复调用由 `lock_update` 幂等 | D-4.33 的延续 |
 | D-5.6 | `Armature.dispose` 的“上锁 + 下一帧清场” | `dispose_armature` = 上锁 + `pending_recycles.push(Armature)`；帧首 `flush_recycles` 做 BFS/clock detach/`on_clear`/`free.push` | 撤销 D-4.31 的一帧提前偏差（`tests/lifecycle.rs`） |
+| D-6.4 | `Slot/Armature::contains_point/intersects_segment` 官方会更新矩阵，Rust 需 `&mut self`；Slot 还需父骨参数 | 已改 `&mut self`（Slot 额外传 `parent: &Bone`）；`Armature.contains_point` 仍返回 bool | P1-3；`tests/bounding_box.rs` |
+| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行，任意路径父骨拓扑 | 阶段 6 实现为 Armature 骨循环前预推进；仅支持 path slot 父骨早于 root、链骨父为 root；其余 warn 跳过 | P1-2 部分；合成夹具 fixed/length/tangent 已对 JS 121 帧全等；剩余拓扑待补 |
+| D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
+| D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
+| D-6.10 | 官方 dbbin 样本无 mesh | 二进制 geometry/weight 只做 source-review；样本 IR/pose 已全等 | P1-1 覆盖限制 |
+| D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
 ### 4.1 阶段 2 必读：IR 量化事实（实测，修正 requirements D1）
 
