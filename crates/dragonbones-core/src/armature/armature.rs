@@ -534,6 +534,24 @@ impl Armature {
 
         // ---- ⑤⑥ 骨骼与插槽更新（:341-350）----
         if *cache_frame_index < 0 || *cache_frame_index != prev_cache_frame_index {
+            // 阶段 6：PathConstraint 预推进（官方在 root 的 Bone.update 内触发；
+            // Rust 在骨循环前完成 root.updateByConstraint + path.update，
+            // 随后 Bone.update 见 localDirty=false 保留矩阵。D-6.5）。
+            for constraint in constraints.iter_mut() {
+                if constraint.path.is_none() {
+                    continue;
+                }
+                let root_idx = constraint.root.index();
+                if root_idx >= bones.len() {
+                    continue;
+                }
+                let (left, rest) = bones.split_at_mut(root_idx);
+                let (root, tail) = rest
+                    .split_first_mut()
+                    .expect("root_idx < bones.len() → rest 非空");
+                constraint.update_path(root, left, tail, slots, *flip_x, *flip_y);
+            }
+
             // :343-345 骨骼——创建序 = sortedBones 拓扑序（F3.2）→ split_at_mut 顺序更新安全。
             // 三段拆分（阶段 3 约束收口）：left = [0,i) 父区、cur = i、tail = (i,n) 后段
             //（约束链骨/target 区，`Bone::update` 与 `constraint.rs` 模块文档借用方案表）

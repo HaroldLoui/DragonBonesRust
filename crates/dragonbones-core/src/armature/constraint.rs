@@ -47,7 +47,7 @@
 //! 本库 4 个 IK 的 target 均为独立效果骨（`sortBones` wait_constraint 还保证
 //! `idx < root`），不可达；偏差登记见阶段 3 报告。
 
-use super::{Bone, BoneIdx, ConstraintIdx};
+use super::{Bone, BoneIdx, ConstraintIdx, PathConstraint, Slot};
 use crate::core::enums::ConstraintType;
 use crate::geom::transform::{PI, normalize_radian};
 use crate::model::{ConstraintData, ConstraintKind};
@@ -86,6 +86,8 @@ pub struct Constraint {
     pub bend_positive: bool,
     /// 运行时类型分派（`BaseFactory._buildConstraints` switch，BaseFactory.ts:229）。
     pub kind: ConstraintType,
+    /// Path 运行时（IK 时为 `None`；P1-2）。
+    pub path: Option<Box<PathConstraint>>,
 }
 
 impl Default for Constraint {
@@ -103,6 +105,7 @@ impl Default for Constraint {
             weight: 1.0,
             bend_positive: false,
             kind: ConstraintType::IK,
+            path: None,
         }
     }
 }
@@ -126,7 +129,7 @@ impl Constraint {
     /// - `root` 下标越界：同上，`sortedBones` ⊆ 骨表。
     ///
     /// `bone`（链骨）解析失败按 TS `getBone → null` 语义降级为单骨 IK（`None`）+ warn。
-    pub fn init(&mut self, data: &ConstraintData, bones: &mut [Bone]) {
+    pub fn init(&mut self, data: &ConstraintData, bones: &mut [Bone], slots: &mut [Slot]) {
         if !self.name.is_empty() {
             return; // TS:186-188 已 init 直接返回
         }
@@ -141,17 +144,23 @@ impl Constraint {
 
         // Path 数据在 `BaseFactory::_buildConstraints` 已被 warn 跳过（BaseFactory.ts
         // :235-239 的 Path 分支阶段 6 接）——此处为防御（TS 两个子类 init 各不相同）。
-        // Path 行为仍 stub（不可达：factory 跳过 Path 数据）。
         let ConstraintKind::IK {
             bend_positive,
             weight,
             ..
         } = &data.kind
         else {
-            log::warn!(
-                "constraint `{}` (type Path) init skipped: Path 阶段 6（P1-2）实现（Constraint.ts:636-668）",
-                data.name
-            );
+            if let Some(path) = PathConstraint::init(data, bones, slots) {
+                self.root = path.root;
+                self.target = path.target;
+                self.path = Some(Box::new(path));
+                bones[self.root.index()].has_constraint = true;
+            } else {
+                log::warn!(
+                    "constraint `{}` (type Path) init failed: path slot/display not found",
+                    data.name
+                );
+            }
             return;
         };
 
@@ -187,6 +196,24 @@ impl Constraint {
 
         // TS:203 ★ 只标 root（`Bone::update` 的 `has_constraint` 触发闸）
         bones[self.root.index()].has_constraint = true;
+    }
+
+    /// Path 预推进（阶段 6）：在骨循环前由 Armature 调用；root 先
+    /// `updateByConstraint`，再交给 [`PathConstraint::update`]。
+    pub fn update_path(
+        &mut self,
+        root: &mut Bone,
+        left: &mut [Bone],
+        right: &mut [Bone],
+        slots: &mut [Slot],
+        flip_x: bool,
+        flip_y: bool,
+    ) {
+        let Some(path) = self.path.as_mut() else {
+            return;
+        };
+        root.update_by_constraint(left, flip_x, flip_y);
+        path.update(root, left, right, slots, flip_x, flip_y);
     }
 
     /// 对齐 `Constraint.update()`（IK 分派 = `Constraint.ts:206-216`；Path 分派 =

@@ -1027,20 +1027,21 @@ impl BaseFactory {
     ///   不进 `armature.constraints`、不标 `has_constraint`）。
     fn _build_constraints(&self, data_package: &BuildArmaturePackage, armature: &mut Armature) {
         let armature_data = data_package.armature(); // TS:227
-        for (name, constraint_data) in &armature_data.constraints {
+        for (_name, constraint_data) in &armature_data.constraints {
             match constraint_data.type_() {
                 ConstraintType::IK => {
                     // TS:231-234 `borrowObject(IKConstraint)` + `init` + `_addConstraint`
                     let mut constraint = Constraint::default(); // 借池对象 → Rust Default（= _onClear 态）
-                    constraint.init(constraint_data, &mut armature.bones); // 含 TS:203 root._hasConstraint = true
+                    constraint.init(constraint_data, &mut armature.bones, &mut armature.slots);
                     armature.add_constraint(constraint); // TS `_addConstraint`
                 }
                 ConstraintType::Path => {
-                    // TS:235-239 的 Path 分支：无素材（"path" 键全无）→ warn 跳过
-                    log::warn!(
-                        "constraint `{}` (type Path) skipped: Path 阶段 6（P1-2）实现（BaseFactory.ts:235-239；F3.1 勘误：Path 素材 0 个）",
-                        name
-                    );
+                    // TS:235-239：建 `PathConstraint` 真身（P1-2）
+                    let mut constraint = Constraint::default();
+                    constraint.init(constraint_data, &mut armature.bones, &mut armature.slots);
+                    if constraint.path.is_some() {
+                        armature.add_constraint(constraint);
+                    }
                 }
             }
         }
