@@ -292,8 +292,10 @@ pub(crate) struct AnimationFrameCache {
 | **D-6.7** | `DragonBonesData.binary`：JSON 路径存打包 IR，dbbin 路径存整份输入字节 | 对齐官方两条路径的不同来源（`_modifyArray` vs `_parseArray`） |
 | **D-6.8** | 数据删除 `remove*/clear` 立即释放，不进入 `pending_recycles` | 模型不池化（D-5.1） |
 | **D-6.9** | `replaceAnimation` 已实现 animation map override + child armature 递归（按目标 skin display.path） | data 不可变；map override 值语义；child 递归由 `tests/replace.rs` 覆盖 |
-| **D-6.10** | 无 dbbin mesh 素材，二进制 geometry/weight 只做 source-review + 合成数组测试 | 样本限制 |
+| **D-6.10** | 无 dbbin mesh 素材；二进制 geometry/weight 只有 source-review，未证明与官方等价 | 不是已发现差异，是覆盖风险；接入 mesh dbbin 前需补样本/合成测试 |
 | **D-6.11** | `Armature.replacedTexture` 不实现（适配层渲染纹理） | TS 中 core 无消费者；阶段 7 由 Bevy 实体承担 |
+| **D-6.12** | 官方 unweighted `_updatePathVertices` 只写前 `ceil(n/2)` 个顶点（循环 `i<pathVertexCount; i+=2`），Rust 写满 `n` 个 | 无权重 Path 的顶点/percent 采样与官方不同；fixed 模式合成对拍仍全等；percent 仅内部单测 |
+| **D-6.13** | 官方 `_updatePathVertices` 的 weighted 分支未实现；Rust 一律按父骨矩阵变换 | 带权重/蒙皮 Path 会得到错误顶点；当前无素材/对拍 |
 
 ---
 

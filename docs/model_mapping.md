@@ -660,11 +660,13 @@ ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文
 | D-6.2 | `ArmatureData.cacheFrameRate` setter 写 data | 每 Armature `runtime_cache_frame_rate` + `FrameCache::initialize`；factory `set_armature_cache_frame_rate` | 不修改 data；factory `cache_rates` 供同名 data/armature 后续 build 继承 |
 | D-6.3 | Bone/Slot `_cachedFrameIndices` 是共享引用 | 从缓存表**克隆**到运行时对象 | 同值；避免生命周期 |
 | D-6.4 | `Slot/Armature::contains_point/intersects_segment` 官方会更新矩阵，Rust 需 `&mut self`；Slot 还需父骨参数 | 已改 `&mut self`（Slot 额外传 `parent: &Bone`）；`Armature.contains_point` 仍返回 bool | P1-3；`tests/bounding_box.rs` |
-| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行；任意 parent 拓扑；官方 unweighted `_updatePathVertices` 按 `i<pathVertexCount; i+=2` 只写一半顶点 | Armature 骨循环前预推进；链骨/path slot 父骨按真实 parent 更新（含 root 之前/之后）；Rust 写满 `vertexCount`（修正官方半写 bug），percent 采样有内部单测 | 3 组 fixed 模式 JS 121 帧全等；percent 无可靠 JS golden（官方路径下为 NaN） |
+| D-6.5 | 官方 PathConstraint 在 root 的 `Bone.update` 约束段内执行；链骨按真实 parent；Rust 在 Armature 骨循环前预推进 | 预推进前先 root.updateByConstraint；链骨/path slot 父骨按真实 parent 更新（含 root 前/后） | 3 组 fixed Path 模式 JS 121 帧全等；多 Path/IK 交叉顺序未验证 |
+| D-6.12 | 官方 unweighted `_updatePathVertices` 循环 `for (i=0; i<pathVertexCount; i+=2)` 只写前 `ceil(n/2)` 个顶点，剩余 `_pathGlobalVertices` 为空洞 | Rust `for i in 0..vertex_count` 写满全部顶点 | 无权重 Path 的 percent/顶点采样与官方不同；fixed 模式合成对拍仍全等；percent 仅内部单测（官方合成 percent 为 NaN） |
+| D-6.13 | 官方 `_updatePathVertices` 的 `weightData !== null` 分支按 geometryBones 权重混合顶点 | Rust 未实现 weight 分支，所有 Path 按 path slot 父骨矩阵直接变换 | 带权重/蒙皮 Path 显示会得到错误顶点；当前无素材、无测试 |
 | D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
 | D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override + child armature 递归已实现（按目标 skin display.path） | `tests/replace.rs` 覆盖 map 与 child 递归 |
-| D-6.10 | 官方 dbbin 样本无 mesh | 二进制 geometry/weight 只做 source-review；样本 IR/pose 已全等 | P1-1 覆盖限制 |
+| D-6.10 | 官方 dbbin 样本无 mesh；不能证明二进制 geometry/weight 与官方等价 | 已按 `BinaryDataParser._parseGeometry` 移植，但只有 source-review，无 JS 对拍 | 不是已发现差异，是未验证风险；接入 mesh dbbin 前需补样本/合成测试 |
 | D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
 ### 4.1 阶段 2 必读：IR 量化事实（实测，修正 requirements D1）
