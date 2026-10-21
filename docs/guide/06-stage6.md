@@ -17,7 +17,7 @@
 | 任务 4 BoundingBox | ✅ | 三种算法 + Slot/Armature 命中；`tests/bounding_box.rs` 对 JS golden（含官方 `B.x/y` bug 锁定） |
 | 任务 5 PathConstraint | ⚠️ 部分 | 合成夹具 fixed/length/tangent 121 帧对 JS 全等；仅覆盖 path slot 父骨在 root 之前、链骨父为 root 的拓扑（D-6.5） |
 | 任务 6 cache | ⏳ 未完成 | 曾接入运行时 rate 但行为未对齐 JS，已整体回退；不得把“只设 rate”当完成 |
-| 任务 7 replace | ⏳ 未开始 | P1-5 仍缺 |
+| 任务 7 replace | ⚠️ 部分 | `replaceDisplay` / `replaceSlotDisplay(List)` / `replaceSkin` 已实现并有夹具测试；`replaceAnimation` 与 `replacedTexture` 未做（D-6.9/D-6.11） |
 | 任务 8 P1 审计 | ⚠️ 部分 | P1-6（ActionData/defaultActions）、P1-7 canvas、P1-8 14 BlendMode 测试已加；P1-9 审计未写 |
 
 > 注意：`preserve_order` 已加入 serde_json feature（dbbin header 的 bone/slot 时间轴顺序依赖 JSON 对象插入序）；阶段 2–5 全量测试与 golden 仍全绿。
@@ -290,7 +290,7 @@ pub(crate) struct AnimationFrameCache {
 | **D-6.6** | dbbin header 用标准 UTF-8 解码（非法字节直接失败或 lossy），不逐字节复刻 `_decodeUTF8` | 官方导出数据合法；非法数据行为登记 |
 | **D-6.7** | `DragonBonesData.binary`：JSON 路径存打包 IR，dbbin 路径存整份输入字节 | 对齐官方两条路径的不同来源（`_modifyArray` vs `_parseArray`） |
 | **D-6.8** | 数据删除 `remove*/clear` 立即释放，不进入 `pending_recycles` | 模型不池化（D-5.1） |
-| **D-6.9** | `replaceAnimation` 的 animation 映射是每 Animation override，不是 data 写回 | data 不可变；语义等价 |
+| **D-6.9** | `replaceAnimation` 未实现（animation override 映射待补）；已实现 replaceDisplay/List/Skin | data 不可变；动画替换需 per-Animation override 与 child 递归 |
 | **D-6.10** | 无 dbbin mesh 素材，二进制 geometry/weight 只做 source-review + 合成数组测试 | 样本限制 |
 | **D-6.11** | `Armature.replacedTexture` 不实现（适配层渲染纹理） | TS 中 core 无消费者；阶段 7 由 Bevy 实体承担 |
 

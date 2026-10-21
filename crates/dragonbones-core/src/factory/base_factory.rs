@@ -986,6 +986,165 @@ impl BaseFactory {
     }
 
     // ------------------------------------------------------------------
+    // 阶段 6：replace（P1-5）
+    // ------------------------------------------------------------------
+
+    /// 对齐 `BaseFactory.replaceDisplay`（BaseFactory.ts:720-748）。
+    pub fn replace_display(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        slot_idx: SlotIdx,
+        display_data: Option<DisplayData>,
+        display_index: i32,
+    ) {
+        let armature = self.armature_mut(armature_idx);
+        let Some(slot) = armature.slots.iter_mut().find(|slot| slot.idx == slot_idx) else {
+            return;
+        };
+        let mut display_index = display_index;
+        if display_index < 0 {
+            display_index = slot.display_index;
+            if display_index < 0 {
+                display_index = 0;
+            }
+        }
+        slot.replace_display_data(display_data.clone(), display_index);
+        let handle = display_data.as_ref().and_then(|display| match display.kind {
+            DisplayKind::Image { .. } => Some(slot.raw_display),
+            DisplayKind::Mesh { .. } => Some(slot.mesh_display),
+            DisplayKind::Armature { .. }
+            | DisplayKind::BoundingBox { .. }
+            | DisplayKind::Path { .. } => None,
+        });
+        slot.replace_display(handle, display_index);
+    }
+
+    /// 对齐 `BaseFactory.replaceSlotDisplay`（BaseFactory.ts:783-796）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn replace_slot_display(
+        &mut self,
+        armature_name: &str,
+        db_name: &str,
+        slot_name: &str,
+        display_name: &str,
+        armature_idx: ArmatureIdx,
+        slot_idx: SlotIdx,
+        display_index: i32,
+    ) -> bool {
+        let display = self
+            .get_armature_data(armature_name, db_name)
+            .and_then(|armature| {
+                armature
+                    .default_skin
+                    .as_deref()
+                    .and_then(|skin_name| armature.get_skin(skin_name))
+            })
+            .and_then(|skin| skin.get_display(slot_name, display_name))
+            .cloned();
+        let Some(display) = display else {
+            return false;
+        };
+        self.replace_display(armature_idx, slot_idx, Some(display), display_index);
+        true
+    }
+
+    /// 对齐 `BaseFactory.replaceSlotDisplayList`（BaseFactory.ts:800-821）。
+    pub fn replace_slot_display_list(
+        &mut self,
+        armature_name: &str,
+        db_name: &str,
+        slot_name: &str,
+        armature_idx: ArmatureIdx,
+        slot_idx: SlotIdx,
+    ) {
+        let displays = self
+            .get_armature_data(armature_name, db_name)
+            .and_then(|armature| {
+                armature
+                    .default_skin
+                    .as_deref()
+                    .and_then(|skin_name| armature.get_skin(skin_name))
+            })
+            .and_then(|skin| skin.get_displays(slot_name))
+            .map(<[Option<DisplayData>]>::to_vec);
+        let Some(displays) = displays else {
+            return;
+        };
+        let armature = self.armature_mut(armature_idx);
+        let Some(slot) = armature.slots.iter_mut().find(|slot| slot.idx == slot_idx) else {
+            return;
+        };
+        slot.set_display_frame_count(displays.len());
+        for (index, display) in displays.into_iter().enumerate() {
+            self.replace_display(armature_idx, slot_idx, display, index as i32);
+        }
+    }
+
+    /// 对齐 `BaseFactory.replaceSkin`（BaseFactory.ts:860-900）。
+    pub fn replace_skin(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        db_name: &str,
+        skin: &SkinData,
+        is_override: bool,
+        exclude: &[&str],
+    ) -> bool {
+        let armature_name = self.armature(armature_idx).armature_name.clone();
+        let default_skin = self
+            .get_armature_data(&armature_name, db_name)
+            .and_then(|armature| {
+                armature
+                    .default_skin
+                    .as_deref()
+                    .and_then(|name| armature.get_skin(name))
+                    .cloned()
+            });
+        let mut success = false;
+        for slot_name in skin.displays.keys() {
+            if exclude.contains(&slot_name.as_str()) {
+                continue;
+            }
+            let displays = skin
+                .get_displays(slot_name)
+                .map(<[Option<DisplayData>]>::to_vec)
+                .or_else(|| {
+                    if is_override {
+                        None
+                    } else {
+                        default_skin
+                            .as_ref()
+                            .and_then(|skin| skin.get_displays(slot_name))
+                            .map(<[Option<DisplayData>]>::to_vec)
+                    }
+                });
+            let armature = self.armature_mut(armature_idx);
+            let Some(slot) = armature
+                .slots
+                .iter_mut()
+                .find(|slot| slot.slot_name == *slot_name)
+            else {
+                continue;
+            };
+            if let Some(displays) = displays {
+                slot.set_display_frame_count(displays.len());
+                for (index, display) in displays.into_iter().enumerate() {
+                    slot.replace_raw_display_data(display.clone(), index as i32);
+                    let handle = display.as_ref().and_then(|display| match display.kind {
+                        DisplayKind::Image { .. } => Some(slot.raw_display),
+                        DisplayKind::Mesh { .. } => Some(slot.mesh_display),
+                        _ => None,
+                    });
+                    slot.replace_display(handle, index as i32);
+                }
+                success = true;
+            } else if is_override {
+                slot.set_display_frame_count(0);
+            }
+        }
+        success
+    }
+
+    // ------------------------------------------------------------------
     // _buildBones / _buildSlots / _buildConstraints（TS:168-252）
     // ------------------------------------------------------------------
 

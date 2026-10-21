@@ -39,6 +39,26 @@
                   "type": "image",
                   "path": "img",
                   "userData": { "ints": [5], "strings": ["display"] }
+                },
+                {
+                  "name": "img2",
+                  "type": "image",
+                  "path": "img2"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "alt",
+          "slot": [
+            {
+              "name": "slot",
+              "display": [
+                {
+                  "name": "altimg",
+                  "type": "image",
+                  "path": "altimg"
                 }
               ]
             }

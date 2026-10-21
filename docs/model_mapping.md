@@ -619,6 +619,7 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行，任意路径父骨拓扑 | 阶段 6 实现为 Armature 骨循环前预推进；仅支持 path slot 父骨早于 root、链骨父为 root；其余 warn 跳过 | P1-2 部分；合成夹具 fixed/length/tangent 已对 JS 121 帧全等；剩余拓扑待补 |
 | D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
+| D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | 未实现；已实现 `replaceDisplay/replaceSlotDisplay(List)/replaceSkin` | P1-5 部分；`tests/replace.rs` |
 | D-6.10 | 官方 dbbin 样本无 mesh | 二进制 geometry/weight 只做 source-review；样本 IR/pose 已全等 | P1-1 覆盖限制 |
 | D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
