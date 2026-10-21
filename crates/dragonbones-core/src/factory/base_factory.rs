@@ -108,6 +108,8 @@ pub struct BaseFactory {
     /// TS 的 `static _objectParser/_binaryParser` 惰性单例（:47-48）→ Rust 每工厂一个
     /// 实例（笔记 A.2-1 允许；JS 共享语义在单工厂场景等价）。
     pub parser: ObjectDataParser,
+    /// 阶段 6：data/armature → cacheFrameRate，供之后 build 的同名骨架继承（D-6.2）。
+    pub cache_rates: HashMap<(String, String), f64>,
     // TODO 阶段 6（P1-5）: `BinaryDataParser`（TS:354 `rawData instanceof ArrayBuffer`
     //   强制走二进制 parser）——Rust 侧无此实现（阶段 2 只做 JSON 路径）。
 }
@@ -145,6 +147,7 @@ impl Default for BaseFactory {
             pending_recycles: Vec::new(),
             event_manager: None,
             parser: ObjectDataParser::default(),
+            cache_rates: HashMap::new(),
         }
     }
 }
@@ -987,6 +990,11 @@ impl BaseFactory {
 
     /// 阶段 6：`Armature.cacheFrameRate` setter（D-6.2）。
     pub fn set_armature_cache_frame_rate(&mut self, idx: ArmatureIdx, rate: f64) {
+        let key = {
+            let armature = self.armature(idx);
+            (armature.data.name.clone(), armature.armature_name.clone())
+        };
+        self.cache_rates.insert(key, rate);
         self.armature_mut(idx).set_cache_frame_rate(rate);
     }
 
@@ -1623,6 +1631,15 @@ impl BaseFactory {
 
         // TS:712-713（F3.11：先 invalidUpdate(null, true) 再 advanceTime(0.0)，
         // 漏了静姿态不算——guide 坑 7）
+        // 阶段 6：同 data/armature 之前设置的 cacheFrameRate 由新 build 继承（D-6.2）。
+        let inherited_rate = self
+            .cache_rates
+            .get(&(data_package.data.name.clone(), armature.armature_name.clone()))
+            .copied();
+        if let Some(rate) = inherited_rate {
+            armature.set_cache_frame_rate(rate);
+        }
+
         self.armatures[idx.index()] = Some(armature); // 入 arena（此刻槽必空：新号或 free 取出）
         self.armature_mut(idx).invalid_update(None, true); // TS:712
         self.advance_one(idx, 0.0); // TS:713 `armature.advanceTime(0.0)`（F3.11）

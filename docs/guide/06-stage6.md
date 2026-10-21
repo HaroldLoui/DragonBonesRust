@@ -16,7 +16,7 @@
 | 任务 3 IR 打包 | ✅ | `IrArrays::to_binary`；`tests/ir_binary.rs` 8 素材与 JS `data.binary` 逐字节相等 |
 | 任务 4 BoundingBox | ✅ | 三种算法 + Slot/Armature 命中；`tests/bounding_box.rs` 对 JS golden（含官方 `B.x/y` bug 锁定） |
 | 任务 5 PathConstraint | ✅（fixed 位置模式） | 3 组 fixed 模式（length/tangent、fixed/chain、fixed/chainScale）121 帧对 JS 全等；`percent` 位置模式因合成夹具产生 JS NaN，未覆盖（D-6.5） |
-| 任务 6 cache | ✅ | per-Armature `FrameCache` + `cachedFrames` + Bone/Slot set/get；`tests/cache.rs` Dragon walk 121 帧对 JS 全等（D-6.1/D-6.2/D-6.3） |
+| 任务 6 cache | ✅ | per-Armature `FrameCache` + `cachedFrames` + Bone/Slot set/get + child/后续 build rate 继承；`tests/cache.rs` Dragon walk 121 帧对 JS 全等（D-6.1/D-6.2/D-6.3） |
 | 任务 7 replace | ✅（除 child 递归/渲染纹理） | `replaceDisplay` / `replaceSlotDisplay(List)` / `replaceSkin` / `replaceAnimation` map override 已实现；`replacedTexture` 与 child 递归属阶段 7/后续（D-6.9/D-6.11） |
 | 任务 8 P1 审计 | ✅ | P1-6/7/8 测试 + P1-9 `tests/dirty_flags.rs`（lock/zIndex/alpha） |
 

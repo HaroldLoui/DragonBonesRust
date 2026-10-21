@@ -657,7 +657,7 @@ ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文
 | D-5.5 | `bufferEvent` / `bufferObject` 的对象身份去重 | 值语义不去重（同值事件保留）；dispose 重复调用由 `lock_update` 幂等 | D-4.33 的延续 |
 | D-5.6 | `Armature.dispose` 的“上锁 + 下一帧清场” | `dispose_armature` = 上锁 + `pending_recycles.push(Armature)`；帧首 `flush_recycles` 做 BFS/clock detach/`on_clear`/`free.push` | 撤销 D-4.31 的一帧提前偏差（`tests/lifecycle.rs`） |
 | D-6.1 | 官方缓存帧表存放在共享 `DragonBonesData/AnimationData` | per-Armature `FrameCache`（`frames` 扁平 10 f64/槽 + 每动画 `cachedFrames`/bone/slot 索引表） | data 不可变（D-3.3）；数值对拍 `tests/cache.rs` 121 帧全等 |
-| D-6.2 | `ArmatureData.cacheFrameRate` setter 写 data | 每 Armature `runtime_cache_frame_rate` + `FrameCache::initialize`；factory `set_armature_cache_frame_rate` | 不修改 data；新 build 不自动继承历史 rate（待补） |
+| D-6.2 | `ArmatureData.cacheFrameRate` setter 写 data | 每 Armature `runtime_cache_frame_rate` + `FrameCache::initialize`；factory `set_armature_cache_frame_rate` | 不修改 data；factory `cache_rates` 供同名 data/armature 后续 build 继承 |
 | D-6.3 | Bone/Slot `_cachedFrameIndices` 是共享引用 | 从缓存表**克隆**到运行时对象 | 同值；避免生命周期 |
 | D-6.4 | `Slot/Armature::contains_point/intersects_segment` 官方会更新矩阵，Rust 需 `&mut self`；Slot 还需父骨参数 | 已改 `&mut self`（Slot 额外传 `parent: &Bone`）；`Armature.contains_point` 仍返回 bool | P1-3；`tests/bounding_box.rs` |
 | D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行；任意链骨 parent 拓扑 | Armature 骨循环前预推进；链骨按真实 parent 更新；path slot 父骨可早于 root；`percent` 位置模式无有效合成样本 | 3 组 fixed 模式 JS 121 帧全等；`percent` 未验收 |

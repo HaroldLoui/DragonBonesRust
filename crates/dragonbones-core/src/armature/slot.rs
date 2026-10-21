@@ -1111,9 +1111,7 @@ impl Slot {
                             // :551 Set child armature cache frameRate.
                             let cache_frame_rate = ctx.cache_frame_rate; // :552
                             if cache_frame_rate != 0.0 {
-                                // TODO 阶段 6（P1-4）: child.cacheFrameRate = cacheFrameRate
-                                // （Slot.ts:554 → `ArmatureData.cacheFrames` setter 写数据，
-                                // 阶段 3 无对应字段，按任务约定跳过）
+                                child.set_cache_frame_rate(cache_frame_rate); // :554
                             }
                         }
 
