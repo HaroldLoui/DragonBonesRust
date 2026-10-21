@@ -442,6 +442,7 @@ mod tests {
             constraints: &mut constraints,
             actions: &mut actions,
             cache_frame_index: &mut cache_frame_index,
+            frame_cache: None,
             alpha_dirty: &mut alpha_dirty,
             slots_dirty: &mut slots_dirty,
             z_order_dirty: &mut z_order_dirty,

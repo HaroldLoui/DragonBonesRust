@@ -530,13 +530,34 @@ impl AnimationState {
 
         // AnimationState.ts:859-866：缓存帧判定保持在 zOrder 更新之后。
         let mut update_timelines = true;
+        let mut update_bone_timeline = true;
         if is_cache_enabled && let Some(action_timeline) = self.action_timeline.as_ref() {
             let cache_frame_index =
                 (action_timeline.base.current_time * cache_frame_rate).floor() as i32;
             if *context.cache_frame_index == cache_frame_index {
                 update_timelines = false;
+                update_bone_timeline = false;
             } else {
                 *context.cache_frame_index = cache_frame_index;
+                let animation_name = self.animation_name.clone();
+                if let Some(cache) = context
+                    .frame_cache
+                    .as_mut()
+                    .and_then(|cache| cache.animation_mut(&animation_name))
+                {
+                    if cache
+                        .cached_frames
+                        .get(cache_frame_index as usize)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        update_bone_timeline = false;
+                    } else if let Some(entry) =
+                        cache.cached_frames.get_mut(cache_frame_index as usize)
+                    {
+                        *entry = true;
+                    }
+                }
             }
         }
 
@@ -549,7 +570,13 @@ impl AnimationState {
                     current_play_times: timeline.base.current_play_times,
                     current_time: timeline.base.current_time,
                 });
-            super::timeline_states::update::update_groups(self, context, blend_states, action_time);
+            super::timeline_states::update::update_groups(
+                self,
+                context,
+                blend_states,
+                action_time,
+                update_bone_timeline,
+            );
         }
 
         self.finish_advance();
@@ -1194,7 +1221,7 @@ mod tests {
         state.fade_state = FadeState::Complete;
         state.sub_fade_state = SubFadeState::Fading;
         fixture.with_context(|context| {
-            update::update_groups(&mut state, context, &mut blend_states, None);
+            update::update_groups(&mut state, context, &mut blend_states, None, true);
         });
         assert_eq!(
             fixture.bones[1].animation_pose, Transform::default(),

@@ -985,6 +985,11 @@ impl BaseFactory {
             .expect("armature arena slot empty (never built or disposed)")
     }
 
+    /// 阶段 6：`Armature.cacheFrameRate` setter（D-6.2）。
+    pub fn set_armature_cache_frame_rate(&mut self, idx: ArmatureIdx, rate: f64) {
+        self.armature_mut(idx).set_cache_frame_rate(rate);
+    }
+
     // ------------------------------------------------------------------
     // 阶段 6：replace（P1-5）
     // ------------------------------------------------------------------
@@ -1142,6 +1147,28 @@ impl BaseFactory {
             }
         }
         success
+    }
+
+    /// 对齐 `BaseFactory.replaceAnimation`（BaseFactory.ts:939-984）的 animation map 部分。
+    ///
+    /// child armature 递归与 `defaultSkin` 校验暂未做（D-6.9）。
+    pub fn replace_animation(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        db_name: &str,
+        target_armature_name: &str,
+        is_override: bool,
+    ) -> bool {
+        let animations = self
+            .get_armature_data(target_armature_name, db_name)
+            .map(|armature| armature.animations.clone());
+        let Some(animations) = animations else {
+            return false;
+        };
+        self.armature_mut(armature_idx)
+            .animation
+            .replace_animations(animations, is_override);
+        true
     }
 
     // ------------------------------------------------------------------

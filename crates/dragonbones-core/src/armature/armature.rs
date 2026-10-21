@@ -10,6 +10,7 @@
 
 use super::bone::Bone;
 use super::constraint::Constraint;
+use super::frame_cache::FrameCache;
 use super::i_armature_proxy::ArmatureProxy;
 use super::slot::{Slot, SlotUpdateCtx};
 use super::{ArmatureIdx, BoneIdx, ConstraintIdx, DisplayHandle, RuntimeCtx, SlotIdx};
@@ -53,8 +54,12 @@ pub struct Armature {
     pub flip_x: bool,
     /// 对齐 `_flipY`（Armature.ts:83），`_onClear` = false（:164）。
     pub flip_y: bool,
-    /// 对齐 `_cacheFrameIndex`（Armature.ts:87），`_onClear` = -1（:165）；阶段 3 恒 -1（P1-4 阶段 6）。
+    /// 对齐 `_cacheFrameIndex`（Armature.ts:87），`_onClear` = -1（:165）。
     pub cache_frame_index: i32,
+    /// 阶段 6：运行时 cacheFrameRate（D-6.2）。
+    pub runtime_cache_frame_rate: f64,
+    /// 阶段 6：per-Armature 缓存帧（D-6.1）。
+    pub frame_cache: FrameCache,
     /// 对齐 `_alpha`（Armature.ts:88），`_onClear` = 1.0（:166）。
     pub alpha: f64,
     /// 对齐 `_globalAlpha`（Armature.ts:92），`_onClear` = 1.0（:167）。
@@ -115,6 +120,8 @@ impl Armature {
             flip_x: false,               // :163
             flip_y: false,               // :164
             cache_frame_index: -1,       // :165
+            runtime_cache_frame_rate: 0.0,
+            frame_cache: FrameCache::default(),
             alpha: 1.0,                  // :166
             global_alpha: 1.0,           // :167
             bones: Vec::new(),           // :168
@@ -162,11 +169,24 @@ impl Armature {
         self.clock
     }
 
-    /// 对齐 `Armature.cacheFrameRate` getter（Armature.ts:765-767，读 data）。
-    /// TODO 阶段 6（P1-4）：setter（:768-780 `armatureData.cacheFrames` + 子骨架递归）。
+    /// 对齐 `Armature.cacheFrameRate` getter（Armature.ts:765-767）。
     #[must_use]
     pub fn cache_frame_rate(&self) -> f64 {
-        self.armature_data().cache_frame_rate
+        self.runtime_cache_frame_rate
+    }
+
+    /// 阶段 6：setter；按官方 `cacheFrames` 初始化 per-Armature 表（D-6.1/D-6.2）。
+    pub fn set_cache_frame_rate(&mut self, value: f64) {
+        self.runtime_cache_frame_rate = value.max(0.0);
+        if value > 0.0 {
+            let armature_data = self
+                .data
+                .armatures
+                .get(&self.armature_name)
+                .expect("armature data");
+            self.frame_cache.initialize(armature_data, value);
+            self.animation.mark_animation_dirty();
+        }
     }
 
     /// 对齐 `Armature.getBone(name)`（Armature.ts:589，线性遍历按名找）。
@@ -403,6 +423,7 @@ impl Armature {
             global_alpha,
             parent,
             cache_frame_index,
+            frame_cache,
             bones,
             slots,
             constraints,
@@ -427,6 +448,7 @@ impl Armature {
                 constraints,
                 actions,
                 cache_frame_index,
+                frame_cache: Some(frame_cache),
                 alpha_dirty,
                 slots_dirty,
                 z_order_dirty,
@@ -565,6 +587,7 @@ impl Armature {
                     left,
                     tail,
                     constraints,
+                    &mut frame_cache.frames,
                     *flip_x,
                     *flip_y,
                 );
@@ -583,6 +606,7 @@ impl Armature {
                     // TS 循环内读 `armature.cacheFrameRate`（Slot.ts:552）；data
                     // advance 期间不可变 → 解构前预取等价
                     cache_frame_rate,
+                    cache_frames: &mut frame_cache.frames,
                 };
                 slot.update(*cache_frame_index, &mut slot_ctx, world);
             }
@@ -724,6 +748,8 @@ impl Armature {
         self.flip_x = false; // :163
         self.flip_y = false; // :164
         self.cache_frame_index = -1; // :165
+        self.runtime_cache_frame_rate = 0.0;
+        self.frame_cache = FrameCache::default();
         self.alpha = 1.0; // :166
         self.global_alpha = 1.0; // :167
         self.bones.clear(); // :168（成员已 on_clear；drop = 随 arena 回收）

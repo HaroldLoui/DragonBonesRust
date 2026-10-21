@@ -258,9 +258,10 @@ pub struct SlotUpdateCtx<'a> {
     pub armature: ArmatureIdx,
     /// 自身骨架当前 clock；Slot.ts:549 将其继承给新 child armature。
     pub clock: Option<ClockId>,
-    /// 自身骨架 cacheFrameRate（Slot.ts:552 `this._armature.cacheFrameRate`；
-    /// 阶段 3 data 未设 cacheFrames 时为 0）。
+    /// 自身骨架 cacheFrameRate（Slot.ts:552 `this._armature.cacheFrameRate`）。
     pub cache_frame_rate: f64,
+    /// 阶段 6：per-Armature 缓存帧扁平数组（D-6.1）。
+    pub cache_frames: &'a mut Vec<f64>,
 }
 
 /// 对齐 `Slot extends TransformObject`（Slot.ts:164 类声明行，实测）。
@@ -693,19 +694,59 @@ impl Slot {
                 self.update_global_transform_matrix(is_cache, ctx.parent); // :771
 
                 if is_cache && self.cached_frame_indices.is_some() {
-                    // :773-775 `_armatureData.setCacheFrame(...)` 写缓存表——
-                    // P1-4（阶段 6）；阶段 3 不可达（见 ⑩ 分支守卫）。
-                    unreachable!("P1-4 阶段 6：ArmatureData::setCacheFrame");
+                    let offset = self.set_cache_frame(ctx.cache_frames);
+                    if let Some(indices) = self.cached_frame_indices.as_mut() {
+                        indices[cache_frame_index as usize] = offset;
+                    }
                 }
             } else {
-                // :777-778 `_armatureData.getCacheFrame(...)` 直接读——P1-4（阶段 6）；
-                // `cached_frame_index >= 0` 只在 ⑩ 缓存分支被写入（阶段 3 恒 None）→ 不可达。
-                unreachable!("P1-4 阶段 6：ArmatureData::getCacheFrame");
+                let offset = self.cached_frame_index;
+                self.get_cache_frame(ctx.cache_frames, offset);
             }
 
             self.adapter.update_transform(); // :781 abstract（引擎把矩阵应用到显示对象）
             self.transform_dirty = false; // :782
         }
+    }
+
+    /// 对齐 `ArmatureData.setCacheFrame` 的 Slot 写点（10 个 f64）。
+    fn set_cache_frame(&self, frames: &mut Vec<f64>) -> i32 {
+        let offset = frames.len() as i32;
+        let matrix = self.global_transform_matrix;
+        let transform = self.global;
+        frames.extend_from_slice(&[
+            matrix.a,
+            matrix.b,
+            matrix.c,
+            matrix.d,
+            matrix.tx,
+            matrix.ty,
+            transform.rotation,
+            transform.skew,
+            transform.scale_x,
+            transform.scale_y,
+        ]);
+        offset
+    }
+
+    /// 对齐 `ArmatureData.getCacheFrame` 的 Slot 读点。
+    fn get_cache_frame(&mut self, frames: &[f64], offset: i32) {
+        let offset = offset as usize;
+        let Some(values) = frames.get(offset..offset + 10) else {
+            return;
+        };
+        self.global_transform_matrix.a = values[0];
+        self.global_transform_matrix.b = values[1];
+        self.global_transform_matrix.c = values[2];
+        self.global_transform_matrix.d = values[3];
+        self.global_transform_matrix.tx = values[4];
+        self.global_transform_matrix.ty = values[5];
+        self.global.rotation = values[6];
+        self.global.skew = values[7];
+        self.global.scale_x = values[8];
+        self.global.scale_y = values[9];
+        self.global.x = self.global_transform_matrix.tx;
+        self.global.y = self.global_transform_matrix.ty;
     }
 
     /// 对齐 `_updateAlpha()`（Slot.ts:374-381）——`Armature::advance_time` 的
@@ -1703,6 +1744,7 @@ mod tests {
 
         let bone = Bone::default();
         let mut actions = Vec::new();
+        let mut cache_frames = Vec::new();
         let mut ctx = SlotUpdateCtx {
             parent: &bone,
             bones: &[],
@@ -1710,6 +1752,7 @@ mod tests {
             armature: parent_idx,
             clock: Some(ClockId(99)), // 无效 ClockId，强制时钟迁移失败
             cache_frame_rate: 0.0,
+            cache_frames: &mut cache_frames,
         };
 
         {

@@ -16,6 +16,7 @@
 pub mod armature;
 pub mod bone;
 pub mod constraint;
+pub mod frame_cache;
 pub mod i_armature_proxy;
 pub mod path_constraint;
 pub mod runtime_ctx;
@@ -26,6 +27,7 @@ pub mod transform_object;
 pub use armature::Armature;
 pub use bone::Bone;
 pub use constraint::Constraint;
+pub use frame_cache::{AnimationFrameCache, FrameCache};
 pub use i_armature_proxy::{ArmatureProxy, DbEventListener, ListenerId, NullArmatureProxy};
 pub use path_constraint::PathConstraint;
 pub use runtime_ctx::{RuntimeCtx, RuntimeCtxError};

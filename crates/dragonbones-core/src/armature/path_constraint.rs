@@ -159,15 +159,14 @@ impl PathConstraint {
                 log::warn!("PathConstraint: chain bone before root is unsupported (D-6.5)");
                 continue;
             };
-            let Some(bone) = right.get_mut(pos) else {
+            let Some(bone) = right.get(pos) else {
                 log::warn!("PathConstraint: chain bone out of right slice (D-6.5)");
                 continue;
             };
-            if bone.parent != Some(root.idx) {
-                log::warn!("PathConstraint: chain parent != root unsupported (D-6.5)");
+            if bone.parent.is_none() {
                 continue;
             }
-            bone.update_by_constraint_resolved(Some(root), None, flip_x, flip_y);
+            update_chain_bone(right, root, pos, flip_x, flip_y);
         }
         // path slot 父骨可能早于 root（夹具即 world root），先更新它。
         let path_parent_idx = slots[slot_pos].parent;
@@ -337,10 +336,10 @@ impl PathConstraint {
             let Some(pos) = bone_idx.index().checked_sub(root.idx.index() + 1) else {
                 continue;
             };
+            update_chain_bone(right, root, pos, flip_x, flip_y);
             let Some(bone) = right.get_mut(pos) else {
                 continue;
             };
-            bone.update_by_constraint_resolved(Some(root), None, flip_x, flip_y);
             sample_bone!(bone, i);
         }
         self.dirty = false;
@@ -647,14 +646,41 @@ impl PathConstraint {
     }
 }
 
+fn update_chain_bone(
+    right: &mut [Bone],
+    root: &mut Bone,
+    pos: usize,
+    flip_x: bool,
+    flip_y: bool,
+) {
+    let Some(parent_idx) = right.get(pos).and_then(|bone| bone.parent) else {
+        return;
+    };
+    if parent_idx == root.idx {
+        right[pos].update_by_constraint_resolved(Some(root), None, flip_x, flip_y);
+        return;
+    }
+    if parent_idx.index() <= root.idx.index() {
+        return;
+    }
+    let parent_pos = parent_idx.index() - root.idx.index() - 1;
+    if parent_pos >= pos {
+        return;
+    }
+    let (pre, tail) = right.split_at_mut(pos);
+    let (_, parent_tail) = pre.split_at_mut(parent_pos);
+    if let (Some(parent), Some(bone)) = (parent_tail.first_mut(), tail.first_mut()) {
+        bone.update_by_constraint_resolved(Some(parent), None, flip_x, flip_y);
+    }
+}
+
 struct PathInfo {
     closed: bool,
     constant_speed: bool,
     curve_lengths: Vec<f64>,
 }
 
-fn slot_raw_display(slot: &Slot) -> Option<crate::model::DisplayData> {
-    let index = slot
+fn slot_raw_display(slot: &Slot) -> Option<crate::model::DisplayData> {    let index = slot
         .display_frame
         .or_else(|| (!slot.display_frames.is_empty()).then_some(0))?;
     slot.display_frames

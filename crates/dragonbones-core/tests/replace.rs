@@ -135,3 +135,12 @@ fn replace_skin_override_and_exclude() {
     assert!(!factory.replace_skin(armature, "features", &alt, true, &["slot"]));
     assert_eq!(display_names(&factory, armature), ["img", "img2"]);
 }
+#[test]
+fn replace_animation_override_replaces_map() {
+    let (mut factory, armature) = build_features();
+    assert!(factory.replace_animation(armature, "features", "alt_source", true));
+    let animation = &factory.armature(armature).animation;
+    assert!(animation.has_animation("wave"));
+    assert!(!animation.has_animation("idle"));
+    assert_eq!(animation.animation_data("wave").unwrap().duration, 0.5);
+}

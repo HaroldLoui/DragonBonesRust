@@ -73,6 +73,13 @@
           "userData": { "ints": [6], "strings": ["animation"] }
         }
       ]
+    },
+    {
+      "type": "Armature",
+      "name": "alt_source",
+      "frameRate": 24,
+      "bone": [{ "name": "root" }],
+      "animation": [{ "name": "wave", "duration": 12 }]
     }
   ]
 }

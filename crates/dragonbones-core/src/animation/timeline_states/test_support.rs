@@ -323,6 +323,7 @@ impl CtxFixture {
             constraints,
             actions,
             cache_frame_index,
+            frame_cache: None,
             alpha_dirty,
             slots_dirty,
             z_order_dirty,

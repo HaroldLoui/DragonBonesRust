@@ -16,6 +16,7 @@ pub(crate) fn update_groups(
     context: &mut AnimationUpdateCtx<'_>,
     blend_states: &mut HashMap<BlendStateKey, BlendState>,
     action_time: Option<ActionTimelineTime>,
+    update_bone_timeline: bool,
 ) {
     let state_time = state.time;
     let play_times = state.play_times;
@@ -37,6 +38,9 @@ pub(crate) fn update_groups(
         let mut previous_bone_blend = false;
 
         for timeline in timelines {
+            if !update_bone_timeline && matches!(timeline.target, TimelineTarget::Bone(_)) {
+                continue;
+            }
             let active =
                 timeline.base.play_state <= super::super::timeline_state::TimelinePlayState::Play;
             if active {

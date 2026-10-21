@@ -286,12 +286,14 @@ impl Bone {
     /// # Panics
     /// - 与改写前相同（父骨越界 expect、P1-4 缓存帧 `unreachable!`）；新增
     ///   约束段的链骨越界/`chain ≤ root` panic 见 [`Constraint::update`]。
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         cache_frame_index: i32,
         left: &mut [Bone],
         right: &mut [Bone],
         constraints: &mut [Constraint],
+        cache_frames: &mut Vec<f64>,
         flip_x: bool,
         flip_y: bool,
     ) {
@@ -396,19 +398,14 @@ impl Bone {
                 }
 
                 if is_cache && self.cached_frame_indices.is_some() {
-                    // :427-429 / Surface:549-550 `_armatureData.setCacheFrame(...)`
-                    // （ArmatureData.ts:282-301）——阶段 3 不可达：isCache 为真要求
-                    // cache_frame_index ≥ 0，而活路径里 :411 在脏时必把它改写成 -1；
-                    // 未脏则根本进不到本段。★ 注意分支①（Bone.ts:366-400）**不改写**
-                    // 入参 cacheFrameIndex（只有 :411 改写）→ 阶段 6 打开
-                    // `cached_frame_indices` 后，从分支①带着 cacheFrameIndex ≥ 0 走到
-                    // 本段是**可到达路径**（届时接 setCacheFrame），勿误判恒不可达。
-                    unreachable!("P1-4：阶段 6 实现缓存帧（ArmatureData::setCacheFrame）");
+                    let offset = self.set_cache_frame(cache_frames);
+                    if let Some(indices) = self.cached_frame_indices.as_mut() {
+                        indices[cache_frame_index as usize] = offset;
+                    }
                 }
             } else {
-                // :431-432 / Surface:553-554 `_armatureData.getCacheFrame(...)`——同上
-                // 不可达：cached_frame_index ≥ 0 只在①缓存分支被写入（阶段 3 恒 None）。
-                unreachable!("P1-4：阶段 6 实现缓存帧（ArmatureData::getCacheFrame）");
+                let offset = self.cached_frame_index;
+                self.get_cache_frame(cache_frames, offset);
             }
 
             if is_surface {
@@ -423,6 +420,46 @@ impl Bone {
 
         // ---------- ③ 尾部重置（:440 / Surface:585）----------
         self.local_dirty = true; // ★★ 不是 false！每次 update 结束重新武装 localDirty（F3.6）
+    }
+
+    /// 对齐 `ArmatureData.setCacheFrame` 的 Bone 写点（10 个 f64）。
+    fn set_cache_frame(&self, frames: &mut Vec<f64>) -> i32 {
+        let offset = frames.len() as i32;
+        let matrix = self.global_transform_matrix;
+        let transform = self.global;
+        frames.extend_from_slice(&[
+            matrix.a,
+            matrix.b,
+            matrix.c,
+            matrix.d,
+            matrix.tx,
+            matrix.ty,
+            transform.rotation,
+            transform.skew,
+            transform.scale_x,
+            transform.scale_y,
+        ]);
+        offset
+    }
+
+    /// 对齐 `ArmatureData.getCacheFrame` 的 Bone 读点。
+    fn get_cache_frame(&mut self, frames: &[f64], offset: i32) {
+        let offset = offset as usize;
+        let Some(values) = frames.get(offset..offset + 10) else {
+            return;
+        };
+        self.global_transform_matrix.a = values[0];
+        self.global_transform_matrix.b = values[1];
+        self.global_transform_matrix.c = values[2];
+        self.global_transform_matrix.d = values[3];
+        self.global_transform_matrix.tx = values[4];
+        self.global_transform_matrix.ty = values[5];
+        self.global.rotation = values[6];
+        self.global.skew = values[7];
+        self.global.scale_x = values[8];
+        self.global.scale_y = values[9];
+        self.global.x = self.global_transform_matrix.tx;
+        self.global.y = self.global_transform_matrix.ty;
     }
 
     /// `Bone::update` ① 的约束段（Bone.ts:376-382 / :402-408；Surface.ts:493-499 /
@@ -1110,7 +1147,7 @@ mod tests {
             // 任务 6 advance_time 的借用形态（F3.2 拓扑序 + 阶段 3 约束三段拆分）
             let (left, right) = bones.split_at_mut(i);
             let (cur, tail) = right.split_first_mut().expect("split_at_mut(i) 后右段非空");
-            cur.update(-1, left, tail, &mut [], false, false);
+            cur.update(-1, left, tail, &mut [], &mut Vec::new(), false, false);
         }
 
         // root：无父 → TS:301-329，global = origin（Additive/yDown），不置 globalDirty

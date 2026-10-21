@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::armature::{ArmatureIdx, ArmatureProxy, Bone, Constraint, RuntimeCtx, Slot};
+use indexmap::IndexMap;
+
+use crate::armature::{ArmatureIdx, ArmatureProxy, Bone, Constraint, FrameCache, RuntimeCtx, Slot};
 use crate::core::enums::AnimationFadeOutMode;
 use crate::event::EventObject;
 use crate::model::{AnimationConfig, AnimationData, ArmatureData, DragonBonesData};
@@ -24,6 +26,7 @@ pub(crate) struct AnimationUpdateCtx<'a> {
     pub constraints: &'a mut [Constraint],
     pub actions: &'a mut Vec<EventObject>,
     pub cache_frame_index: &'a mut i32,
+    pub frame_cache: Option<&'a mut FrameCache>,
     pub alpha_dirty: &'a mut bool,
     pub slots_dirty: &'a mut bool,
     pub z_order_dirty: &'a mut bool,
@@ -104,6 +107,7 @@ pub struct Animation {
     /// `cachedFrameIndices` 挂载（`Animation.ts:204-228`）。
     /// TODO P1-4：阶段 6 接入 `bone/slot._cachedFrameIndices` 时消费并清除；
     /// 当前仅写，`cache_frame_rate == 0` 时官方也永不消费（`:207`）。
+    animations_override: Option<IndexMap<String, AnimationData>>,
     animation_dirty: bool,
     cache_frame_invalidated: bool,
 }
@@ -122,6 +126,7 @@ impl Default for Animation {
             pending_child_animations: Vec::new(),
             time_scale: 1.0,
             inherit_time_scale: 1.0,
+            animations_override: None,
             animation_dirty: false,
             cache_frame_invalidated: false,
         }
@@ -160,6 +165,9 @@ impl Animation {
     /// Resolves immutable animation data by name.
     #[must_use]
     pub fn animation_data(&self, name: &str) -> Option<&AnimationData> {
+        if let Some(animations) = self.animations_override.as_ref() {
+            return animations.get(name);
+        }
         self.armature_data()?.get_animation(name)
     }
 
@@ -172,6 +180,27 @@ impl Animation {
     pub fn animation_config(&mut self) -> &mut AnimationConfig {
         self.animation_config.clear();
         &mut self.animation_config
+    }
+
+    /// 阶段 6：对齐 `Animation.animations` 的替换（`replaceAnimation`）。
+    ///
+    /// data 不可变 → 每 Animation 保存 override map（D-6.9）。
+    pub fn replace_animations(
+        &mut self,
+        animations: IndexMap<String, AnimationData>,
+        is_override: bool,
+    ) {
+        if is_override {
+            self.animations_override = Some(animations);
+        } else {
+            let map = self
+                .animations_override
+                .get_or_insert_with(IndexMap::new);
+            for (name, animation) in animations {
+                map.insert(name, animation);
+            }
+        }
+        self.animation_dirty = true;
     }
 
     fn armature_data(&self) -> Option<&crate::model::ArmatureData> {
@@ -294,6 +323,8 @@ impl Animation {
         self.time_scale = 1.0;
         self.inherit_time_scale = 1.0;
         self.pending_child_animations.clear();
+        self.animations_override = None;
+        self.animation_dirty = false;
     }
 
     /// Advances Animation-level time scaling and each active AnimationState.
@@ -406,17 +437,41 @@ impl Animation {
 
         let ids = self.play_order.clone();
         let state_count = ids.len();
+        let animation_name = ids
+            .first()
+            .and_then(|id| self.states.get(*id))
+            .map(|state| state.animation_name.clone())
+            .unwrap_or_default();
         let cache_frame_rate = if state_count == 1 {
-            self.states
-                .get(ids[0])
-                .and_then(|state| state.action_timeline.as_ref())
-                .and_then(|timeline| timeline.source.animation_data())
-                .map_or(0.0, |animation_data| animation_data.cache_frame_rate)
+            context
+                .frame_cache
+                .as_ref()
+                .and_then(|cache| cache.animation(&animation_name))
+                .map_or(0.0, |cache| cache.rate)
         } else {
             // Animation.ts:250/262：多状态恒传 cacheFrameRate=0，且帧号归 -1。
             *context.cache_frame_index = -1;
             0.0
         };
+        if self.animation_dirty && cache_frame_rate > 0.0 {
+            if let Some(cache) = context
+                .frame_cache
+                .as_deref()
+                .and_then(|cache| cache.animation(&animation_name))
+            {
+                for bone in context.bones.iter_mut() {
+                    if let Some(indices) = cache.bone_indices.get(&bone.bone_name) {
+                        bone.cached_frame_indices = Some(indices.clone());
+                    }
+                }
+                for slot in context.slots.iter_mut() {
+                    if let Some(indices) = cache.slot_indices.get(&slot.slot_name) {
+                        slot.cached_frame_indices = Some(indices.clone());
+                    }
+                }
+            }
+            self.animation_dirty = false;
+        }
         let mut remove = Vec::new();
         let mut events = Vec::new();
         for id in ids {
@@ -636,7 +691,11 @@ impl Animation {
     pub fn play_config(&mut self, config: &mut AnimationConfig) -> Option<StateId> {
         let data = self.data.as_ref()?.clone();
         let armature_data = data.armatures.get(&self.armature_name)?;
-        let Some(animation_data) = armature_data.animations.get(&config.animation) else {
+        let animation_source = match self.animations_override.as_ref() {
+            Some(animations) => animations.get(&config.animation),
+            None => armature_data.animations.get(&config.animation),
+        };
+        let Some(animation_data) = animation_source.cloned() else {
             log::warn!("non-existent animation `{}`", config.animation);
             return None;
         };
@@ -698,7 +757,7 @@ impl Animation {
         // 即使 StateArena 复用刚释放的槽位，新值也不携带旧 fade/playhead 残留。
         let mut state = AnimationState::default();
         let armature_idx = self.armature?;
-        state.init(armature_idx, animation_data, config);
+        state.init(armature_idx, &animation_data, config);
         let source = AnimationTimelineSource {
             data: Arc::clone(&data),
             owner_armature: animation_data.parent.clone(),
@@ -1035,6 +1094,11 @@ impl Animation {
     pub fn animation_dirty(&self) -> bool {
         self.animation_dirty
     }
+
+    /// 阶段 6：cacheFrameRate 设置后强制下一帧重新分配 cachedFrameIndices。
+    pub(crate) fn mark_animation_dirty(&mut self) {
+        self.animation_dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -1045,7 +1109,7 @@ mod tests {
     use crate::animation::timeline_state::TimelinePlayState;
     use crate::animation::timeline_states::{TimelineInstance, TimelineTarget};
     use crate::animation::world_clock::ClockArena;
-    use crate::armature::{ArmatureIdx, NullArmatureProxy, RuntimeCtx};
+    use crate::armature::{ArmatureIdx, FrameCache, NullArmatureProxy, RuntimeCtx};
     use crate::core::enums::{AnimationFadeOutMode, TimelineType};
     use crate::event::{EventDispatcher, EventObject};
     use crate::model::{AnimationData, ArmatureData, DragonBonesData, IrArrays};
@@ -1457,6 +1521,8 @@ mod tests {
         let mut z_order_dirty = false;
         let mut z_index_dirty = false;
         let mut proxy = NullArmatureProxy::new();
+        let mut frame_cache = FrameCache::default();
+        frame_cache.initialize(armature_data, 10.0);
         let mut animation_context = AnimationUpdateCtx {
             armature_idx: ArmatureIdx(0),
             armature_data,
@@ -1465,6 +1531,7 @@ mod tests {
             constraints: &mut constraints,
             actions: &mut actions,
             cache_frame_index: &mut cache_frame_index,
+            frame_cache: Some(&mut frame_cache),
             alpha_dirty: &mut alpha_dirty,
             slots_dirty: &mut slots_dirty,
             z_order_dirty: &mut z_order_dirty,
@@ -1816,6 +1883,7 @@ mod tests {
                 constraints: &mut constraints,
                 actions: &mut actions,
                 cache_frame_index: &mut cache_frame_index,
+                frame_cache: None,
                 alpha_dirty: &mut alpha_dirty,
                 slots_dirty: &mut slots_dirty,
                 z_order_dirty: &mut z_order_dirty,
@@ -1968,6 +2036,7 @@ mod tests {
                 constraints: &mut constraints,
                 actions: &mut actions,
                 cache_frame_index: &mut cache_frame_index,
+                frame_cache: None,
                 alpha_dirty: &mut alpha_dirty,
                 slots_dirty: &mut slots_dirty,
                 z_order_dirty: &mut z_order_dirty,
@@ -2036,6 +2105,7 @@ mod tests {
                 constraints: &mut constraints,
                 actions: &mut actions,
                 cache_frame_index: &mut cache_frame_index,
+                frame_cache: None,
                 alpha_dirty: &mut alpha_dirty,
                 slots_dirty: &mut slots_dirty,
                 z_order_dirty: &mut z_order_dirty,
@@ -2151,6 +2221,8 @@ mod tests {
                 Some(ArmatureIdx(0)),
                 None,
             );
+            let mut frame_cache = FrameCache::default();
+            frame_cache.initialize(host, 10.0);
             let mut context = AnimationUpdateCtx {
                 armature_idx: ArmatureIdx(0),
                 armature_data: host,
@@ -2159,6 +2231,7 @@ mod tests {
                 constraints: &mut constraints,
                 actions: &mut actions,
                 cache_frame_index: &mut cache_frame_index,
+                frame_cache: Some(&mut frame_cache),
                 alpha_dirty: &mut alpha_dirty,
                 slots_dirty: &mut slots_dirty,
                 z_order_dirty: &mut z_order_dirty,

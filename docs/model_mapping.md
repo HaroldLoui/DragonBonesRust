@@ -31,7 +31,8 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 
 | TS 字段（类型） | Rust 表示 | 依据 / 备注 |
 |---|---|---|
-| `ArmatureData.parent: DragonBonesData` | `Option<Arc<RootInfo>>` | `RootInfo` 打包 `name` + 8 组 IR 数组，只读共享 |
+| `ArmatureData.parent: DragonBonesData` | `Option<Arc<RootInfo>>` | `RootInfo` 打包 
+ame` + 8 组 IR 数组，只读共享 |
 | `GeometryData.data: DragonBonesData` | `Option<Arc<RootInfo>>` | 只读 `intArray` |
 | `AnimationData.parent: ArmatureData` | `String`（骨架名） | 运行时经名字解析 |
 | `SkinData.parent: ArmatureData` | `String`（骨架名） | 只读 `.defaultSkin` 等 |
@@ -49,14 +50,16 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `ArmatureData.stage/defaultSkin/defaultAnimation` | `Option<String>` | 名字引用 |
 | `ActionData.bone/slot` | `Option<String>` | 名字引用 |
 | `ActionData.data` | `Option<Box<UserData>>` | 直接拥有 |
-| `SkinData.displays: Map<Array<DisplayData\|null>>` | `IndexMap<String, Vec<Option<DisplayData>>>` | 直接拥有（`null` 保留） |
+| `SkinData.displays: Map<Array<DisplayData\|null>>` | `IndexMap<String, Vec<Option<DisplayData>>>` | 直接拥有（
+ull` 保留） |
 | `GeometryData.weight: WeightData \| null` | `Option<Box<WeightData>>` | 直接拥有 |
 | `BoundingBoxDisplayData.boundingBox` | `Option<Box<BoundingBoxData>>` | 直接拥有 |
 | `AnimationData.actionTimeline/zOrderTimeline` | `Option<Box<TimelineData>>` | 直接拥有 |
 | 其余向下的时间轴/动作列表 | `Vec<...>` / `IndexMap<String, Vec<TimelineData>>` | 直接拥有 |
 
 > 唯一与指南的偏差：`ArmatureData.parent` 用 `Option<Arc<RootInfo>>`（TS 里 `_onClear` 置
-> `null`），用 `Option` 更诚实；解析收尾由 `DragonBonesData::finalize_root` 统一回填。
+> 
+ull`），用 `Option` 更诚实；解析收尾由 `DragonBonesData::finalize_root` 统一回填。
 
 ---
 
@@ -84,7 +87,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `weight` | `weight` | `1.0` |
 | `fadeInTime` | `fade_in_time` | `-1.0` |
 | `autoFadeOutTime` | `auto_fade_out_time` | `-1.0` |
-| `name` / `animation` / `group` | `name` / `animation` / `group` | `""` |
+| 
+ame` / `animation` / `group` | 
+ame` / `animation` / `group` | `""` |
 | `boneMask` | `bone_mask: Vec<String>` | `[]` |
 
 方法：`clear()`（= `_onClear`）、`copy_from()`。
@@ -109,7 +114,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `frameCount` / `playTimes` | `frame_count` / `play_times` | `0` |
 | `duration` / `fadeInTime` / `cacheFrameRate` | snake | `0.0` |
 | `scale` | `scale` | `1.0` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `cachedFrames` | `cached_frames: Vec<bool>` | `[]` |
 | `boneTimelines` / `slotTimelines` / `constraintTimelines` / `animationTimelines` | `IndexMap<String, Vec<TimelineData>>` | `{}` |
 | `boneCachedFrameIndices` / `slotCachedFrameIndices` | `IndexMap<String, Vec<i32>>` | `{}` |
@@ -129,7 +136,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `type` | `kind: BoneKind` + `type_()` | `BoneKind::Bone` |
 | `length` | `length` | `0.0` |
 | `alpha` | `alpha` | `1.0` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `transform` | `transform: Transform` | identity |
 | `userData` | `user_data: Option<UserData>` | `None` |
 | `parent` | `parent: Option<String>` | `None` |
@@ -143,7 +152,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `blendMode` | `blend_mode` | `BlendMode::Normal` |
 | `displayIndex` / `zOrder` / `zIndex` | snake | `0` |
 | `alpha` | `alpha` | `1.0` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `color` | `color: ColorTransform` | 乘子 1 / 偏移 0 |
 | `userData` | `user_data` | `None` |
 | `parent` | `parent: String` | `""` |
@@ -157,7 +168,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `type` | `armature_type` | `ArmatureType::Armature` |
 | `frameRate` / `cacheFrameRate` | snake (`f64`) | `0.0` |
 | `scale` | `scale` | `1.0` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `aabb` | `aabb: Rectangle` | default |
 | `animationNames` | `animation_names: Vec<String>` | `[]` |
 | `sortedBones` / `sortedSlots` | `Vec<String>`（名字） | `[]` |
@@ -193,7 +206,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | TS | Rust | 默认值 |
 |---|---|---|
 | `order` | `order: i32` | `0` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `type` | `kind: ConstraintKind` + `type_()` | `ConstraintKind::IK` |
 | `target` / `root` | `String` | `""` |
 | `bone` | `Option<String>` | `None` |
@@ -222,7 +237,8 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | TS | Rust | 默认值 |
 |---|---|---|
 | `type` | `kind: DisplayKind` + `type_()` | `DisplayKind::Image` |
-| `name` / `path` | 同名 | `""` |
+| 
+ame` / `path` | 同名 | `""` |
 | `transform` | `transform: Transform` | identity |
 | `parent` | `parent: String` | `""` |
 | `ImageDisplayData.pivot/texture` | `Image { pivot, texture }` | `Point::default()` / `None` |
@@ -242,11 +258,13 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 
 ### 3.8 `DragonBonesData.ts` → `dragon_bones_data.rs`
 
-`RootInfo` / `IrArrays`（新引入的共享根，对应 TS `name` + 8 组 TypedArray）：
+`RootInfo` / `IrArrays`（新引入的共享根，对应 TS 
+ame` + 8 组 TypedArray）：
 
 | TS | Rust |
 |---|---|
-| `name` | `RootInfo.name: String` |
+| 
+ame` | `RootInfo.name: String` |
 | `intArray` | `IrArrays.int_array: Vec<i32>` |
 | `floatArray` | `IrArrays.float_array: Vec<f64>` |
 | `frameIntArray` | `IrArrays.frame_int_array: Vec<i32>` |
@@ -260,7 +278,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 
 | TS | Rust | 默认值 |
 |---|---|---|
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | — | `root: Option<Arc<RootInfo>>` | `None` |
 | `autoSearch` | `auto_search` | `false` |
 | `frameRate` | `frame_rate: f64` | `0.0` |
@@ -278,7 +298,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 
 | TS | Rust | 默认值 |
 |---|---|---|
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `displays` | `displays: IndexMap<String, Vec<Option<DisplayData>>>` | `{}` |
 | `parent` | `parent: String` | `""` |
 
@@ -293,7 +315,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | `autoSearch` | `auto_search` | `false` |
 | `width` / `height` | 同名 | `0.0` |
 | `scale` | `scale` | `1.0` |
-| `name` / `imagePath` | `name` / `image_path` | `""` |
+| 
+ame` / `imagePath` | 
+ame` / `image_path` | `""` |
 | `textures` | `IndexMap<String, TextureData>` | `{}` |
 
 方法：`add_texture`、`get_texture`、`copy_from`。
@@ -303,7 +327,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | TS | Rust | 默认值 |
 |---|---|---|
 | `rotated` | `rotated` | `false` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `region` | `region: Rectangle` | default |
 | `parent` | `parent: String` | `""` |
 | `frame` | `frame: Option<Rectangle>` | `None` |
@@ -327,7 +353,9 @@ TS 对象引用字段在 Rust 里按“根共享 / 名字 / 直接拥有”三�
 | TS | Rust | 默认值 |
 |---|---|---|
 | `type` | `action_type` | `ActionType::Play` |
-| `name` | `name` | `""` |
+| 
+ame` | 
+ame` | `""` |
 | `bone` / `slot` | `Option<String>` | `None` |
 | `data` | `Option<Box<UserData>>` | `None` |
 
@@ -490,7 +518,8 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 
 | TS | Rust | 默认值（= `_onClear`） |
 |---|---|---|
-| `_constraintData.name` | `name: String` | `""`（兼作 init 幂等判定） |
+| `_constraintData.name` | 
+ame: String` | `""`（兼作 init 幂等判定） |
 | `_root`（:193 按名解析） | `root: BoneIdx` | `BoneIdx(0)`（`Bone::update` 按 `root == self.idx` 过滤） |
 | `order`（数据登记；运行期不排序） | `order: i32` | `0` |
 | `_target`（:192） | `target: BoneIdx` | `BoneIdx(0)`（`sortBones.wait_constraint` 保证 `idx < root`） |
@@ -515,7 +544,9 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 |---|---|---|
 | `time` | `time: f64` | `0.0` |
 | `type` | `event_type: String` | `""`（§1 `type` 规则加 `event_` 前缀） |
-| `name` | `name: String` | `""` |
+| 
+ame` | 
+ame: String` | `""` |
 | `armature` | `armature: Option<ArmatureIdx>` | `None` |
 | `bone` / `slot` | `Option<BoneIdx>` / `Option<SlotIdx>` | `None`（TS 对象引用 → 本骨架内索引，D-4.20） |
 | `actionData` | `action_data: Option<ActionData>` | `None`（TS 引用 → 克隆，D-4.20） |
@@ -555,13 +586,15 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | 类型 | 关键字段 / 默认值 | 说明 |
 |---|---|---|
 | `ClockId(u32)` / `AnimatableHandle` | `ClockId` = clock arena 下标；`AnimatableHandle::{Armature(ArmatureIdx), Clock(ClockId)}` | 稳定 handle 替代 TS 对象引用（D-3.1/D-3.2） |
-| `WorldClock` | `time`（构造入参）、`time_scale = 1.0`、`system_time =` 构造时墙钟、`parent: Option<ClockId> = None`、`members: Vec<Option<MemberEntry>> = []`、`next_member_token = 1` | 成员表保留插入序 + tombstone；`update_time` 是时间算法 seam |
+| `WorldClock` | `time`（构造入参）、`time_scale = 1.0`、`system_time =` 构造时墙钟、`parent: Option<ClockId> = None`、`members: Vec<Option<MemberEntry>> = []`、
+ext_member_token = 1` | 成员表保留插入序 + tombstone；`update_time` 是时间算法 seam |
 | `ClockArena` | `slots: Vec<Option<WorldClock>>` | `insert` 只分配 ID；父子关系走 `attach_clock`（拒绝 `ClockError::Cycle`） |
 | `RuntimeCtx<'a>` | `armatures: &'a mut [Option<Armature>]`、`clocks: &'a mut ClockArena`、`pending_events: &'a mut Vec<EventObject>`、`current_armature/current_clock: Option<_>` | 推进期借用视图；当前骨架已 take，反查自身返回 `None`；`buffer_event` 只追加 |
 | `RuntimeCtxError` / `ClockError` / `StateArenaError` | `thiserror::Error` + `Result` | 见 §1「错误风格适用范围」 |
 | `Animation` | `armature: Option<ArmatureIdx> = None`、`states: StateArena<AnimationState>`、`play_order: Vec<StateId> = []`、`last_state: Option<StateId> = None`、`blend_states: HashMap<BlendStateKey, BlendState> = {}`、`pending_child_animations: Vec<String> = []`、`time_scale = 1.0`、`inherit_time_scale = 1.0`、`animation_dirty/cache_frame_invalidated = false` | `play_order` 承载 TS 播放顺序；`pending_child_animations` 是 D-4.36 的延迟入口 |
 | `StateId` / `StateArena<T>` | `StateId { slot: u32, generation: u32 }`；arena slots + free list | 回收不移动其它 ID；复用递增 generation，旧 ID 失效 |
-| `AnimationState` | `name/animation_name/group = ""`、`layer = 0`、`action_enabled/additive/display_control/reset_to_pose = false`、`blend_type: AnimationBlendType = None`、`play_times = 1`、`current_play_times = 0`、`time_scale = 1.0`、`parameter_x/y = 0.0`、`position = 0.0`、`duration = 0.0`、`weight = 1.0`、`fade_time = 0.0`、`time = 0.0`、`fade_progress = 0.0`、`weight_result = 0.0`、`fade_state = FadeIn`、`sub_fade_state = Start`、`playhead_state = STOPPED`、`timeline_dirty = RebuildAll`、六组 timeline Vec = `[]`、`pose_timeline_ids = []`、`parent/id/armature = None` | 组顺序与 pose fallback 见 `animation_state.rs`；`bone_mask: Vec<String>` |
+| `AnimationState` | 
+ame/animation_name/group = ""`、`layer = 0`、`action_enabled/additive/display_control/reset_to_pose = false`、`blend_type: AnimationBlendType = None`、`play_times = 1`、`current_play_times = 0`、`time_scale = 1.0`、`parameter_x/y = 0.0`、`position = 0.0`、`duration = 0.0`、`weight = 1.0`、`fade_time = 0.0`、`time = 0.0`、`fade_progress = 0.0`、`weight_result = 0.0`、`fade_state = FadeIn`、`sub_fade_state = Start`、`playhead_state = STOPPED`、`timeline_dirty = RebuildAll`、六组 timeline Vec = `[]`、`pose_timeline_ids = []`、`parent/id/armature = None` | 组顺序与 pose fallback 见 `animation_state.rs`；`bone_mask: Vec<String>` |
 | `BlendStateKey` / `BlendState` | key = `{ kind: BlendStateKind, target_name: String }`；state = `{ dirty: u32 = 0, layer = 0, left_weight/layer_weight/blend_weight = 0.0 }` | key 只做 lookup，不决定 writer 顺序 |
 | `TimelineInstance` | `id`、`base: BaseTimelineState`、`timeline_type`、`target: TimelineTarget`、`blend_key: Option<BlendStateKey>`、IR offset/值缓冲字段 | 具体轴见 `animation/timeline_states/*`；细节以源码为准 |
 
@@ -576,8 +609,11 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.1 | 全局对象池 `BaseObject`（`borrowObject` / `returnToPool` / `_isInPool` / `setMaxCount` / `clearPool` / `hashCode`） | **不移植**：无 TypeId 池；复用由 armature `free` 栈、`StateArena` 槽位、`Vec` 容量承担；生命周期语义由 `pending_recycles` 承担（D-5.1） | 运行时零调用；类型擦除池与所有权方向相反；对动画无数值影响 |
 | D-4.2 | `bufferObject` 的 `indexOf` 身份去重 | `PendingRecycle` + `dispose_armature` 的 `lock_update` 幂等；事件派发后直接 drop | 值语义无对象身份；dispose 重复调用由 lock 消除（D-5.5），同值事件必须都保留（D-4.33） |
 | D-4.3 | model 对象经 `returnToPool` 复用、`_onClear` 清空 | 拥有树 + `Default` | model 不进池（F1.5）；默认值仍逐行对齐 `_onClear` |
-| D-4.4 | `SlotData.color` 清空后为 `null` | `ColorTransform::default()` | 避免 `null` 状态；值与 `createColor()` 一致 |
-| D-4.5 | `ArmatureData.parent` 清空后为 `null` | `Option<Arc<RootInfo>>` | 见第 2 节注 |
+| D-4.4 | `SlotData.color` 清空后为 
+ull` | `ColorTransform::default()` | 避免 
+ull` 状态；值与 `createColor()` 一致 |
+| D-4.5 | `ArmatureData.parent` 清空后为 
+ull` | `Option<Arc<RootInfo>>` | 见第 2 节注 |
 | D-4.6 | `ArmatureData._onClear` 注释掉 `bones.clear()` 等 | 不复刻该注释怪癖 | 拥有树无池复用，直接清空 |
 | D-4.7 | 整数样字符串键 `for..in` 排序规则 | `IndexMap` 纯插入序 | 9 素材无整数样键，登记为已知差异（F1.6） |
 | D-4.8 | `AnimationData.cacheFrames` / `ArmatureData.setCacheFrame` 与 bone/slot cachedFrameIndices 写侧 | 保留 cache 结构（单状态 cache interval / cache frame index 计算分支）；`cachedFrames` 与 bone/slot `cachedFrameIndices` 写侧仍未实现 | P1-4；pose 与 37 个动画 golden 不依赖缓存写路径 |
@@ -587,7 +623,9 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.12 | `TransformObject` 静态 `_helpMatrix/_helpTransform/_helpPoint`（TransformObject.ts:37-39；Surface.ts:186 等同款） | 调用点局部临时值 | 不复刻 `thread_local` 样板（纯实现细节）；值拷贝天然消除“静态被下次调用覆盖”的别名隐患（transform_object.rs 模块文档） |
 | D-4.13 | TS `ColorTransform.identity()` | Rust 侧方法名 `clear()`（Point/Rectangle 同名；Matrix/Transform 仍 `identity()`） | 阶段 1 遗留待记项（geom 落地时统一命名，无行为差异） |
 | D-4.14 | `Bone.init:358 _addBone(this)` / `Slot.init:665 _addSlot(this)`（init 内 push 自身，按对象身份 `indexOf` 去重） | `init` 不 push、只预置 `idx = len()`，由调用方 `armature.add_bone/add_slot` 推入；去重改成**按名字**判重（warn + 忽略本次推入） | Rust 无法在 `&mut self` 的 `init` 内移动自身入容器；装配循环“建一根推一根”顺序不变（bone.rs / slot.rs 方法文档、`_build_bones`/`_build_slots` 注） |
-| D-4.15 | 指南任务 7 草图 `build_armature(armatureName, dragonBonesName, skinName, textureAtlasName)` 返回裸 idx | 多 `proxy: Box<dyn ArmatureProxy>` 参数、返回 `Option<ArmatureIdx>` | D-3.4 调用方注入（jsdump `NullFactory._buildArmature` 在内部 `new EvProxy()` 的等价迁移）；`None` = JS `null`（fill 失败/数据缺失）（base_factory.rs 方法文档） |
+| D-4.15 | 指南任务 7 草图 `build_armature(armatureName, dragonBonesName, skinName, textureAtlasName)` 返回裸 idx | 多 `proxy: Box<dyn ArmatureProxy>` 参数、返回 `Option<ArmatureIdx>` | D-3.4 调用方注入（jsdump `NullFactory._buildArmature` 在内部 
+ew EvProxy()` 的等价迁移）；`None` = JS 
+ull`（fill 失败/数据缺失）（base_factory.rs 方法文档） |
 | D-4.16 | 对象身份比较：`_displayFrame` 对象引用、`display === _rawDisplay` / `_meshDisplay` 等 `!==` | 值比较/下标：`display_frame: Option<usize>`、`DisplayHandle` 值相等 | 同值 ⟹ 同变换/同几何/同纹理 → 刷与不刷结果一致，已论证无行为差异（slot.rs `DisplayFrame`/`update_display_data` 文档） |
 | D-4.17 | `Slot._onClear:279` 递归 `eachDisplay.dispose()`（子骨架）与 `Armature._onClear:123-124` `_clock.remove` | `Slot::on_clear` 只做本地复位 + adapter 分发；子骨架递归由 `BaseFactory` 的帧首 `flush_recycles`/`dispose_armature_now` BFS 实现，clock detach 在 factory 释放 arena slot 前完成 | `on_clear` 拿不到 `RuntimeCtx`（阶段 3 借用契约）；唯一关系 owner 为 `BaseFactory`，详见阶段 4 任务 1 / 阶段 5 任务 2 |
 | D-4.18 | `Slot.ts:541 / :549` 子骨架 clock 继承、`:554` `cacheFrameRate` 写回 data（`armatureData.cacheFrames` setter） | child clock detach/inherit 已由 RuntimeCtx 关系入口接线；cacheFrameRate 对 cachedFrames 的写侧仍未实现 | clock 行为经 `world_clock`/`armature_unit` 测试；cachedFrames 留 P1-4 |
@@ -595,10 +633,13 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.20 | `EventObject.bone/slot` 存对象引用、`actionData` 存引用、含 `animationState` 字段 | `bone/slot` 存本骨架内索引（`Option<BoneIdx>` / `Option<SlotIdx>`）+ 冗余名字；`action_data` 存克隆；不存 `animation_state` | D-3.2 / D-1.1；`animationState` 虽在 TS 写入，但核心与 golden 不读取（F4.27），因此不引入跨 StateArena 的生命周期引用；监听器修改克隆 `UserData` 不会写回 data |
 | D-4.21 | jsdump `NullSlot._onUpdateDisplay` 的 `this._rd = this._display \|\| this._rawDisplay` 赋值 | `NullSlotAdapter::update_display` 纯 no-op | 该字段全库无消费者；Rust adapter 不持有 Slot 状态（trait 方法不带状态参，D-3.4 签名冻结）——阶段 7 扩 trait 签名时再议（slot.rs trait/adapter 文档） |
 | D-4.22 | `_getSlotDisplay:307` `armatureDisplayData.armature = childArmature.armatureData`（data 层写回，`_buildChildArmature` 递归链上） | 不复刻 | Rust data 层不可变（D-3.3 / F3.3）；该字段 TS 只写不读（grep 零消费者：仅 parser 初始化 + 本行写入）→ 零行为影响（base_factory.rs `_get_slot_display` 注） |
-| D-4.23 | `parseDragonBonesData:482` `name = name ?? data.name`（`null` 表“未指定”） | 空串视作“未指定”落 `data.name`（`(!name.is_empty()).then_some(name)`） | Rust 入参 `&str` 无 null/undefined（jsdump 恒传非空 key，base_factory.rs:125 记偏差） |
+| D-4.23 | `parseDragonBonesData:482` 
+ame = name ?? data.name`（
+ull` 表“未指定”） | 空串视作“未指定”落 `data.name`（`(!name.is_empty()).then_some(name)`） | Rust 入参 `&str` 无 null/undefined（jsdump 恒传非空 key，base_factory.rs:125 记偏差） |
 | D-4.24 | `addTextureAtlasData:573` `indexOf < 0` 按对象身份判重 | `Vec::contains` 值判重 | 值等价：同内容重复 push 无行为差异，判重更严（base_factory.rs:204 记偏差）；同名多 atlas 允许语义不变 |
 | D-4.25 | `buildArmature:704` fill 失败 warn 的 `dragonBonesName !== null ? dragonBonesName : ""` 拼串怪癖 | 直接 `warn!("No armature data: {}, {}", armature_name, db_name)` | 纯日志格式，无行为影响（base_factory.rs:952 不复刻） |
-| D-4.26 | `Armature.intersectsSegment` 的 3 个可选出参对象（intersectionPointA/B、normalRadians）+ `:548-551`「A/B 出参均未提供 → 首个命中即 break」分支 | 3 个出参对象并成 8 个 f64 入参（循环内局部 `Point` 承接、命中覆写）；`:548-551` 分支不复刻；返回值 = `:573 return intSlotA` 的坐标化 `Option<(f64, f64)>`（无命中 `None`） | 签名既定（任务 6 冻结）：Rust 恒“提供”出参；`normalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文档） |
+| D-4.26 | `Armature.intersectsSegment` 的 3 个可选出参对象（intersectionPointA/B、normalRadians）+ `:548-551`「A/B 出参均未提供 → 首个命中即 break」分支 | 3 个出参对象并成 8 个 f64 入参（循环内局部 `Point` 承接、命中覆写）；`:548-551` 分支不复刻；返回值 = `:573 return intSlotA` 的坐标化 `Option<(f64, f64)>`（无命中 `None`） | 签名既定（任务 6 冻结）：Rust 恒“提供”出参；
+ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文档） |
 | D-4.27 | `Surface.init:451` 读 geometry 的 IR 根（TS 两跳对象引用，null 即崩溃） | `geometry.root` 缺失 → warn + 空顶点缓冲（`_update_vertices` / 曲面采样对空缓冲防御性跳过） | `finalize_root` 未跑属坏数据；TS 该路径读 undefined 得 NaN 污染矩阵，Rust 保持矩阵不动（surface.rs `SurfaceState::init` 记对照表偏差） |
 | D-4.28 | 病态配置 `target == chain`（Constraint.ts:173 改写 ikGlobal 后 :176 再读） | 不复刻特殊处理（无等价路径） | 本库 4 个 IK 的 target 均为独立效果骨、`sortBones.wait_constraint` 保证 `idx < root` → 不可达（constraint.rs 模块文档，登记见阶段 3 报告） |
 | D-4.29 | 槽排序比较器 `Armature.ts:46-48` `a…>b…?1:-1` 永不返回 0；V8 对等键组实测逆序 | Rust 稳定 `sort_by_key(zIndex*1000+zOrder)`，等键保持原序 | 官方公开路径 `z_order` 恒唯一；等键不可达。ZOrder timeline 的越界索引继续按 TS `continue` 处理，golden 验证完整路径 |
@@ -615,11 +656,14 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-5.4 | listener 可通过 `event.armature.animation` 同步改状态/销毁骨架 | core 监听器只有 `Fn(&EventObject)`，不能取得 `&mut BaseFactory`；Bevy 层转成事件后由后续 system 执行变更 | 避免 `Rc<RefCell<BaseFactory>>` 与借用冲突；不影响数值 golden（无 golden 用 listener 改状态） |
 | D-5.5 | `bufferEvent` / `bufferObject` 的对象身份去重 | 值语义不去重（同值事件保留）；dispose 重复调用由 `lock_update` 幂等 | D-4.33 的延续 |
 | D-5.6 | `Armature.dispose` 的“上锁 + 下一帧清场” | `dispose_armature` = 上锁 + `pending_recycles.push(Armature)`；帧首 `flush_recycles` 做 BFS/clock detach/`on_clear`/`free.push` | 撤销 D-4.31 的一帧提前偏差（`tests/lifecycle.rs`） |
+| D-6.1 | 官方缓存帧表存放在共享 `DragonBonesData/AnimationData` | per-Armature `FrameCache`（`frames` 扁平 10 f64/槽 + 每动画 `cachedFrames`/bone/slot 索引表） | data 不可变（D-3.3）；数值对拍 `tests/cache.rs` 121 帧全等 |
+| D-6.2 | `ArmatureData.cacheFrameRate` setter 写 data | 每 Armature `runtime_cache_frame_rate` + `FrameCache::initialize`；factory `set_armature_cache_frame_rate` | 不修改 data；新 build 不自动继承历史 rate（待补） |
+| D-6.3 | Bone/Slot `_cachedFrameIndices` 是共享引用 | 从缓存表**克隆**到运行时对象 | 同值；避免生命周期 |
 | D-6.4 | `Slot/Armature::contains_point/intersects_segment` 官方会更新矩阵，Rust 需 `&mut self`；Slot 还需父骨参数 | 已改 `&mut self`（Slot 额外传 `parent: &Bone`）；`Armature.contains_point` 仍返回 bool | P1-3；`tests/bounding_box.rs` |
-| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行，任意路径父骨拓扑 | 阶段 6 实现为 Armature 骨循环前预推进；仅支持 path slot 父骨早于 root、链骨父为 root；其余 warn 跳过 | P1-2 部分；合成夹具 fixed/length/tangent 已对 JS 121 帧全等；剩余拓扑待补 |
+| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行；任意链骨 parent 拓扑 | Armature 骨循环前预推进；链骨按真实 parent 更新；path slot 父骨可早于 root；`percent` 位置模式无有效合成样本 | 3 组 fixed 模式 JS 121 帧全等；`percent` 未验收 |
 | D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
-| D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | 未实现；已实现 `replaceDisplay/replaceSlotDisplay(List)/replaceSkin` | P1-5 部分；`tests/replace.rs` |
+| D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override 已实现；child 递归未做 | `tests/replace.rs` 覆盖 map override；child 待补 |
 | D-6.10 | 官方 dbbin 样本无 mesh | 二进制 geometry/weight 只做 source-review；样本 IR/pose 已全等 | P1-1 覆盖限制 |
 | D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
@@ -631,13 +675,15 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 
 | 字段 | JS 实际类型 | 说明 |
 |---|---|---|
-| `data.floatArray` / `data.frameFloatArray` | **Float32Array** | `number[]` 被重解释为 TypedArray，f64 值量化为 f32（实测 frameFloatArray 536 个值全部 f32 精确） |
+| `data.floatArray` / `data.frameFloatArray` | **Float32Array** | 
+umber[]` 被重解释为 TypedArray，f64 值量化为 f32（实测 frameFloatArray 536 个值全部 f32 精确） |
 | `data.intArray` / `data.frameIntArray` / `data.colorArray` / `data.frameArray` | Int16Array | 赋值按 i16 wrap |
 | `data.timelineArray` | Uint16Array | 赋值按 u16 wrap |
 | `data.binary` | ArrayBuffer（**非 null**） | JSON 路径也构建 binary buffer |
 
 **结论：两路径的运行时值精度相同（float=f32、int=i16/u16）**，D1 的"JSON 路径 f64"仅指
-`_modifyArray` 之前的 parser `number[]` 中间态。
+`_modifyArray` 之前的 parser 
+umber[]` 中间态。
 
 **阶段 2 落点**：在 `DragonBonesData::finalize_root(ir)` 收尾时逐行镜像 `_modifyArray`：
 
@@ -648,7 +694,8 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 3. **奇数长度补 0 的对齐 padding**（镜像 `_modifyArray` 的 5 个 align 分支，含"条件读
    `timelineArray.length`、写 `colorArray`"的怪癖）——padding 发生在全部解析之后，
    不影响已存偏移，但**影响 IR 数组长度**，逐元素断言必须一致
-4. `frame_indices` 不经 `_modifyArray`（普通 `number[]`），无量化、无 padding
+4. `frame_indices` 不经 `_modifyArray`（普通 
+umber[]`），无量化、无 padding
 5. `binary` 暂不复刻（`Option::None`），P1-10 再定
 
 **不做的后果**：阶段 2 IR 逐元素黄金断言直接失败；阶段 4 运行时读 f32 IR，若用 f64 原值
@@ -665,7 +712,8 @@ requirements D1 说"JSON 路径 `floatArray` 是 f64、dbbin 路径是 f32"—�
 | `tests/enums.rs` | 16 枚举 + `BinaryOffset` 五组常量数值 |
 | `tests/geom_golden.rs` | geom 704 用例对齐 JS |
 | `tests/pool.rs` | 池复用 / `hash_code` 保留 / 缓冲延迟回收 / 上限 |
-| `tests/ir_golden.rs` | 阶段 2：9 素材 × 8 组 IR 数组 bit 级全等 + meta/structure/atlas 快照（`norm()` 后） |
+| `tests/ir_golden.rs` | 阶段 2：9 素材 × 8 组 IR 数组 bit 级全等 + meta/structure/atlas 快照（
+orm()` 后） |
 | `tests/js_compat.rs` | JS 语义真值表：`js_round` 半数向 +∞ / 三 helper 三态 / TypedArray wrap |
 | `tests/pose_golden.rs` | 阶段 3：9 素材静姿态差分——骨 13 元 / 槽 15 元（前 4 元整数全等）/ `slotNames` 全序（F3.10 排序锚点）/ geometry 双向 / frameRate，容差 `1e-9*(1+\|want\|)`（不放宽 1e-6） → P0-6 / P0-7 / M3 |
 | `tests/armature_unit.rs` | 子骨架接线（F3.9 / D-3.2）、槽排序稳定性（R5 / F3.10）、`invalid_update` 传播（指南 3.3 转述勘误）、`displayIndex == -1` 提前返回（坑 10）、子骨架 clock 切换边界、zOrder/zIndex 重排、约束 invalid_update |
