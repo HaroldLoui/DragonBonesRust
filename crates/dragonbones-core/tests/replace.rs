@@ -144,3 +144,19 @@ fn replace_animation_override_replaces_map() {
     assert!(!animation.has_animation("idle"));
     assert_eq!(animation.animation_data("wave").unwrap().duration, 0.5);
 }
+
+#[test]
+fn replace_animation_recurses_into_child_armature() {
+    let (mut factory, armature) = build_features();
+    let child = factory
+        .armature(armature)
+        .slots
+        .iter()
+        .find(|slot| slot.slot_name == "child_slot")
+        .and_then(|slot| slot.child_armature)
+        .expect("child armature");
+    assert!(factory.armature(child).animation.has_animation("child_wave"));
+    assert!(factory.replace_animation(armature, "features", "alt_source", true));
+    assert!(factory.armature(child).animation.has_animation("alt_wave"));
+    assert!(!factory.armature(child).animation.has_animation("child_wave"));
+}

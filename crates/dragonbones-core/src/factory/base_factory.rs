@@ -1157,9 +1157,8 @@ impl BaseFactory {
         success
     }
 
-    /// 对齐 `BaseFactory.replaceAnimation`（BaseFactory.ts:939-984）的 animation map 部分。
-    ///
-    /// child armature 递归与 `defaultSkin` 校验暂未做（D-6.9）。
+    /// 对齐 `BaseFactory.replaceAnimation`（BaseFactory.ts:939-984）的 animation map
+    /// 与 child armature 递归。
     pub fn replace_animation(
         &mut self,
         armature_idx: ArmatureIdx,
@@ -1167,15 +1166,43 @@ impl BaseFactory {
         target_armature_name: &str,
         is_override: bool,
     ) -> bool {
-        let animations = self
+        let target_data = self
             .get_armature_data(target_armature_name, db_name)
-            .map(|armature| armature.animations.clone());
-        let Some(animations) = animations else {
+            .cloned();
+        let Some(target_data) = target_data else {
             return false;
         };
         self.armature_mut(armature_idx)
             .animation
-            .replace_animations(animations, is_override);
+            .replace_animations(target_data.animations.clone(), is_override);
+
+        // 对齐 TS：按目标 skin 的同槽 display 找 child armature data，递归替换。
+        let children: Vec<(ArmatureIdx, String)> = {
+            let armature = self.armature(armature_idx);
+            let Some(skin) = target_data
+                .default_skin
+                .as_deref()
+                .and_then(|name| target_data.get_skin(name))
+            else {
+                return true;
+            };
+            armature
+                .slots
+                .iter()
+                .filter_map(|slot| {
+                    let child = slot.child_armature?;
+                    let display_index = usize::try_from(slot.display_index.max(0)).ok()?;
+                    let display = skin.get_displays(&slot.slot_name)?.get(display_index)?.as_ref()?;
+                    let DisplayKind::Armature { .. } = &display.kind else {
+                        return None;
+                    };
+                    Some((child, display.path.clone()))
+                })
+                .collect()
+        };
+        for (child, name) in children {
+            self.replace_animation(child, db_name, &name, is_override);
+        }
         true
     }
 

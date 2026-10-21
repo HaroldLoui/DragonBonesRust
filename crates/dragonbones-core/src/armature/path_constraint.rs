@@ -168,33 +168,36 @@ impl PathConstraint {
             }
             update_chain_bone(right, root, pos, flip_x, flip_y);
         }
-        // path slot 父骨可能早于 root（夹具即 world root），先更新它。
+        // path slot 父骨可能早于/晚于 root，先更新它再取矩阵。
         let path_parent_idx = slots[slot_pos].parent;
-        if path_parent_idx == root.idx {
-            // root 已由 Constraint::update_path 更新
+        let path_parent_matrix = if path_parent_idx == root.idx {
+            root.global_transform_matrix
         } else if path_parent_idx.index() < root.idx.index() {
             let (ancestors, tail) = left.split_at_mut(path_parent_idx.index());
-            if let Some(parent) = tail.get_mut(0) {
-                parent.update_by_constraint(ancestors, flip_x, flip_y);
-            } else {
+            let Some(parent) = tail.get_mut(0) else {
+                return;
+            };
+            parent.update_by_constraint(ancestors, flip_x, flip_y);
+            parent.global_transform_matrix
+        } else {
+            let Some(pos) = path_parent_idx
+                .index()
+                .checked_sub(root.idx.index() + 1)
+            else {
+                return;
+            };
+            if pos >= right.len() {
                 return;
             }
-        } else {
-            log::warn!("PathConstraint: path slot parent after root unsupported (D-6.5)");
-            return;
-        }
-        let path_parent = if path_parent_idx == root.idx {
-            &*root
-        } else {
-            left.get(path_parent_idx.index()).expect("path parent in left")
+            update_chain_bone(right, root, pos, flip_x, flip_y);
+            right[pos].global_transform_matrix
         };
-        let path_parent_matrix = path_parent.global_transform_matrix;
 
         let is_path_vertices_dirty = if root.children_transform_dirty {
-            self.update_path_vertices(slots, slot_pos, &geometry, path_parent);
+            self.update_path_vertices(slots, slot_pos, &geometry, path_parent_matrix);
             true
         } else if slots[slot_pos].vertices_dirty || slots[slot_pos].is_bones_update(&[]) {
-            self.update_path_vertices(slots, slot_pos, &geometry, path_parent);
+            self.update_path_vertices(slots, slot_pos, &geometry, path_parent_matrix);
             slots[slot_pos].vertices_dirty = false;
             true
         } else {
@@ -350,7 +353,7 @@ impl PathConstraint {
         slots: &[Slot],
         slot_pos: usize,
         geometry: &GeometryData,
-        parent: &Bone,
+        matrix: crate::geom::Matrix,
     ) {
         let Some(data) = geometry.root.as_ref().or_else(|| slots[slot_pos].data.root.as_ref()) else {
             return;
@@ -372,7 +375,6 @@ impl PathConstraint {
         let scale = slots[slot_pos].armature_data().scale;
         self.path_global_vertices
             .resize(usize::try_from(vertex_count * 2).unwrap_or(0), 0.0);
-        let matrix = parent.global_transform_matrix;
         for i in 0..vertex_count {
             let index = float_offset as usize + (i as usize) * 2;
             let vx = float_array.get(index).copied().unwrap_or(0.0) * scale;
@@ -732,4 +734,49 @@ fn add_curve_position(
     } else {
         0.0
     };
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::armature::{BoneIdx, SlotIdx};
+
+    #[test]
+    fn percent_position_sampling_produces_finite_positions() {
+        let mut path = PathConstraint {
+            path_slot: SlotIdx(0),
+            bones: Vec::new(),
+            root: BoneIdx(0),
+            target: BoneIdx(0),
+            position_mode: PositionMode::Percent,
+            spacing_mode: SpacingMode::Length,
+            rotate_mode: RotateMode::Tangent,
+            dirty: true,
+            path_offset: 0,
+            position: 0.1,
+            spacing: 5.0,
+            rotate_offset: 0.0,
+            rotate_mix: 1.0,
+            translate_mix: 1.0,
+            spaces: vec![0.0, 35.0, 35.0],
+            positions: Vec::new(),
+            bone_lengths: Vec::new(),
+            path_global_vertices: Vec::new(),
+            segments: [0.0; 10],
+        };
+        // 15 个点（30 个 float），与 `_computeBezierCurve` 的顶点布局一致。
+        for index in 0..15 {
+            path.path_global_vertices.push(index as f64 * 10.0);
+            path.path_global_vertices.push((index as f64 * 0.7).sin() * 20.0);
+        }
+        let info = PathInfo {
+            closed: false,
+            constant_speed: true,
+            curve_lengths: Vec::new(),
+        };
+        path.compute_bezier_curve(&info, 3, true, true, false);
+        for value in &path.positions[..9] {
+            assert!(value.is_finite(), "percent positions must be finite: {value}");
+        }
+        assert!(path.positions[..9].iter().any(|value| value.abs() > f64::EPSILON));
+    }
 }

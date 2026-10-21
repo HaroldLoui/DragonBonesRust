@@ -3,19 +3,58 @@
   "name": "FeaturesFixture",
   "version": "5.6",
   "compatibleVersion": "5.6",
-  "userData": { "ints": [7], "floats": [1.5], "strings": ["root"] },
+  "userData": {
+    "ints": [
+      7
+    ],
+    "floats": [
+      1.5
+    ],
+    "strings": [
+      "root"
+    ]
+  },
   "armature": [
     {
       "type": "Armature",
       "frameRate": 24,
       "name": "features_fixture",
-      "aabb": { "x": -50, "y": -50, "width": 100, "height": 100 },
-      "canvas": { "x": 1, "y": 2, "width": 640, "height": 480, "color": 255 },
-      "userData": { "ints": [1, 2], "floats": [0.5], "strings": ["armature"] },
+      "aabb": {
+        "x": -50,
+        "y": -50,
+        "width": 100,
+        "height": 100
+      },
+      "canvas": {
+        "x": 1,
+        "y": 2,
+        "width": 640,
+        "height": 480,
+        "color": 255
+      },
+      "userData": {
+        "ints": [
+          1,
+          2
+        ],
+        "floats": [
+          0.5
+        ],
+        "strings": [
+          "armature"
+        ]
+      },
       "bone": [
         {
           "name": "root",
-          "userData": { "ints": [3], "strings": ["bone"] }
+          "userData": {
+            "ints": [
+              3
+            ],
+            "strings": [
+              "bone"
+            ]
+          }
         }
       ],
       "slot": [
@@ -23,8 +62,25 @@
           "name": "slot",
           "parent": "root",
           "blendMode": "add",
-          "userData": { "ints": [4], "strings": ["slot"] },
-          "color": { "aM": 80, "rM": 90, "gM": 100, "bM": 110, "aO": 5 }
+          "userData": {
+            "ints": [
+              4
+            ],
+            "strings": [
+              "slot"
+            ]
+          },
+          "color": {
+            "aM": 80,
+            "rM": 90,
+            "gM": 100,
+            "bM": 110,
+            "aO": 5
+          }
+        },
+        {
+          "name": "child_slot",
+          "parent": "root"
         }
       ],
       "skin": [
@@ -38,12 +94,30 @@
                   "name": "img",
                   "type": "image",
                   "path": "img",
-                  "userData": { "ints": [5], "strings": ["display"] }
+                  "userData": {
+                    "ints": [
+                      5
+                    ],
+                    "strings": [
+                      "display"
+                    ]
+                  }
                 },
                 {
                   "name": "img2",
                   "type": "image",
                   "path": "img2"
+                }
+              ]
+            },
+            {
+              "name": "child_slot",
+              "display": [
+                {
+                  "name": "nested",
+                  "type": "armature",
+                  "path": "nested_src",
+                  "inheritAnimation": false
                 }
               ]
             }
@@ -65,12 +139,23 @@
           ]
         }
       ],
-      "defaultActions": [{ "gotoAndPlay": "idle" }],
+      "defaultActions": [
+        {
+          "gotoAndPlay": "idle"
+        }
+      ],
       "animation": [
         {
           "name": "idle",
           "duration": 24,
-          "userData": { "ints": [6], "strings": ["animation"] }
+          "userData": {
+            "ints": [
+              6
+            ],
+            "strings": [
+              "animation"
+            ]
+          }
         }
       ]
     },
@@ -78,8 +163,73 @@
       "type": "Armature",
       "name": "alt_source",
       "frameRate": 24,
-      "bone": [{ "name": "root" }],
-      "animation": [{ "name": "wave", "duration": 12 }]
+      "bone": [
+        {
+          "name": "root"
+        }
+      ],
+      "animation": [
+        {
+          "name": "wave",
+          "duration": 12
+        }
+      ],
+      "slot": [
+        {
+          "name": "child_slot",
+          "parent": "root"
+        }
+      ],
+      "skin": [
+        {
+          "name": "",
+          "slot": [
+            {
+              "name": "child_slot",
+              "display": [
+                {
+                  "name": "nested_alt",
+                  "type": "armature",
+                  "path": "nested_alt",
+                  "inheritAnimation": false
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Armature",
+      "name": "nested_src",
+      "frameRate": 24,
+      "bone": [
+        {
+          "name": "root"
+        }
+      ],
+      "animation": [
+        {
+          "name": "child_wave",
+          "duration": 8
+        }
+      ]
+    },
+    {
+      "type": "Armature",
+      "name": "nested_alt",
+      "frameRate": 24,
+      "bone": [
+        {
+          "name": "root"
+        }
+      ],
+      "animation": [
+        {
+          "name": "alt_wave",
+          "duration": 8
+        }
+      ]
     }
   ]
 }

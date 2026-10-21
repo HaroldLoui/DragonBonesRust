@@ -15,9 +15,9 @@
 | 任务 2 dbbin | ✅ | `parser/binary_data_parser.rs`；`tests/dbbin.rs`：2 素材 IR 与 JSON 全等、9 动画×120 帧 pose 全等 |
 | 任务 3 IR 打包 | ✅ | `IrArrays::to_binary`；`tests/ir_binary.rs` 8 素材与 JS `data.binary` 逐字节相等 |
 | 任务 4 BoundingBox | ✅ | 三种算法 + Slot/Armature 命中；`tests/bounding_box.rs` 对 JS golden（含官方 `B.x/y` bug 锁定） |
-| 任务 5 PathConstraint | ✅（fixed 位置模式） | 3 组 fixed 模式（length/tangent、fixed/chain、fixed/chainScale）121 帧对 JS 全等；`percent` 位置模式因合成夹具产生 JS NaN，未覆盖（D-6.5） |
+| 任务 5 PathConstraint | ✅（fixed 位置模式） | 3 组 fixed 模式（length/tangent、fixed/chain、fixed/chainScale）121 帧对 JS 全等；`percent` 位置模式无可靠 JS 合成样本，仅内部采样单测（D-6.5） |
 | 任务 6 cache | ✅ | per-Armature `FrameCache` + `cachedFrames` + Bone/Slot set/get + child/后续 build rate 继承；`tests/cache.rs` Dragon walk 121 帧对 JS 全等（D-6.1/D-6.2/D-6.3） |
-| 任务 7 replace | ✅（除 child 递归/渲染纹理） | `replaceDisplay` / `replaceSlotDisplay(List)` / `replaceSkin` / `replaceAnimation` map override 已实现；`replacedTexture` 与 child 递归属阶段 7/后续（D-6.9/D-6.11） |
+| 任务 7 replace | ✅（除 replacedTexture） | `replaceDisplay` / `replaceSlotDisplay(List)` / `replaceSkin` / `replaceAnimation`（map override + child 递归）已实现；`replacedTexture` 属渲染对象/阶段 7（D-6.11） |
 | 任务 8 P1 审计 | ✅ | P1-6/7/8 测试 + P1-9 `tests/dirty_flags.rs`（lock/zIndex/alpha） |
 
 > 注意：`preserve_order` 已加入 serde_json feature（dbbin header 的 bone/slot 时间轴顺序依赖 JSON 对象插入序）；阶段 2–5 全量测试与 golden 仍全绿。
@@ -89,6 +89,7 @@
 | F6.10 | Rectangle：Cohen–Sutherland；`containsPoint` 用半宽/半高闭区间；Ellipse：缩放 y 后圆判定；Polygon：顶点 + AABB | 逐式翻译，不做“更优算法” |
 | F6.11 | Rectangle `inSideB` 分支写 `intersectionPointB.y = xB`（BoundingBoxData.ts:257）——官方笔误，`y` 被赋成 `xB` | **照抄可观察行为**并写测试锁定；这是官方 bug，不是 Rust 偏差 |
 | F6.12 | Slot 命中：`updateTransformAndMatrix()` → 全局矩阵求逆 → 点/端点逆变换 → BoundingBox 判定 → 交点/法线正变换回骨架坐标；`intersectsSegment` 返回 0/1/2/3/-1（Slot.ts:941-1037） | `Slot`/`Armature` 需 `&mut self`（可能更新矩阵） |
+| F6.13a | 官方 unweighted `_updatePathVertices` 循环 `for (i=0; i<pathVertexCount; i+=2)` 只写 `ceil(pathVertexCount/2)` 个顶点，剩余 `_pathGlobalVertices` 为空洞 → 合成 percent 路径在 JS 下 `_positions` 全 null/NaN | Rust 写满 `vertexCount`（D-6.5）；fixed 模式对拍不受影响，percent 仅内部单测 |
 | F6.13 | PathConstraint：`dirty`、`pathOffset`、`position/spacing/rotateOffset/rotateMix/translateMix`；`init` 解析 root/target/pathSlot/bones；`update` 先更新路径顶点（`childrenTransformDirty` / `verticesDirty` / 权重骨脏），再按 `PositionMode/SpacingMode/RotateMode` 采样并改写链骨矩阵；`invalidUpdate` 为空（Constraint.ts:230-834） | 新增 `PathConstraint` 运行时结构；空 `invalidUpdate` 照抄 |
 | F6.14 | 非匀速用 `curveLengths` 分段线性；匀速用 10 段采样积分（`segments[10]`）；`addCurvePosition` 用三次 Bézier 导数切线；`positions` 每 space 3 值（x,y,angle）（:357-634） | 数学表达式顺序不可“优化” |
 | F6.15 | Path 的路径顶点来自 path slot 的 `GeometryData`；无 weight 时只受 pathSlot 父骨矩阵，有 weight 时按 geometryBones 权重混合（:278-348） | Rust 直接读 IR `intArray/floatArray` + `Slot.geometry_data` |
@@ -286,11 +287,11 @@ pub(crate) struct AnimationFrameCache {
 | **D-6.2** | `ArmatureData.cacheFrameRate` setter 运行时化：Factory rate 表 + Armature 字段；不修改 data | 同上；新 build 从表继承 |
 | **D-6.3** | Bone/Slot 的 `cachedFrameIndices` 从缓存表**克隆**，非引用共享 | Rust 所有权；同值 |
 | **D-6.4** | `Slot/Armature::contains_point/intersects_segment` 需要 `&mut self` | 官方会 `updateTransformAndMatrix`；签名破坏性变更 |
-| **D-6.5** | Path 为“Armature 骨循环前预推进”；链骨按真实 parent 更新；path slot 父骨支持早于 root。`percent` 位置模式因合成夹具无有效样本未覆盖，`ConstraintUpdateCtx` 泛化待补 | 3 组 fixed 模式 JS 对拍；percent 不作为已验收 |
+| **D-6.5** | Path 为“Armature 骨循环前预推进”；链骨与 path slot 父骨均按真实 parent 更新（支持 root 前/后）。`percent` 位置模式无可靠 JS 合成样本（官方 unweighted 顶点半写 bug），已加内部采样单测 | 3 组 fixed 模式 JS 对拍；percent 仅内部单测 |
 | **D-6.6** | dbbin header 用标准 UTF-8 解码（非法字节直接失败或 lossy），不逐字节复刻 `_decodeUTF8` | 官方导出数据合法；非法数据行为登记 |
 | **D-6.7** | `DragonBonesData.binary`：JSON 路径存打包 IR，dbbin 路径存整份输入字节 | 对齐官方两条路径的不同来源（`_modifyArray` vs `_parseArray`） |
 | **D-6.8** | 数据删除 `remove*/clear` 立即释放，不进入 `pending_recycles` | 模型不池化（D-5.1） |
-| **D-6.9** | `replaceAnimation` 已实现 animation map override；child armature 递归未做 | data 不可变；map override 值语义；child 递归待补 |
+| **D-6.9** | `replaceAnimation` 已实现 animation map override + child armature 递归（按目标 skin display.path） | data 不可变；map override 值语义；child 递归由 `tests/replace.rs` 覆盖 |
 | **D-6.10** | 无 dbbin mesh 素材，二进制 geometry/weight 只做 source-review + 合成数组测试 | 样本限制 |
 | **D-6.11** | `Armature.replacedTexture` 不实现（适配层渲染纹理） | TS 中 core 无消费者；阶段 7 由 Bevy 实体承担 |
 

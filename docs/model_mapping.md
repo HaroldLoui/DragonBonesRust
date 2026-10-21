@@ -124,7 +124,7 @@ ame` | `""` |
 | `parent` | `parent: String` | `""` |
 
 方法：`add_{bone,slot,constraint,animation}_timeline`、`get_*`、`get_*_cached_frame_indices`。
-`cacheFrames`（P1-4）未实现，留待阶段 6。
+`cacheFrames`（P1-4）：data 层字段保留；阶段 6 运行时缓存由 per-Armature `FrameCache` 实现（D-6.1），不写 data。
 
 ### 3.3 `ArmatureData.ts` → `armature_data.rs`
 
@@ -181,7 +181,7 @@ ame` | `""` |
 | `parent` | `Option<Arc<RootInfo>>` | `None` |
 
 方法：`sort_bones`、`add_bone/slot/constraint/skin/animation/action`、`get_bone/slot/constraint/skin/mesh/animation`、`set_root_info`。
-`cacheFrames` / `setCacheFrame` / `getCacheFrame`（P1-4）未实现。
+`cacheFrames` / `setCacheFrame` / `getCacheFrame`（P1-4）：阶段 6 由 per-Armature `FrameCache` 等价实现（D-6.1/D-6.2）。
 
 ### 3.4 `BoundingBoxData.ts` → `bounding_box.rs`
 
@@ -191,7 +191,7 @@ ame` | `""` |
 | `color` / `width` / `height` | 同名 | `0x000000` / `0.0` / `0.0` |
 | `PolygonBoundingBoxData.x/y/vertices` | `BoundingBoxKind::Polygon { x, y, vertices }` | `0.0` / `[]` |
 
-`containsPoint` / `intersectsSegment`（P1-3）未实现。
+`containsPoint` / `intersectsSegment`：阶段 6 已实现三种算法（P1-3，D-6.4）。
 
 ### 3.5 `CanvasData.ts` → `canvas_data.rs`
 
@@ -616,7 +616,7 @@ ull` 状态；值与 `createColor()` 一致 |
 ull` | `Option<Arc<RootInfo>>` | 见第 2 节注 |
 | D-4.6 | `ArmatureData._onClear` 注释掉 `bones.clear()` 等 | 不复刻该注释怪癖 | 拥有树无池复用，直接清空 |
 | D-4.7 | 整数样字符串键 `for..in` 排序规则 | `IndexMap` 纯插入序 | 9 素材无整数样键，登记为已知差异（F1.6） |
-| D-4.8 | `AnimationData.cacheFrames` / `ArmatureData.setCacheFrame` 与 bone/slot cachedFrameIndices 写侧 | 保留 cache 结构（单状态 cache interval / cache frame index 计算分支）；`cachedFrames` 与 bone/slot `cachedFrameIndices` 写侧仍未实现 | P1-4；pose 与 37 个动画 golden 不依赖缓存写路径 |
+| D-4.8 | `AnimationData.cacheFrames` / `ArmatureData.setCacheFrame` 与 bone/slot cachedFrameIndices 写侧 | 阶段 6 已由 per-Armature `FrameCache` 实现（D-6.1）；data 字段不写 | P1-4；`tests/cache.rs` |
 | D-4.9 | `BinaryOffset` 单个 `const enum` 五组共用、判别值大量重复 | 五组 `binary_offset::*` 模块常量（`usize`） | 单 Rust enum 触发 E0081（实测）；下标语义用 const（enum 的类型区分在 `as usize` 使用点丢失，见 `01-stage1.md` 任务 3）；值与 TS 逐项一致，`tests/enums.rs` 守护 |
 | D-4.10 | Armature/Bone/Slot/Constraint 走 TypeId 池（`borrowObject` / `returnToPool`） | 不进池：`BaseFactory.armatures: Vec<Option<Armature>>` + `free` 空位栈——`dispose = 上锁 + 入回收队列`，帧首 flush 时 `on_clear + free.push`；build 经 `alloc_armature_slot` 优先复用空位，且 `min_exclusive` 保证**子 idx > 父 idx** | 指南 D-3.1/D-5.6；Bone/Slot/Constraint 随 `Armature.bones/slots/constraints` 生灭（`_onClear` 副作用照抄） |
 | D-4.11 | `Armature.ts:302 / :306` 两处 warn-return（`_armatureData === null` / `_parent === null`） | 不复刻，`advance_time` 上锁后直接继续 | Rust 持 `Arc<DragonBonesData>`，数据活到无引用（`on_clear` 清 `armature_name` 使 `armature_data()` 不可达）→ 分支不可达（指南 D-3.3，armature.rs 方法文档） |
@@ -628,7 +628,7 @@ ew EvProxy()` 的等价迁移）；`None` = JS
 ull`（fill 失败/数据缺失）（base_factory.rs 方法文档） |
 | D-4.16 | 对象身份比较：`_displayFrame` 对象引用、`display === _rawDisplay` / `_meshDisplay` 等 `!==` | 值比较/下标：`display_frame: Option<usize>`、`DisplayHandle` 值相等 | 同值 ⟹ 同变换/同几何/同纹理 → 刷与不刷结果一致，已论证无行为差异（slot.rs `DisplayFrame`/`update_display_data` 文档） |
 | D-4.17 | `Slot._onClear:279` 递归 `eachDisplay.dispose()`（子骨架）与 `Armature._onClear:123-124` `_clock.remove` | `Slot::on_clear` 只做本地复位 + adapter 分发；子骨架递归由 `BaseFactory` 的帧首 `flush_recycles`/`dispose_armature_now` BFS 实现，clock detach 在 factory 释放 arena slot 前完成 | `on_clear` 拿不到 `RuntimeCtx`（阶段 3 借用契约）；唯一关系 owner 为 `BaseFactory`，详见阶段 4 任务 1 / 阶段 5 任务 2 |
-| D-4.18 | `Slot.ts:541 / :549` 子骨架 clock 继承、`:554` `cacheFrameRate` 写回 data（`armatureData.cacheFrames` setter） | child clock detach/inherit 已由 RuntimeCtx 关系入口接线；cacheFrameRate 对 cachedFrames 的写侧仍未实现 | clock 行为经 `world_clock`/`armature_unit` 测试；cachedFrames 留 P1-4 |
+| D-4.18 | `Slot.ts:541 / :549` 子骨架 clock 继承、`:554` `cacheFrameRate` 写回 data（`armatureData.cacheFrames` setter） | child clock detach/inherit 已由 RuntimeCtx 关系入口接线；`:554` 调 child `set_cache_frame_rate`（D-6.2） | clock 行为经 `world_clock`/`armature_unit` 测试；cache 由 `tests/cache.rs` 覆盖 |
 | D-4.19 | 指南 F3.1「9 素材全部无约束」实测为错误事实；TS `Constraint.ts:72/:87/:198` `_scaleEnabled` 整行注释（TODO） | **IK 约束阶段 3 提前实现（F3.1 勘误）**：原始 JSON 键是 `constraint` 之外的 **`"ik"`**——`龙`（IK_L/IK_R，weight=0）与 `Rooster_Ani/Blend/P1`（bone_ik/bone_ik1，weight 缺省 1.0）共 4 个 IK 走真身；Path 仍为 stub（0 素材，真身留 P1-2）；同时忽略 `scale_enabled` | 静姿态差分证明必须真身——否则 rotation 回填链（`updateByConstraint` → `isCache=true` → `fromMatrix`）缺失，龙素材 rotation 必错；`scale_enabled` 忽略 = 对齐 TS 现状（constraint.rs 模块文档） |
 | D-4.20 | `EventObject.bone/slot` 存对象引用、`actionData` 存引用、含 `animationState` 字段 | `bone/slot` 存本骨架内索引（`Option<BoneIdx>` / `Option<SlotIdx>`）+ 冗余名字；`action_data` 存克隆；不存 `animation_state` | D-3.2 / D-1.1；`animationState` 虽在 TS 写入，但核心与 golden 不读取（F4.27），因此不引入跨 StateArena 的生命周期引用；监听器修改克隆 `UserData` 不会写回 data |
 | D-4.21 | jsdump `NullSlot._onUpdateDisplay` 的 `this._rd = this._display \|\| this._rawDisplay` 赋值 | `NullSlotAdapter::update_display` 纯 no-op | 该字段全库无消费者；Rust adapter 不持有 Slot 状态（trait 方法不带状态参，D-3.4 签名冻结）——阶段 7 扩 trait 签名时再议（slot.rs trait/adapter 文档） |
@@ -660,10 +660,10 @@ ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文
 | D-6.2 | `ArmatureData.cacheFrameRate` setter 写 data | 每 Armature `runtime_cache_frame_rate` + `FrameCache::initialize`；factory `set_armature_cache_frame_rate` | 不修改 data；factory `cache_rates` 供同名 data/armature 后续 build 继承 |
 | D-6.3 | Bone/Slot `_cachedFrameIndices` 是共享引用 | 从缓存表**克隆**到运行时对象 | 同值；避免生命周期 |
 | D-6.4 | `Slot/Armature::contains_point/intersects_segment` 官方会更新矩阵，Rust 需 `&mut self`；Slot 还需父骨参数 | 已改 `&mut self`（Slot 额外传 `parent: &Bone`）；`Armature.contains_point` 仍返回 bool | P1-3；`tests/bounding_box.rs` |
-| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行；任意链骨 parent 拓扑 | Armature 骨循环前预推进；链骨按真实 parent 更新；path slot 父骨可早于 root；`percent` 位置模式无有效合成样本 | 3 组 fixed 模式 JS 121 帧全等；`percent` 未验收 |
+| D-6.5 | PathConstraint 官方在 root 的 `Bone.update` 内执行；任意 parent 拓扑；官方 unweighted `_updatePathVertices` 按 `i<pathVertexCount; i+=2` 只写一半顶点 | Armature 骨循环前预推进；链骨/path slot 父骨按真实 parent 更新（含 root 之前/之后）；Rust 写满 `vertexCount`（修正官方半写 bug），percent 采样有内部单测 | 3 组 fixed 模式 JS 121 帧全等；percent 无可靠 JS golden（官方路径下为 NaN） |
 | D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
-| D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override 已实现；child 递归未做 | `tests/replace.rs` 覆盖 map override；child 待补 |
+| D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override + child armature 递归已实现（按目标 skin display.path） | `tests/replace.rs` 覆盖 map 与 child 递归 |
 | D-6.10 | 官方 dbbin 样本无 mesh | 二进制 geometry/weight 只做 source-review；样本 IR/pose 已全等 | P1-1 覆盖限制 |
 | D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
