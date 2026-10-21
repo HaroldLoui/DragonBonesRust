@@ -512,6 +512,20 @@ impl BaseFactory {
         Some(self.add_dragon_bones_data(dragon_bones_data, (!name.is_empty()).then_some(name)))
     }
 
+    /// 对齐 `BaseFactory.parseDragonBonesData` 的 `ArrayBuffer` 分支（TS:354 → `BinaryDataParser`）。
+    ///
+    /// dbbin 头部不含 `textureAtlas`，因此不做 JSON 路径的内嵌图集 while 循环；
+    /// 图集仍由调用方用 `parseTextureAtlasData` 单独提供。
+    pub fn parse_dragon_bones_data_binary(
+        &mut self,
+        bytes: &[u8],
+        name: &str,
+    ) -> Option<Arc<DragonBonesData>> {
+        let scale = 1.0;
+        let dragon_bones_data = self.parser.parse_binary_dragon_bones_data(bytes, scale)?;
+        Some(self.add_dragon_bones_data(dragon_bones_data, (!name.is_empty()).then_some(name)))
+    }
+
     /// 对齐 `parseTextureAtlasData(rawData, textureAtlas, name, scale = 1.0)`（BaseFactory.ts:402-409）。
     ///
     /// - `tools/jsdump.mjs:97` 调用形态：`factory.parseTextureAtlasData(JSON.parse(tex), null, key)`

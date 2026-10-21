@@ -172,7 +172,7 @@ fn slot_data_defaults() {
     assert_eq!(s.blend_mode, BlendMode::Normal);
     assert_eq!(s.display_index, 0);
     assert_eq!(s.z_order, 0);
-    assert_eq!(s.z_index, 0);
+    assert_eq!(s.z_index, 0.0);
     assert_eq!(s.alpha, 1.0);
     assert!(s.name.is_empty());
     assert_eq!(s.color, ColorTransform::default());

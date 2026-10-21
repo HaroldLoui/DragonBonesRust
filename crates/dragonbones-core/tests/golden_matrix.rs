@@ -500,7 +500,7 @@ fn compare_pose(
                 f64::from(slot.display_index),
                 f64::from(i32::from(slot.visible)),
                 f64::from(slot.z_order),
-                f64::from(slot.z_index),
+                slot.z_index,
                 color.red_multiplier,
                 color.green_multiplier,
                 color.blue_multiplier,

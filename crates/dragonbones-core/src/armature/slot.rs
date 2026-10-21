@@ -50,6 +50,10 @@ use crate::model::{
     GeometryData, SlotData, TextureData,
 };
 
+fn point_opt<'b>(value: &'b mut Option<&mut Point>) -> Option<&'b mut Point> {
+    value.as_mut().map(|point| &mut **point)
+}
+
 /// Slot 的 14 抽象方法（对齐 `Slot.ts:332-348`，D-3.4）——
 /// Bevy 适配层（阶段 7）的全部契约。
 ///
@@ -317,8 +321,9 @@ pub struct Slot {
     pub animation_display_index: i32,
     /// 对齐 `_zOrder`（Slot.ts:208，`@internal`），`_onClear` = 0（:310）。
     pub z_order: i32,
-    /// 对齐 `_zIndex`（Slot.ts:212，`@internal`），`_onClear` = 0（:311）。
-    pub z_index: i32,
+    /// 对齐 `_zIndex`（Slot.ts:212，`@internal`），`_onClear` = 0（:311）；
+    /// D-4.35 关闭：官方是 `number`，允许 SlotZIndex 时间轴产生小数。
+    pub z_index: f64,
     /// 对齐 `_cachedFrameIndex`（Slot.ts:204），`_onClear` = -1（:312）；
     /// 阶段 3 恒 -1（P1-4 缓存帧阶段 6）。
     pub cached_frame_index: i32,
@@ -416,7 +421,7 @@ impl Default for Slot {
             display_index: -1,                          // :308
             animation_display_index: -1,                // :309
             z_order: 0,                                 // :310
-            z_index: 0,                                 // :311
+            z_index: 0.0,                                 // :311
             cached_frame_index: -1,                     // :312
             pivot_x: 0.0,                               // :313
             pivot_y: 0.0,                               // :314
@@ -1423,28 +1428,99 @@ impl Slot {
     }
 
     /// 对齐 `containsPoint(x, y)`（Slot.ts:941-953）。
+    ///
+    /// D-6.4：官方会 `updateTransformAndMatrix()`，Rust 需要 `&mut self` 和父骨。
     #[must_use]
-    pub fn contains_point(&self, _x: f64, _y: f64) -> bool {
-        false // TODO P1-3（阶段 6）：BoundingBox（内部 updateTransformAndMatrix + 逆矩阵变换点）
+    pub fn contains_point(&mut self, x: f64, y: f64, parent: &Bone) -> bool {
+        let Some(bounding_box) = self.bounding_box_data.clone() else {
+            return false;
+        };
+        self.update_transform_and_matrix(parent);
+        let mut matrix = self.global_transform_matrix;
+        matrix.invert();
+        let (local_x, local_y) = matrix.transform_point(x, y, false);
+        bounding_box.contains_point(local_x, local_y)
     }
 
-    /// 对齐 `intersectsSegment(…)`（Slot.ts:984-1038）。
+    /// 对齐 `intersectsSegment(…)`（Slot.ts:984-1037）。
     ///
-    /// 返回值：TS 为 `intersectionCount: number`（0 = 不相交）；阶段 3 恒无命中
-    /// → `None`（阶段 6 接 BoundingBox 后返回 `Some(count)`）。
-    #[allow(clippy::too_many_arguments)] // TS 形参即 7 个（4 坐标 + 3 出参），照抄签名
+    /// 返回值：TS 为 `intersectionCount: number`（0 = 不相交）；`None` 表示本槽
+    /// 没有 BoundingBox（与 0 等价，保留阶段 3 的 Option 外观）。
+    #[allow(clippy::too_many_arguments)] // TS 形参即 7 个（4 坐标 + 3 出参）
     #[must_use]
     pub fn intersects_segment(
-        &self,
-        _x_a: f64,
-        _y_a: f64,
-        _x_b: f64,
-        _y_b: f64,
-        _intersection_point_a: Option<&mut Point>,
-        _intersection_point_b: Option<&mut Point>,
-        _normal_radians: Option<&mut Point>,
+        &mut self,
+        x_a: f64,
+        y_a: f64,
+        x_b: f64,
+        y_b: f64,
+        parent: &Bone,
+        intersection_point_a: Option<&mut Point>,
+        intersection_point_b: Option<&mut Point>,
+        normal_radians: Option<&mut Point>,
     ) -> Option<i32> {
-        None // TODO P1-3（阶段 6）：BoundingBox（逆变换端点 → BoundingBoxData.intersectsSegment → 正变换回世界）
+        let bounding_box = self.bounding_box_data.clone()?;
+        self.update_transform_and_matrix(parent);
+
+        let mut inverse = self.global_transform_matrix;
+        inverse.invert();
+        let (local_x_a, local_y_a) = inverse.transform_point(x_a, y_a, false);
+        let (local_x_b, local_y_b) = inverse.transform_point(x_b, y_b, false);
+
+        let mut point_a = intersection_point_a;
+        let mut point_b = intersection_point_b;
+        let mut normals = normal_radians;
+        let count = bounding_box.intersects_segment(
+            local_x_a,
+            local_y_a,
+            local_x_b,
+            local_y_b,
+            point_opt(&mut point_a),
+            point_opt(&mut point_b),
+            point_opt(&mut normals),
+        );
+
+        if count > 0 {
+            if count == 1 || count == 2 {
+                if let Some(point) = point_opt(&mut point_a) {
+                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    point.x = x;
+                    point.y = y;
+                    if let Some(other) = point_opt(&mut point_b) {
+                        other.x = point.x;
+                        other.y = point.y;
+                    }
+                } else if let Some(point) = point_opt(&mut point_b) {
+                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    point.x = x;
+                    point.y = y;
+                }
+            } else {
+                if let Some(point) = point_opt(&mut point_a) {
+                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    point.x = x;
+                    point.y = y;
+                }
+                if let Some(point) = point_opt(&mut point_b) {
+                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    point.x = x;
+                    point.y = y;
+                }
+            }
+
+            if let Some(normal) = point_opt(&mut normals) {
+                let (x, y) = self
+                    .global_transform_matrix
+                    .transform_point(normal.x.cos(), normal.x.sin(), true);
+                normal.x = y.atan2(x);
+                let (x, y) = self
+                    .global_transform_matrix
+                    .transform_point(normal.y.cos(), normal.y.sin(), true);
+                normal.y = y.atan2(x);
+            }
+        }
+
+        Some(count)
     }
 
     /// 对齐 `Slot.armatureData`（经 TS `_armature._armatureData`，Slot.ts 内 3 处：
@@ -1538,7 +1614,7 @@ impl Slot {
         self.display_index = -1; // :308
         self.animation_display_index = -1; // :309
         self.z_order = 0; // :310
-        self.z_index = 0; // :311
+        self.z_index = 0.0; // :311
         self.cached_frame_index = -1; // :312
         self.pivot_x = 0.0; // :313
         self.pivot_y = 0.0; // :314

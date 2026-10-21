@@ -36,6 +36,48 @@ pub struct IrArrays {
     pub frame_indices: Vec<i32>,
 }
 
+impl IrArrays {
+    /// 对齐 `ObjectDataParser._modifyArray` 的**写出**（P1-10）。
+    ///
+    /// 顺序与 `_modifyArray` 完全一致：int i16、float f32、frameInt i16、
+    /// frameFloat f32、frame i16、timeline u16、color i16；均为小端。
+    /// 调用前数组必须已经过 padding（[`crate::parser::ObjectDataParser`] 的 JSON 路径）。
+    #[must_use]
+    pub fn to_binary(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(
+            self.int_array.len() * 2
+                + self.float_array.len() * 4
+                + self.frame_int_array.len() * 2
+                + self.frame_float_array.len() * 4
+                + self.frame_array.len() * 2
+                + self.timeline_array.len() * 2
+                + self.color_array.len() * 2,
+        );
+        for value in &self.int_array {
+            bytes.extend_from_slice(&(*value as i16).to_le_bytes());
+        }
+        for value in &self.float_array {
+            bytes.extend_from_slice(&(*value as f32).to_le_bytes());
+        }
+        for value in &self.frame_int_array {
+            bytes.extend_from_slice(&(*value as i16).to_le_bytes());
+        }
+        for value in &self.frame_float_array {
+            bytes.extend_from_slice(&(*value as f32).to_le_bytes());
+        }
+        for value in &self.frame_array {
+            bytes.extend_from_slice(&(*value as i16).to_le_bytes());
+        }
+        for value in &self.timeline_array {
+            bytes.extend_from_slice(&(*value as u16).to_le_bytes());
+        }
+        for value in &self.color_array {
+            bytes.extend_from_slice(&(*value as i16).to_le_bytes());
+        }
+        bytes
+    }
+}
+
 /// 共享根：TS 中所有 “parent → DragonBonesData” 实际读取的内容（D-1.1）。
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RootInfo {
@@ -115,5 +157,15 @@ impl DragonBonesData {
         for armature in self.armatures.values_mut() {
             armature.set_root_info(&root);
         }
+    }
+
+    /// JSON 解析收尾：按 `_modifyArray` 布局生成 `data.binary`（P1-10）。
+    ///
+    /// 注意这不是 dbbin 文件：没有 `DBDT` tag/header，只是 7 组 TypedArray 的字节流。
+    pub fn pack_binary(&mut self) {
+        let Some(root) = self.root.as_ref() else {
+            return;
+        };
+        self.binary = Some(root.ir.to_binary());
     }
 }

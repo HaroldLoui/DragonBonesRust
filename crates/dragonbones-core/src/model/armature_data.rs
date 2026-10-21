@@ -85,7 +85,8 @@ pub struct SlotData {
     pub blend_mode: BlendMode,
     pub display_index: i32,
     pub z_order: i32,
-    pub z_index: i32,
+    /// 对齐 TS `zIndex: number`（D-4.35 关闭：允许小数，排序按原值）。
+    pub z_index: f64,
     pub alpha: f64,
     pub name: String,
     pub color: ColorTransform,
@@ -99,7 +100,7 @@ impl Default for SlotData {
             blend_mode: BlendMode::Normal,
             display_index: 0,
             z_order: 0,
-            z_index: 0,
+            z_index: 0.0,
             alpha: 1.0,
             name: String::new(),
             color: ColorTransform::default(),

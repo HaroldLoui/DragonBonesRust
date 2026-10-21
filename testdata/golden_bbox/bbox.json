@@ -1,0 +1,2797 @@
+{
+  "armature": "bbox_fixture",
+  "points": [
+    {
+      "point": [
+        -80,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        -80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        -60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        -40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        -20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        -20,
+        -20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        0,
+        -20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        20,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        -20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        0
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        0
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        0
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        0
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        0,
+        0
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        20,
+        0
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        40,
+        0
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        60,
+        0
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        0
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        20,
+        20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        40,
+        20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        60,
+        20
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        80,
+        20
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        40
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        40
+      ],
+      "hit": "poly"
+    },
+    {
+      "point": [
+        40,
+        40
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        60,
+        40
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        80,
+        40
+      ],
+      "hit": "rect"
+    },
+    {
+      "point": [
+        -80,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        60
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -80,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -60,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -40,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        -20,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        0,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        20,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        40,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        60,
+        80
+      ],
+      "hit": null
+    },
+    {
+      "point": [
+        80,
+        80
+      ],
+      "hit": null
+    }
+  ],
+  "slots": {
+    "rect": {
+      "pointResults": [
+        {
+          "point": [
+            -80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            -20,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            0,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            0,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            80,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            -80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            80
+          ],
+          "hit": false
+        }
+      ],
+      "segmentResults": [
+        {
+          "segment": [
+            -100,
+            0,
+            100,
+            0
+          ],
+          "count": 3,
+          "a": [
+            -34.82050807568878,
+            3.552713678800501e-15
+          ],
+          "b": [
+            40.179491924311236,
+            3.552713678800501e-15
+          ],
+          "normal": [
+            2.0943951023931957,
+            -1.0471975511965979
+          ]
+        },
+        {
+          "segment": [
+            -100,
+            -100,
+            100,
+            100
+          ],
+          "count": 3,
+          "a": [
+            -38.56406460551019,
+            -38.56406460551017
+          ],
+          "b": [
+            47.565698604072026,
+            47.56569860407203
+          ],
+          "normal": [
+            -2.6179938779914944,
+            2.0943951023931957
+          ]
+        },
+        {
+          "segment": [
+            0,
+            0,
+            200,
+            0
+          ],
+          "count": 2,
+          "a": [
+            40.17949192431123,
+            0
+          ],
+          "b": [
+            40.17949192431123,
+            0
+          ],
+          "normal": [
+            2.0943951023931957,
+            -1.0471975511965979
+          ]
+        },
+        {
+          "segment": [
+            -200,
+            0,
+            0,
+            0
+          ],
+          "count": 1,
+          "a": [
+            -34.82050807568879,
+            -7.105427357601002e-15
+          ],
+          "b": [
+            -34.82050807568879,
+            -7.105427357601002e-15
+          ],
+          "normal": [
+            2.0943951023931957,
+            -1.0471975511965983
+          ]
+        },
+        {
+          "segment": [
+            10,
+            10,
+            20,
+            20
+          ],
+          "count": -1,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            0,
+            -200,
+            0,
+            200
+          ],
+          "count": 3,
+          "a": [
+            0,
+            -23.19764047840347
+          ],
+          "b": [
+            7.105427357601002e-15,
+            20.103629710818453
+          ],
+          "normal": [
+            -1.0471975511965979,
+            2.0943951023931957
+          ]
+        },
+        {
+          "segment": [
+            -60,
+            -60,
+            -40,
+            -40
+          ],
+          "count": 0,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            40,
+            40,
+            60,
+            60
+          ],
+          "count": 2,
+          "a": [
+            47.565698604072054,
+            47.565698604072054
+          ],
+          "b": [
+            47.565698604072054,
+            47.565698604072054
+          ],
+          "normal": [
+            -1.0471975511965983,
+            2.0943951023931957
+          ]
+        }
+      ]
+    },
+    "ellipse": {
+      "pointResults": [
+        {
+          "point": [
+            -80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            -20,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            0,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            0,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            80,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            -80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            80
+          ],
+          "hit": false
+        }
+      ],
+      "segmentResults": [
+        {
+          "segment": [
+            -100,
+            0,
+            100,
+            0
+          ],
+          "count": 3,
+          "a": [
+            -27.0401818715342,
+            5.329070518200751e-15
+          ],
+          "b": [
+            39.692011225709805,
+            1.7763568394002505e-15
+          ],
+          "normal": [
+            2.7502536649549554,
+            -0.8857804035631731
+          ]
+        },
+        {
+          "segment": [
+            -100,
+            -100,
+            100,
+            100
+          ],
+          "count": 3,
+          "a": [
+            -30.45452722758285,
+            -30.454527227582844
+          ],
+          "b": [
+            41.74950785745821,
+            41.749507857458205
+          ],
+          "normal": [
+            -2.0675559591155483,
+            1.6132381580266069
+          ]
+        },
+        {
+          "segment": [
+            0,
+            0,
+            200,
+            0
+          ],
+          "count": 2,
+          "a": [
+            39.692011225709834,
+            0
+          ],
+          "b": [
+            39.692011225709834,
+            0
+          ],
+          "normal": [
+            -0.8857804035631726,
+            2.2558122500266204
+          ]
+        },
+        {
+          "segment": [
+            -200,
+            0,
+            0,
+            0
+          ],
+          "count": 1,
+          "a": [
+            -27.04018187153423,
+            -5.329070518200751e-15
+          ],
+          "b": [
+            -27.04018187153423,
+            -5.329070518200751e-15
+          ],
+          "normal": [
+            2.750253664954956,
+            -0.3913389886348382
+          ]
+        },
+        {
+          "segment": [
+            10,
+            10,
+            20,
+            20
+          ],
+          "count": -1,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            0,
+            -200,
+            0,
+            200
+          ],
+          "count": 3,
+          "a": [
+            -1.4210854715202004e-14,
+            -21.013576347361827
+          ],
+          "b": [
+            0,
+            19.804790948559287
+          ],
+          "normal": [
+            -1.5002335518773662,
+            2.2607359652632324
+          ]
+        },
+        {
+          "segment": [
+            -60,
+            -60,
+            -40,
+            -40
+          ],
+          "count": 0,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            40,
+            40,
+            60,
+            60
+          ],
+          "count": 2,
+          "a": [
+            41.74950785745813,
+            41.74950785745813
+          ],
+          "b": [
+            41.74950785745813,
+            41.74950785745813
+          ],
+          "normal": [
+            1.6132381580266069,
+            -1.528354495563186
+          ]
+        }
+      ]
+    },
+    "poly": {
+      "pointResults": [
+        {
+          "point": [
+            -80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            0,
+            -20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            -20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            0
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            0
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            20,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            60,
+            20
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            80,
+            20
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            40
+          ],
+          "hit": true
+        },
+        {
+          "point": [
+            40,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            40
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            60
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -80,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            -20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            0,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            20,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            40,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            60,
+            80
+          ],
+          "hit": false
+        },
+        {
+          "point": [
+            80,
+            80
+          ],
+          "hit": false
+        }
+      ],
+      "segmentResults": [
+        {
+          "segment": [
+            -100,
+            0,
+            100,
+            0
+          ],
+          "count": 3,
+          "a": [
+            -16.893911356342755,
+            1.0658141036401503e-14
+          ],
+          "b": [
+            40.179429400209735,
+            7.105427357601002e-15
+          ],
+          "normal": [
+            -2.939744432388137,
+            -1.0471995511965977
+          ]
+        },
+        {
+          "segment": [
+            -100,
+            -100,
+            100,
+            100
+          ],
+          "count": 3,
+          "a": [
+            -29.491359573444434,
+            -29.491359573444427
+          ],
+          "b": [
+            38.04310954796179,
+            38.0431095479618
+          ],
+          "normal": [
+            -2.939744432388137,
+            0.8453493299949411
+          ]
+        },
+        {
+          "segment": [
+            0,
+            0,
+            200,
+            0
+          ],
+          "count": 1,
+          "a": [
+            40.17942940020972,
+            -1.7763568394002505e-15
+          ],
+          "b": [
+            40.17942940020972,
+            -1.7763568394002505e-15
+          ],
+          "normal": [
+            -1.0471995511965977,
+            2.0943931023931954
+          ]
+        },
+        {
+          "segment": [
+            -200,
+            0,
+            0,
+            0
+          ],
+          "count": 1,
+          "a": [
+            -16.89391135634275,
+            7.105427357601002e-15
+          ],
+          "b": [
+            -16.89391135634275,
+            7.105427357601002e-15
+          ],
+          "normal": [
+            -2.939744432388137,
+            0.2018482212016564
+          ]
+        },
+        {
+          "segment": [
+            10,
+            10,
+            20,
+            20
+          ],
+          "count": 0,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            0,
+            -200,
+            0,
+            200
+          ],
+          "count": 3,
+          "a": [
+            7.105427357601002e-15,
+            -23.197577593818096
+          ],
+          "b": [
+            1.0658141036401503e-14,
+            39.54962987944139
+          ],
+          "normal": [
+            -1.0471995511965977,
+            -2.939744432388137
+          ]
+        },
+        {
+          "segment": [
+            -60,
+            -60,
+            -40,
+            -40
+          ],
+          "count": 0,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        },
+        {
+          "segment": [
+            40,
+            40,
+            60,
+            60
+          ],
+          "count": 0,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  }
+}

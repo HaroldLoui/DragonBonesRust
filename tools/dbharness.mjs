@@ -91,6 +91,18 @@ export function createFactory(skePath, texPath, key) {
   return { factory, em, key };
 }
 
+/** 建 factory + DragonBones 全局实例（dbbin 输入；Node Buffer → ArrayBuffer）。 */
+export function createFactoryFromBinary(dbbinPath, texPath, key) {
+  const em = new EvProxy();
+  const factory = new NullFactory();
+  factory._dragonBones = new db.DragonBones(em);
+  const buffer = fs.readFileSync(dbbinPath);
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  factory.parseDragonBonesData(arrayBuffer, key);
+  factory.parseTextureAtlasData(JSON.parse(fs.readFileSync(texPath, "utf8")), null, key);
+  return { factory, em, key };
+}
+
 /** buildArmature + 显式挂 factory.clock（F2/F4：全局推进才派发事件）。 */
 export function buildArmature(factory, armName, key) {
   const armature = factory.buildArmature(armName, key, "", key);

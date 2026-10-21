@@ -156,17 +156,16 @@ pub(crate) fn blend(
                     .armature_data
                     .slots
                     .get(&slot.slot_name)
-                    .map_or(0.0, |data| f64::from(data.z_index))
+                    .map_or(0.0, |data| data.z_index)
             } else {
                 timeline.results.first().copied().unwrap_or(0.0)
             };
-            // D-4.35: TS `slot._zIndex +=/= _result * blendWeight`
-            // (`TimelineState.ts:843/846`) keeps a fractional number; the
-            // runtime field is i32, so this `as i32` intentionally truncates.
+            // D-4.35 关闭：官方 `_zIndex` 是 number，时间轴可产生小数；
+            // 不再截断为 i32（`TimelineState.ts:843/846`）。
             if blend_dirty > 1 {
-                slot.z_index += (value * blend_weight) as i32;
+                slot.z_index += value * blend_weight;
             } else {
-                slot.z_index = (value * blend_weight) as i32;
+                slot.z_index = value * blend_weight;
             }
             if is_blend_dirty || timeline.base.dirty {
                 *context.z_index_dirty = true;
@@ -399,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn slot_z_index_accumulates_or_overwrites_with_documented_i32_truncation() {
+    fn slot_z_index_accumulates_or_overwrites_with_fractional_values() {
         // D-4.35: TS keeps a fractional number (TimelineState.ts:843/846).
         let mut timeline = numeric_timeline(
             TimelineType::SlotZIndex,
@@ -420,14 +419,14 @@ mod tests {
         approx(timeline.results[0], 3.5);
 
         let (mut fixture, mut slot) = slot_fixture();
-        slot.z_index = 10;
+        slot.z_index = 10.0;
         fixture.slots.push(slot);
         fixture.with_context(|context| blend(&mut timeline, context, 1.0, 1, true));
-        assert_eq!(fixture.slots[0].z_index, 3);
+        assert_eq!(fixture.slots[0].z_index, 3.5);
         assert!(fixture.z_index_dirty);
 
-        fixture.slots[0].z_index = 1;
+        fixture.slots[0].z_index = 1.0;
         fixture.with_context(|context| blend(&mut timeline, context, 1.0, 2, true));
-        assert_eq!(fixture.slots[0].z_index, 4);
+        assert_eq!(fixture.slots[0].z_index, 4.5);
     }
 }

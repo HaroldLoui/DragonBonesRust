@@ -20,6 +20,7 @@ use crate::event::EventObject;
 use crate::geom::Point;
 use crate::model::{ArmatureData, DragonBonesData};
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// 对齐 `Armature`（Armature.ts:42）。
@@ -473,7 +474,11 @@ impl Armature {
             // 不可把 `SlotIdx` 当位置下标；位置访问必须按 `slot.idx` 扫描（下方 ④ alpha
             // 传播 / ⑦ action 队列即两处按此实现，`get_slot` 同返身份）。build 期
             // `slots[idx]` 因恒创建序而安全（factory 装配段）。
-            slots.sort_by_key(|s| i64::from(s.z_index) * 1000 + i64::from(s.z_order));
+            // D-4.35 关闭：zIndex 为 f64；稳定排序 + 数值键保持等键原序（D-4.29）。
+            slots.sort_by(|a, b| {
+                let key = |slot: &Slot| slot.z_index * 1000.0 + f64::from(slot.z_order);
+                key(a).partial_cmp(&key(b)).unwrap_or(Ordering::Equal)
+            });
 
             if *z_index_dirty {
                 // :318-322 zIndex 变化 → 重发 zOrder 序号（`set_z_order` 会置各槽
@@ -725,22 +730,20 @@ impl Armature {
     /// 对齐 `Armature.containsPoint(x, y)`（`armature/Armature.ts:451-459`）——
     /// 按当前（已排序）插槽顺序找首个命中自定义包围盒的槽。
     ///
-    /// 签名偏差（阶段 3 冻结、暂不改）：TS 返回**命中的 Slot**（Armature.ts:454
-    /// `return slot`，:458 无命中 `null`）；Rust 返回 `bool`（命中即 true，:454 的
-    /// 命中槽被丢弃）。TODO 阶段 6（P1-3）：实现 BoundingBox 时改签名返回
-    /// `Option<SlotIdx>`（登记 TODO，签名现冻结不动）。
-    ///
-    /// TODO P1-3（阶段 6）：`Slot::contains_point` 内部 BoundingBox 未实现（恒
-    /// false）→ 整体暂恒 false；遍历骨架照抄，阶段 6 接 BoundingBox 后无需改本方法。
+    /// D-6.4：官方会更新 Slot 变换矩阵，Rust 需要 `&mut self`；返回值仍为 bool
+    ///（TS 返回 Slot，Rust 阶段 3 签名保持不变）。
     #[must_use]
-    pub fn contains_point(&self, x: f64, y: f64) -> bool {
-        for slot in &self.slots {
-            // :452-453 按当前（已排序）顺序
-            if slot.contains_point(x, y) {
-                return true; // :454 TS 返回首个命中的 slot；Rust 签名 bool → 命中即 true
+    pub fn contains_point(&mut self, x: f64, y: f64) -> bool {
+        let Self { bones, slots, .. } = self;
+        for slot in slots {
+            let Some(parent) = bones.get(slot.parent.index()) else {
+                continue;
+            };
+            if slot.contains_point(x, y, parent) {
+                return true;
             }
         }
-        false // :458
+        false
     }
 
     /// 对齐 `Armature.intersectsSegment(…)`（`armature/Armature.ts:490-574`）——
@@ -759,7 +762,7 @@ impl Armature {
     #[allow(clippy::too_many_arguments)] // TS 形参即 8 个坐标，照抄签名
     #[must_use]
     pub fn intersects_segment(
-        &self,
+        &mut self,
         x_a: f64,
         y_a: f64,
         x_b: f64,
@@ -769,19 +772,21 @@ impl Armature {
         x_d: f64,
         y_d: f64,
     ) -> Option<(f64, f64)> {
-        let is_v = x_a == x_b; // :496 线段是否竖直（A 点距离度量用 y 差）
-        let mut d_min = 0.0; // :497
-        let mut d_max = 0.0; // :498
-        let mut int_x_a = 0.0; // :499
-        let mut int_y_a = 0.0; // :500
-        let mut int_x_b = 0.0; // :501
-        let mut int_y_b = 0.0; // :502
-        let mut int_slot_a: Option<usize> = None; // :505（TS 存槽引用；Rust 存下标）
-        let mut int_slot_b: Option<usize> = None; // :506
+        let is_v = x_a == x_b;
+        let mut d_min = 0.0;
+        let mut d_max = 0.0;
+        let mut int_x_a = 0.0;
+        let mut int_y_a = 0.0;
+        let mut int_x_b = 0.0;
+        let mut int_y_b = 0.0;
+        let mut int_slot_a: Option<usize> = None;
+        let mut int_slot_b: Option<usize> = None;
 
-        for (i, slot) in self.slots.iter().enumerate() {
-            // :509 TS 把调用方的出参对象透传给每个槽；Rust 用局部 Point 同构
-            //（初值来自入参，槽命中时覆写——Slot.ts:1007-1025 写回世界坐标）
+        let Self { bones, slots, .. } = self;
+        for (i, slot) in slots.iter_mut().enumerate() {
+            let Some(parent) = bones.get(slot.parent.index()) else {
+                continue;
+            };
             let mut point_a = Point { x: x_c, y: y_c };
             let mut point_b = Point { x: x_d, y: y_d };
             let intersection_count = slot.intersects_segment(
@@ -789,9 +794,10 @@ impl Armature {
                 y_a,
                 x_b,
                 y_b,
+                parent,
                 Some(&mut point_a),
                 Some(&mut point_b),
-                None, // normalRadians：骨架签名无对应参数（见方法文档偏差）
+                None,
             );
             if intersection_count.is_some_and(|count| count > 0) {
                 // :510

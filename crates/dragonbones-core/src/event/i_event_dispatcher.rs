@@ -60,3 +60,17 @@ pub trait EventDispatcher {
     /// 对齐 `dispatchDBEvent(type, eventObject)`（IEventDispatcher.ts:73）。
     fn dispatch_db_event(&mut self, ty: &str, event: &EventObject);
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::event::ListenerId;
+
+    #[test]
+    fn listener_ids_are_unique_and_never_sentinel() {
+        let a = ListenerId::next();
+        let b = ListenerId::next();
+        assert_ne!(a, b);
+        assert!(b.0 > a.0);
+        assert!(!a.is_sentinel());
+    }
+}

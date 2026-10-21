@@ -24,6 +24,7 @@ use crate::model::dragon_bones_data::{DragonBonesData, IrArrays};
 use crate::model::skin_data::SkinData;
 use crate::model::texture_atlas_data::{TextureAtlasData, TextureData};
 use crate::model::user_data::{ActionData, UserData};
+use crate::parser::binary_data_parser::BinaryArrays;
 use crate::parser::data_parser::*;
 use crate::parser::js_compat::*;
 
@@ -125,6 +126,9 @@ pub struct ObjectDataParser {
 
     raw_texture_atlases: Option<Vec<Value>>,
     raw_texture_atlas_index: usize,
+
+    /// dbbin 模式：`Some` 时 `parse_array/parse_animation/parse_geometry` 走二进制分支。
+    binary: Option<BinaryArrays>,
 }
 
 impl Default for ObjectDataParser {
@@ -175,6 +179,7 @@ impl ObjectDataParser {
             deform_mesh_name: None,
             raw_texture_atlases: None,
             raw_texture_atlas_index: 0,
+            binary: None,
         }
     }
 
@@ -273,8 +278,32 @@ impl ObjectDataParser {
 
     // ---- 入口 1：骨架数据 ----
 
-    /// 对齐 `ObjectDataParser.parseDragonBonesData`。
+    /// 对齐 `ObjectDataParser.parseDragonBonesData`（JSON 路径）。
     pub fn parse_dragon_bones_data(&mut self, raw: &Value, scale: f64) -> Option<DragonBonesData> {
+        self.binary = None;
+        self.parse_dragon_bones_data_impl(raw, scale)
+    }
+
+    /// 对齐 `BaseFactory.parseDragonBonesData(ArrayBuffer)` → `BinaryDataParser`。
+    ///
+    /// 只替换入口与三个解析分支；骨架/皮肤/显示/约束的静态结构复用 JSON 解析。
+    pub fn parse_binary_dragon_bones_data(
+        &mut self,
+        bytes: &[u8],
+        scale: f64,
+    ) -> Option<DragonBonesData> {
+        let binary = BinaryArrays::decode(bytes)?;
+        let header = binary.header.clone();
+        self.binary = Some(binary);
+        self.frame_indices.clear();
+        self.parse_dragon_bones_data_impl(&header, scale)
+    }
+
+    fn parse_dragon_bones_data_impl(
+        &mut self,
+        raw: &Value,
+        scale: f64,
+    ) -> Option<DragonBonesData> {
         if !is_supported_version(raw) {
             return None;
         }
@@ -314,11 +343,27 @@ impl ObjectDataParser {
                 self.data.as_mut().unwrap().add_armature(armature);
             }
 
-            self.modify_array();
-
             let mut data = self.data.take().unwrap();
-            let ir = self.build_ir();
-            data.finalize_root(ir);
+            if let Some(binary) = self.binary.take() {
+                // dbbin：数组已是最终 TypedArray 视图，不做 padding/量化。
+                let ir = IrArrays {
+                    int_array: binary.int_array,
+                    float_array: binary.float_array,
+                    frame_int_array: binary.frame_int_array,
+                    frame_float_array: binary.frame_float_array,
+                    frame_array: binary.frame_array,
+                    timeline_array: binary.timeline_array,
+                    color_array: binary.color_array,
+                    frame_indices: std::mem::take(&mut self.frame_indices),
+                };
+                data.finalize_root(ir);
+                data.binary = Some(binary.payload);
+            } else {
+                self.modify_array();
+                let ir = self.build_ir();
+                data.finalize_root(ir);
+                data.pack_binary();
+            }
 
             if has_key(raw, STAGE) {
                 let stage_name = get_string(raw, STAGE, "");
@@ -410,6 +455,17 @@ impl ObjectDataParser {
     }
 
     fn parse_array(&mut self) {
+        if let Some(binary) = self.binary.as_ref() {
+            // dbbin：数组直接来自 TypedArray，保留精确长度（不 padding）。
+            self.int_array.clone_from(&binary.int_array);
+            self.float_array.clone_from(&binary.float_array);
+            self.frame_int_array.clone_from(&binary.frame_int_array);
+            self.frame_float_array.clone_from(&binary.frame_float_array);
+            self.frame_array.clone_from(&binary.frame_array);
+            self.timeline_array.clone_from(&binary.timeline_array);
+            self.color_array.clone_from(&binary.color_array);
+            return;
+        }
         self.int_array.clear();
         self.float_array.clear();
         self.frame_int_array.clear();
@@ -867,7 +923,7 @@ impl ObjectDataParser {
         let slot = SlotData {
             display_index: get_number(raw, DISPLAY_INDEX, 0.0) as i32,
             z_order: z_order as i32,
-            z_index: get_number(raw, Z_INDEX, 0.0) as i32,
+            z_index: get_number(raw, Z_INDEX, 0.0),
             alpha: get_number(raw, ALPHA, 1.0),
             name: get_string(raw, NAME, ""),
             blend_mode,
@@ -1170,7 +1226,266 @@ impl ObjectDataParser {
 
     // ---- animation ----
 
+    /// `BinaryDataParser._parseAnimation`（BinaryDataParser.ts:186-329）。
+    fn parse_binary_animation(&mut self, raw: &Value) -> AnimationData {
+        let frame_count = get_number(raw, DURATION, 0.0) as i32;
+        let frame_rate = self.armature.as_ref().unwrap().frame_rate;
+        let mut name = get_string(raw, NAME, DEFAULT_NAME);
+        if name.is_empty() {
+            name = DEFAULT_NAME.to_string();
+        }
+        let offsets = raw.get(OFFSET).and_then(Value::as_array);
+        let offset_at = |index: usize| -> i32 {
+            offsets
+                .and_then(|values| values.get(index))
+                .and_then(Value::as_f64)
+                .map_or(0, |value| value as i32)
+        };
+        let animation = AnimationData {
+            blend_type: crate::parser::data_parser::get_animation_blend_type(&get_string(
+                raw, BLEND_TYPE, "",
+            )),
+            frame_count,
+            play_times: get_number(raw, PLAY_TIMES, 1.0) as i32,
+            duration: f64::from(frame_count) / frame_rate,
+            fade_in_time: get_number(raw, FADE_IN_TIME, 0.0),
+            scale: get_number(raw, SCALE, 1.0),
+            name,
+            frame_int_offset: offset_at(0),
+            frame_float_offset: offset_at(1),
+            frame_offset: offset_at(2),
+            ..Default::default()
+        };
+        self.animation = Some(animation);
+
+        if let Some(offset) = raw.get(ACTION).and_then(Value::as_f64)
+            && let Some(timeline) =
+                self.parse_binary_timeline(TimelineType::Action, offset as i32, 0.0, 0.0)
+        {
+            self.animation.as_mut().unwrap().action_timeline = Some(Box::new(timeline));
+        }
+        if let Some(offset) = raw.get(Z_ORDER).and_then(Value::as_f64)
+            && let Some(timeline) =
+                self.parse_binary_timeline(TimelineType::ZOrder, offset as i32, 0.0, 0.0)
+        {
+            self.animation.as_mut().unwrap().z_order_timeline = Some(Box::new(timeline));
+        }
+
+        for (key, target_is_bone) in [(BONE, true), (SLOT, false), (CONSTRAINT, false)] {
+            let Some(groups) = raw.get(key).and_then(Value::as_object) else {
+                continue;
+            };
+            for (target_name, values) in groups {
+                let exists = match (key, self.armature.as_ref()) {
+                    (BONE, Some(armature)) => armature.get_bone(target_name).is_some(),
+                    (SLOT, Some(armature)) => armature.get_slot(target_name).is_some(),
+                    (CONSTRAINT, Some(armature)) => {
+                        armature.constraints.contains_key(target_name)
+                    }
+                    _ => false,
+                };
+                if !exists {
+                    continue;
+                }
+                let Some(values) = values.as_array() else {
+                    continue;
+                };
+                let mut index = 0;
+                while index + 1 < values.len() {
+                    let Some(kind) = values[index].as_f64() else {
+                        break;
+                    };
+                    let Some(offset) = values[index + 1].as_f64() else {
+                        break;
+                    };
+                    let timeline_type = num_to_timeline_type(kind);
+                    if let Some(timeline) =
+                        self.parse_binary_timeline(timeline_type, offset as i32, 0.0, 0.0)
+                    {
+                        let animation = self.animation.as_mut().unwrap();
+                        if target_is_bone {
+                            animation.add_bone_timeline(target_name, timeline);
+                        } else if key == CONSTRAINT {
+                            animation.add_constraint_timeline(target_name, timeline);
+                        } else {
+                            animation.add_slot_timeline(target_name, timeline);
+                        }
+                    }
+                    index += 2;
+                }
+            }
+        }
+
+        if let Some(raw_timelines) = raw.get(TIMELINE).and_then(Value::as_array) {
+            for raw_timeline in raw_timelines {
+                let offset = get_number(raw_timeline, OFFSET, -1.0);
+                if offset < 0.0 {
+                    continue;
+                }
+                let kind = get_number(raw_timeline, TYPE, f64::from(TimelineType::Action as u32));
+                let timeline_type = num_to_timeline_type(kind);
+                let timeline_name = get_string(raw_timeline, NAME, "");
+                let x = get_number(raw_timeline, X, 0.0);
+                let y = get_number(raw_timeline, Y, 0.0);
+                let Some(timeline) =
+                    self.parse_binary_timeline(timeline_type, offset as i32, x, y)
+                else {
+                    continue;
+                };
+                let animation = self.animation.as_mut().unwrap();
+                match timeline_type {
+                    TimelineType::Action | TimelineType::ZOrder => {}
+                    TimelineType::BoneTranslate
+                    | TimelineType::BoneRotate
+                    | TimelineType::BoneScale
+                    | TimelineType::Surface
+                    | TimelineType::BoneAlpha => animation.add_bone_timeline(&timeline_name, timeline),
+                    TimelineType::SlotDisplay
+                    | TimelineType::SlotColor
+                    | TimelineType::SlotDeform
+                    | TimelineType::SlotZIndex
+                    | TimelineType::SlotAlpha => animation.add_slot_timeline(&timeline_name, timeline),
+                    TimelineType::IKConstraint => {
+                        animation.add_constraint_timeline(&timeline_name, timeline)
+                    }
+                    TimelineType::AnimationProgress
+                    | TimelineType::AnimationWeight
+                    | TimelineType::AnimationParameter => {
+                        animation.add_animation_timeline(&timeline_name, timeline)
+                    }
+                    TimelineType::BoneAll => animation.add_bone_timeline(&timeline_name, timeline),
+                }
+            }
+        }
+
+        self.animation.take().expect("binary animation was set")
+    }
+
+    /// `BinaryDataParser._parseBinaryTimeline`（:141-184）。
+    fn parse_binary_timeline(
+        &mut self,
+        timeline_type: TimelineType,
+        offset: i32,
+        x: f64,
+        y: f64,
+    ) -> Option<TimelineData> {
+        let animation = self.animation.as_ref()?;
+        let frame_count = animation.frame_count;
+        let frame_offset = animation.frame_offset;
+        let offset_index = usize::try_from(offset).ok()?;
+        let key_frame_count = *self
+            .timeline_array
+            .get(offset_index + binary_offset::timeline::KEY_FRAME_COUNT)?;
+        let mut frame_indices_offset = -1i32;
+        if key_frame_count > 1 {
+            let total = usize::try_from(frame_count + 1).ok()?;
+            frame_indices_offset = i32::try_from(self.frame_indices.len()).ok()?;
+            self.frame_indices.resize(self.frame_indices.len() + total, 0);
+            let mut key_index = 0usize;
+            let mut frame_start = 0i32;
+            let mut count = 0i32;
+            let key_count = usize::try_from(key_frame_count).ok()?;
+            for frame in 0..total {
+                if frame_start + count <= frame as i32 && key_index < key_count {
+                    let entry = offset_index
+                        + binary_offset::timeline::FRAME_OFFSET
+                        + key_index;
+                    let relative = *self.timeline_array.get(entry)?;
+                    frame_start = *self
+                        .frame_array
+                        .get(frame_offset as usize + relative as usize)?;
+                    count = if key_index + 1 == key_count {
+                        frame_count - frame_start
+                    } else {
+                        let next_entry = entry + 1;
+                        let next_relative = *self.timeline_array.get(next_entry)?;
+                        *self
+                            .frame_array
+                            .get(frame_offset as usize + next_relative as usize)?
+                            - frame_start
+                    };
+                    key_index += 1;
+                }
+                self.frame_indices[frame_indices_offset as usize + frame] =
+                    i32::try_from(key_index).ok()? - 1;
+            }
+        }
+        Some(TimelineData {
+            timeline_type,
+            offset,
+            frame_indices_offset,
+            x,
+            y,
+        })
+    }
+
+    /// `BinaryDataParser._parseGeometry`（:331-365）。
+    fn parse_binary_geometry(&mut self, raw: &Value, geometry: &mut GeometryData) {
+        let offset = get_number(raw, OFFSET, -1.0);
+        geometry.offset = offset as i32;
+        let Some(geometry_offset) = usize::try_from(offset as i32).ok() else {
+            return;
+        };
+        let mut weight_offset = self
+            .int_array
+            .get(geometry_offset + binary_offset::geometry::WEIGHT_OFFSET)
+            .copied()
+            .unwrap_or(-1);
+        if weight_offset < -1 {
+            weight_offset += 65536;
+        }
+        if weight_offset < 0 {
+            return;
+        }
+        let Some(weight_offset) = usize::try_from(weight_offset).ok() else {
+            return;
+        };
+        let vertex_count = self
+            .int_array
+            .get(geometry_offset + binary_offset::geometry::VERTEX_COUNT)
+            .copied()
+            .unwrap_or(0);
+        let bone_count = self
+            .int_array
+            .get(weight_offset + binary_offset::weight::BONE_COUNT)
+            .copied()
+            .unwrap_or(0);
+        if bone_count < 0 || vertex_count < 0 {
+            return;
+        }
+        let mut weight = WeightData {
+            offset: weight_offset as i32,
+            count: 0,
+            ..Default::default()
+        };
+        for index in 0..bone_count {
+            let bone_index = self
+                .int_array
+                .get(weight_offset + binary_offset::weight::BONE_INDICES + index as usize)
+                .copied()
+                .unwrap_or(0);
+            if let Some(name) = usize::try_from(bone_index)
+                .ok()
+                .and_then(|index| self.raw_bones.get(index))
+            {
+                weight.add_bone(name.clone());
+            }
+        }
+        let mut cursor = weight_offset + binary_offset::weight::BONE_INDICES + bone_count as usize;
+        let mut weight_count = 0i32;
+        for _ in 0..vertex_count {
+            let vertex_bone_count = self.int_array.get(cursor).copied().unwrap_or(0);
+            weight_count += vertex_bone_count;
+            cursor += 1 + usize::try_from(vertex_bone_count).unwrap_or(0);
+        }
+        weight.count = weight_count;
+        geometry.weight = Some(Box::new(weight));
+    }
+
     fn parse_animation(&mut self, raw: &Value) -> AnimationData {
+        if self.binary.is_some() {
+            return self.parse_binary_animation(raw);
+        }
         let frame_count = get_number(raw, DURATION, 0.0) as i32;
         let frame_rate = self.armature.as_ref().unwrap().frame_rate;
         let mut name = get_string(raw, NAME, DEFAULT_NAME);
@@ -2584,6 +2899,10 @@ impl ObjectDataParser {
     // ---- geometry ----
 
     fn parse_geometry(&mut self, raw: &Value, geometry: &mut GeometryData) {
+        if self.binary.is_some() {
+            self.parse_binary_geometry(raw, geometry);
+            return;
+        }
         let raw_vertices = raw.get(VERTICES).and_then(Value::as_array);
         let vertex_count = raw_vertices.map_or(0, |v| v.len() / 2);
 

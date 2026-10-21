@@ -427,7 +427,7 @@ fn slot_sort_stability_and_z_index_rewrite() {
 
     // ① 复合键全平局（zIndex=3 / zOrder=5）+ 只置 slots_dirty（不动 z_index_dirty）
     for slot in factory.armature_mut(idx).slots.iter_mut() {
-        slot.z_index = 3;
+        slot.z_index = 3.0;
         slot.z_order = 5;
     }
     factory.armature_mut(idx).slots_dirty = true;
@@ -475,22 +475,22 @@ fn slot_sort_stability_and_z_index_rewrite() {
     // ③ 不同 zIndex（按当前位置倒序赋 0..n-1）+ z_index_dirty → 按键升序
     //    注：此时 zOrder = 0..n-1（② 回写），键 = z_index*1000 + z_order 两两不同
     for (i, slot) in factory.armature_mut(idx).slots.iter_mut().enumerate() {
-        let z_index = i32::try_from(total - 1 - i).expect("槽数量在 i32 范围内");
+        let z_index = (total - 1 - i) as f64;
         slot.z_index = z_index;
     }
     // 自算期望：稳定排序按 z_index*1000+z_order 升序（平局保持当前序，本例无平局）
-    let mut expected: Vec<(String, i64)> = factory
+    let mut expected: Vec<(String, f64)> = factory
         .armature(idx)
         .get_slots()
         .iter()
         .map(|s| {
             (
                 s.slot_name.clone(),
-                i64::from(s.z_index) * 1000 + i64::from(s.z_order),
+                s.z_index * 1000.0 + f64::from(s.z_order),
             )
         })
         .collect();
-    expected.sort_by_key(|(_, key)| *key); // Vec::sort_by_key 稳定
+    expected.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)); // 稳定排序
     let expected_names: Vec<String> = expected.into_iter().map(|(name, _)| name).collect();
 
     factory.armature_mut(idx).z_index_dirty = true;
