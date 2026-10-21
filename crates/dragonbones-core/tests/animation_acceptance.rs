@@ -14,9 +14,10 @@
 mod common;
 
 use common::ir_snapshot::{asset_root, tex_stem};
-use common::{golden_path, read_value};
+use common::{EventLog, RecordingEventManager, RecordingProxy, golden_path, read_value};
 use dragonbones_core::animation::StateId;
 use dragonbones_core::armature::{ArmatureIdx, DisplayHandle, NullArmatureProxy, SlotIdx};
+use dragonbones_core::event::EventObject;
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
 use dragonbones_core::model::{
@@ -668,10 +669,10 @@ fn find_child_slot(factory: &BaseFactory, parent: ArmatureIdx) -> (ArmatureIdx, 
     panic!("父骨架没有 display 为 Armature 的槽（子骨架接线失败）");
 }
 
-/// S4-Event / F4.9：Sound action 不受 listener 闸门影响，且会出现在
-/// `take_flushed_events()` 的本帧快照中（不是只验证 action 轴内部缓冲）。
+/// S5-Event / F5.17：Sound action 不受骨架 listener 闸门影响；即使骨架 proxy
+/// 没有任何 listener，SOUND 仍派发到全局 `eventManager`（`DragonBones.ts:322-324`）。
 #[test]
-fn sound_action_appears_in_flushed_event_snapshot_without_listener() {
+fn sound_action_reaches_global_event_manager_without_armature_listener() {
     let ske = serde_json::json!({
         "version": "5.6",
         "name": "Sfx",
@@ -690,8 +691,19 @@ fn sound_action_appears_in_flushed_event_snapshot_without_listener() {
     factory
         .parse_dragon_bones_data(&ske, "sfx")
         .unwrap_or_else(|| panic!("最小 Sound action ske 应解析成功"));
+
+    let armature_log = EventLog::default();
+    let manager_log = EventLog::default();
+    factory.set_event_manager(Box::new(RecordingEventManager::new(manager_log.clone())));
+    // 骨架 proxy 不注册任何 listener：只验证 Sound 是否仍到达全局 manager。
     let idx = factory
-        .build_armature("Sfx", "sfx", "", "", Box::new(NullArmatureProxy::new()))
+        .build_armature(
+            "Sfx",
+            "sfx",
+            "",
+            "",
+            Box::new(RecordingProxy::new(armature_log.clone())),
+        )
         .unwrap_or_else(|| panic!("最小 Sound action 骨架应 build 成功"));
     factory
         .attach_armature(factory.root_clock(), idx)
@@ -705,24 +717,28 @@ fn sound_action_appears_in_flushed_event_snapshot_without_listener() {
         "sfx 动画应存在"
     );
 
-    // 未注册任何 listener：Frame/lifecycle 会被 gate，但 Sound 必须入队。
     let mut sound_events = Vec::new();
     for _ in 0..4 {
         factory.advance_time(1.0 / 24.0);
         sound_events.extend(
-            factory.take_flushed_events().into_iter().filter(|event| {
-                event.event_type == dragonbones_core::event::EventObject::SOUND_EVENT
-            }),
+            manager_log
+                .drain()
+                .into_iter()
+                .filter(|event| event.event_type == EventObject::SOUND_EVENT),
         );
     }
     assert_eq!(
         sound_events.len(),
         1,
-        "无 listener 时 Sound action 仍应恰好 flush 出 1 条 soundEvent，实际 {sound_events:?}"
+        "无骨架 listener 时 Sound action 仍应恰好派发 1 条 soundEvent 到 eventManager，实际 {sound_events:?}"
     );
     assert_eq!(
         sound_events[0].name, "boom",
         "soundEvent.name 应为 action 名 `boom`"
+    );
+    assert!(
+        armature_log.is_empty(),
+        "骨架 proxy 没有 listener，不应记录任何派发事件"
     );
 }
 

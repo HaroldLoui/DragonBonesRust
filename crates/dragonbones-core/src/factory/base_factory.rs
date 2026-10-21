@@ -22,7 +22,7 @@ use crate::armature::{
     NullSlotAdapter, RuntimeCtx, RuntimeCtxError, Slot, SlotIdx,
 };
 use crate::core::enums::ConstraintType;
-use crate::event::EventObject;
+use crate::event::{EventDispatcher, EventObject};
 use crate::model::{
     ActionData, ArmatureData, DisplayData, DisplayKind, DragonBonesData, SkinData,
     TextureAtlasData, TextureData,
@@ -30,7 +30,7 @@ use crate::model::{
 use crate::parser::ObjectDataParser;
 use indexmap::IndexMap;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 /// 对齐 `BuildArmaturePackage`（BaseFactory.ts:1017-1027，字段照抄；普通类不进池，
@@ -98,18 +98,26 @@ pub struct BaseFactory {
     clocks: ClockArena,
     /// Default/root clock corresponding to `DragonBones.clock`.
     root_clock: ClockId,
-    /// Events waiting for the next runtime flush.
-    pending_events: Vec<EventObject>,
-    /// Most recent event batch moved out of the pending queue by advance_time.
-    flushed_events: Vec<EventObject>,
+    /// Events waiting for the next runtime dispatch (JS `_events`, FIFO).
+    pending_events: VecDeque<EventObject>,
+    /// Objects to recycle at the start of the next global advance (JS `_objects`).
+    pending_recycles: Vec<PendingRecycle>,
+    /// Global event manager (JS `_eventManager`); SOUND double-dispatch target.
+    event_manager: Option<Box<dyn EventDispatcher>>,
     /// 对齐 `_dataParser`（TS:57；TS 构造可注入 DataParser，Rust 恒 `ObjectDataParser`）。
     /// TS 的 `static _objectParser/_binaryParser` 惰性单例（:47-48）→ Rust 每工厂一个
     /// 实例（笔记 A.2-1 允许；JS 共享语义在单工厂场景等价）。
     pub parser: ObjectDataParser,
-    // TODO 阶段 5（P0-12）: TS `_dragonBones` 的全局 eventManager dispatch；阶段 4 的
-    //   clock 与 event queue 由本 Factory 唯一持有，flush seam 不调用 listener。
     // TODO 阶段 6（P1-5）: `BinaryDataParser`（TS:354 `rawData instanceof ArrayBuffer`
     //   强制走二进制 parser）——Rust 侧无此实现（阶段 2 只做 JSON 路径）。
+}
+
+/// Deferred recyclables, mirroring JS `DragonBones._objects` (`bufferObject`).
+///
+/// Armature disposal is the only deferred object in stage 5; `EventObject`
+/// instances are dropped after their dispatch call stack ends (D-5.3).
+pub(crate) enum PendingRecycle {
+    Armature(ArmatureIdx),
 }
 
 /// One prevalidated Armature clock move used to make tree updates atomic.
@@ -133,8 +141,9 @@ impl Default for BaseFactory {
             free: Vec::new(),
             clocks,
             root_clock,
-            pending_events: Vec::new(),
-            flushed_events: Vec::new(),
+            pending_events: VecDeque::new(),
+            pending_recycles: Vec::new(),
+            event_manager: None,
             parser: ObjectDataParser::default(),
         }
     }
@@ -808,36 +817,48 @@ impl BaseFactory {
         ArmatureIdx(idx)
     }
 
-    /// 对齐 `Armature.dispose()`（Armature.ts:265-270）+ arena 空位复用（D-3.1）：
-    /// `on_clear()`（= TS `bufferObject` → 下帧 `returnToPool` 的 `_onClear`，含
-    /// `proxy.dbClear()`，Armature.ts:147-149）→ 槽置 `None` → `free.push(idx)`。
+    /// 对齐 `Armature.dispose()`（Armature.ts:265-270）：**只上锁 + 入缓冲队列**。
     ///
-    /// **子骨架递归释放**（Slot.ts:279 `eachDisplay.dispose()` 的 arena 侧承担——
-    /// `slot.rs::on_clear` 文档约定“由 arena dispose 路径经 `Slot::child_armature`
-    /// 递归释放”）：BFS 收集自身 + 全部子骨架 display（`child_armature` 与各
-    /// `display_frames[].display = Armature(_)`）后统一清场，去重防环。
+    /// 官方 `dispose` 不做清场：`_lockUpdate = true` 后 `_dragonBones.bufferObject(this)`，
+    /// 真正 `_onClear` 由下一次全局 `DragonBones.advanceTime` 开头的 `_objects` flush
+    /// 执行（Armature.ts:122-180）。Rust 的 [`Self::flush_recycles`] 承担同一时机。
     ///
-    /// **`proxy.dispose(true)` 不在本方法调用**（读 TS 决定）：TS core 从不回调
-    /// proxy.dispose——该入口在引擎显示对象侧（`PixiArmatureDisplay.dispose(disposeProxy=true)`
-    /// 先 `dispose(true)` 再 `_armature.dispose()`，PixiArmatureDisplay.ts:167-171）；
-    /// `Armature._onClear` 只做 `dbClear`。阶段 7 Bevy 代理由其显示实体入口自行调用。
+    /// 可观察效果（测试见 `tests/lifecycle.rs`）：
+    /// - 本帧内 `armature(idx)` 仍可查询、仍挂在 clock 成员表里，但 `advance_one`
+    ///   因 `lock_update` 早退；
+    /// - 下一次 `advance_time`（含 `dt = 0`）先 flush：BFS 子骨架、clock detach、
+    ///   `on_clear`（含 `proxy.db_clear`）、槽位置 `None`、`free.push`；
+    /// - 重复 dispose 在本帧内静默幂等（等价官方 `bufferObject` 的身份去重）。
     ///
-    /// **不进 TypeId 池**（guide 坑 12）：Armature/Bone/Slot 随 arena 槽位生灭。
-    ///
-    /// **时机差异（登记 D-4.31）**：官方 `Armature.dispose`（Armature.ts:265-270）只做
-    /// `_lockUpdate = true` + `_dragonBones.bufferObject(this)`——进 `DragonBones`
-    /// 缓冲队列、**下帧** `advanceTime` 才 flush `returnToPool`（＝ `_onClear`）；
-    /// Rust `dispose_armature` 就地 `on_clear` + 置 `None` + `free.push`。
-    /// 结果面等价（同一帧内该骨架已不可见/不可推进：TS 侧 `_lockUpdate` 挡推进、
-    /// Rust 侧 take 后槽位 `None` 无人能取），但**清场时机提前半拍**（TS 的
-    /// buffer→flush 间隙内对象仍占池），登记为 D-4.31 池语义偏差（阶段 5 接
-    /// `bufferObject` 后收口）。
+    /// `proxy.dispose(true)` 仍不由本方法调用：TS core 从不回调 proxy.dispose，
+    /// 该入口在引擎显示对象侧（`PixiArmatureDisplay.dispose(disposeProxy=true)`）；
+    /// 阶段 7 Bevy 代理由其显示实体入口自行调用。
     pub fn dispose_armature(&mut self, idx: ArmatureIdx) {
-        if self.armatures.get(idx.index()).is_none_or(Option::is_none) {
+        let Some(armature) = self.armatures.get_mut(idx.index()).and_then(Option::as_mut) else {
             log::warn!(
-                "dispose_armature: armature {} not built or already disposed",
+                "dispose_armature: armature {} not built or already recycled",
                 idx.0
             );
+            return;
+        };
+        if armature.lock_update {
+            return; // 幂等：等价 JS bufferObject 的身份去重
+        }
+        armature.lock_update = true;
+        self.pending_recycles.push(PendingRecycle::Armature(idx));
+    }
+
+    /// 对齐 `Armature._onClear` + arena 空位复用（D-3.1 / D-5.6）。
+    ///
+    /// `on_clear()`（含 `proxy.dbClear()`，Armature.ts:147-149）→ 槽置 `None` →
+    /// `free.push(idx)`。子骨架递归释放（Slot.ts:279 `eachDisplay.dispose()` 的
+    /// arena 侧承担）：BFS 收集自身 + 全部子骨架 display（`child_armature` 与各
+    /// `display_frames[].display = Armature(_)`）后统一清场，去重防环。
+    ///
+    /// 只由 [`Self::flush_recycles`] 调用；直接调用会绕过官方的一帧延迟。
+    fn dispose_armature_now(&mut self, idx: ArmatureIdx) {
+        if self.armatures.get(idx.index()).is_none_or(Option::is_none) {
+            log::warn!("dispose_armature_now: armature {} already recycled", idx.0);
             return;
         }
 
@@ -920,9 +941,8 @@ impl BaseFactory {
             let Some(mut armature) = slot.take() else {
                 continue; // 已是空位
             };
-            // TS Armature.dispose():267 `_lockUpdate = true`：只用于 buffer→flush 间防推进；
-            // Rust dispose 不经 DragonBones 缓冲队列（阶段 5 才有），take 后无人能推进
-            // → 无需置位（on_clear 会把 lock_update 复位 false，Armature.ts:158）。
+            // 延迟清场时 `lock_update` 已由 dispose 置 true；`on_clear` 会复位
+            // false（Armature.ts:158），与官方 `_onClear` 收尾一致。
             armature.on_clear(); // = returnToPool 时点的 _onClear（含 proxy.dbClear）
             self.free.push(current); // D-3.1 空位复用栈
         }
@@ -1185,7 +1205,7 @@ impl BaseFactory {
     /// - 递归公开 `buildArmature`（内部再跑 fill/bones/slots/constraints +
     ///   `invalidUpdate` + `advanceTime(0.0)`，笔记 A.7）。
     /// - **子骨架不额外 advance**（F3.11：顶层 build 收尾的 advance 只在各自 build 内发生；
-    ///   阶段 5 `BaseFactory::advance_time` 循环才统一推进全部骨架）。
+    ///   之后由 `BaseFactory::advance_time` 的 clock 派发统一推进全部骨架）。
     /// - proxy：TS `NullFactory._buildArmature` 每次 `new EvProxy()`（笔记 B.5）→
     ///   Rust [`NullArmatureProxy`]。
     /// - Rust 侧附加 `min_exclusive = 父 idx`：**子骨架 idx > 父 idx**（D-3.2 不变量，
@@ -1472,8 +1492,10 @@ impl BaseFactory {
     }
 
     fn advance_time_with_source(&mut self, passed_time: f64, now: &mut impl FnMut() -> f64) {
-        self.flush_objects(); // DragonBones.ts:305-311; no object pool in this phase.
+        // ① JS DragonBones.ts:305-311: recycle objects buffered by the previous frame.
+        self.flush_recycles();
 
+        // ② JS :313
         let mut clock_path = Vec::new();
         if let Err(error) =
             self.advance_clock_with(self.root_clock, passed_time, now, &mut clock_path)
@@ -1481,12 +1503,49 @@ impl BaseFactory {
             log::warn!("root clock advance stopped: {error}");
         }
 
-        // Replace the previous snapshot even when no events were queued or dt was zero.
-        self.flushed_events = std::mem::take(&mut self.pending_events);
+        // ③ JS :315-331: dispatch this frame's events (after the clock).
+        self.dispatch_events();
     }
 
-    fn flush_objects(&mut self) {
-        // BaseObject buffer is not part of the stage 4 runtime yet.
+    /// Returns objects buffered by `dispose_armature` (`JS _objects` flush).
+    fn flush_recycles(&mut self) {
+        let pending = std::mem::take(&mut self.pending_recycles);
+        for item in pending {
+            match item {
+                PendingRecycle::Armature(idx) => self.dispose_armature_now(idx),
+            }
+        }
+    }
+
+    /// Dispatches queued events in FIFO order (`DragonBones.ts:315-331`).
+    ///
+    /// - `armature` missing/None → skip the whole event, including the SOUND
+    ///   second dispatch (`:320`);
+    /// - armature proxy first, then the global event manager for SOUND (`:321-324`);
+    /// - `while let pop_front` mirrors the official loop's dynamic length: events
+    ///   appended while dispatching are visited in the same `advance_time`.
+    fn dispatch_events(&mut self) {
+        while let Some(event) = self.pending_events.pop_front() {
+            let Some(armature_idx) = event.armature else {
+                continue; // 防御：官方事件恒带 armature
+            };
+            let Some(armature) = self
+                .armatures
+                .get_mut(armature_idx.index())
+                .and_then(Option::as_mut)
+            else {
+                continue; // JS :320 `_armatureData === null` → 整条跳过（含 SOUND）
+            };
+
+            armature.proxy.dispatch_db_event(&event.event_type, &event);
+
+            if event.event_type == EventObject::SOUND_EVENT
+                && let Some(manager) = self.event_manager.as_mut()
+            {
+                manager.dispatch_db_event(&event.event_type, &event);
+            }
+            // 阶段 5 不池化：事件在本次派发调用栈结束后 drop（D-5.3）。
+        }
     }
 
     /// Visits the fixed-start member snapshot in order, resolving each token
@@ -1582,20 +1641,26 @@ impl BaseFactory {
         result
     }
 
-    /// Buffers a new owned event for the next global-advance flush.
+    /// Buffers a new owned event for the next global-advance dispatch.
     #[doc(hidden)]
     pub fn buffer_event(&mut self, event: EventObject) {
-        self.pending_events.push(event);
+        self.pending_events.push_back(event);
     }
 
-    /// Object-pool buffering placeholder; object pooling is outside this task.
-    #[doc(hidden)]
-    pub fn buffer_object(&mut self) {}
+    /// Sets the global event manager used for SOUND double dispatch
+    /// (`DragonBones.ts:322-324`). Unset means only the armature proxy receives
+    /// the event.
+    pub fn set_event_manager(&mut self, manager: Box<dyn EventDispatcher>) {
+        self.event_manager = Some(manager);
+    }
 
-    /// Takes the most recently flushed event batch; a repeated call returns empty.
-    #[doc(hidden)]
-    pub fn take_flushed_events(&mut self) -> Vec<EventObject> {
-        std::mem::take(&mut self.flushed_events)
+    #[must_use]
+    pub fn event_manager(&self) -> Option<&(dyn EventDispatcher + 'static)> {
+        self.event_manager.as_deref()
+    }
+
+    pub fn event_manager_mut(&mut self) -> Option<&mut (dyn EventDispatcher + 'static)> {
+        self.event_manager.as_deref_mut()
     }
 }
 
@@ -1621,7 +1686,8 @@ impl BaseFactory {
 //   - `get_texture_atlas_data(name)`（TS:545-547）：返回**数组**（同名多 atlas，
 //     笔记 A.2-4）——Rust `atlas_map.get(name)` 直读，包装方法同批补
 //   - `update_texture_atlases`（TS:424-433）、`clear/remove*`（TS:647-666 / 516-524 /
-//     599-610，依赖 `_dragonBones.bufferObject` → 阶段 5 WorldClock 后接）
+//     599-610）：数据对象删除 API 属 P1（阶段 6）；Armature 回收已由
+//     `pending_recycles` 承担（D-5.6）。
 
 #[cfg(test)]
 mod runtime_clock_tests {
@@ -1787,6 +1853,7 @@ mod runtime_clock_tests {
         let (mut factory, parent, child, clock, rogue, _target) = inconsistent_tree();
 
         factory.dispose_armature(parent);
+        factory.advance_time_with(0.0, 100.0);
 
         assert!(factory.armatures[parent.index()].is_none());
         assert!(factory.armatures[child.index()].is_none());

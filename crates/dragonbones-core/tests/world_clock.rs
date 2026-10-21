@@ -7,7 +7,7 @@
 mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use common::ir_snapshot::{asset_root, tex_stem};
 use dragonbones_core::armature::{
@@ -15,7 +15,7 @@ use dragonbones_core::armature::{
     NullArmatureProxy,
 };
 use dragonbones_core::animation::world_clock::{AnimatableHandle, ClockError, ClockId};
-use dragonbones_core::event::EventObject;
+use dragonbones_core::event::{EventDispatcher, EventObject};
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
 use dragonbones_core::model::{
@@ -53,7 +53,9 @@ impl ArmatureProxy for CountingProxy {
     fn dispose(&mut self, dispose_proxy: bool) {
         self.inner.dispose(dispose_proxy);
     }
+}
 
+impl EventDispatcher for CountingProxy {
     fn add_db_event_listener(&mut self, ty: &str, listener: DbEventListener) -> ListenerId {
         self.inner.add_db_event_listener(ty, listener)
     }
@@ -238,30 +240,60 @@ fn dispose_detaches_armature_before_releasing_its_slot() {
         .expect("attach before disposal");
 
     factory.dispose_armature(armature);
+    // 阶段 5：dispose 只入缓冲队列，帧首 flush 才真正清场（D-5.6）。
+    factory.advance_time_with(0.0, 100.0);
 
     assert!(factory.armatures[armature.index()].is_none());
     assert!(!factory.clock_contains(root, AnimatableHandle::Armature(armature)));
 }
 
 #[test]
-fn global_advance_zero_flushes_events_without_advancing_members() {
+fn global_advance_zero_dispatches_events_without_advancing_members() {
     let mut factory = BaseFactory::new();
     let count = Arc::new(AtomicUsize::new(0));
     let armature = add_empty_armature(&mut factory, Arc::clone(&count));
     factory
         .attach_armature(factory.root_clock(), armature)
         .expect("attach member");
-    factory.buffer_event(EventObject::default());
-    factory.buffer_event(EventObject::default());
+
+    let log = Arc::new(Mutex::new(Vec::<EventObject>::new()));
+    let sink = Arc::clone(&log);
+    factory
+        .armature_mut(armature)
+        .proxy
+        .add_db_event_listener(
+            EventObject::FRAME_EVENT,
+            Box::new(move |event| sink.lock().unwrap().push(event.clone())),
+        );
+
+    for name in ["a", "b"] {
+        factory.buffer_event(EventObject {
+            event_type: EventObject::FRAME_EVENT.to_owned(),
+            name: name.to_owned(),
+            armature: Some(armature),
+            ..EventObject::default()
+        });
+    }
 
     factory.advance_time_with(0.0, 100.0);
 
-    assert_eq!(advances(&count), 0);
-    assert_eq!(factory.take_flushed_events().len(), 2);
-    assert!(factory.take_flushed_events().is_empty());
+    assert_eq!(advances(&count), 0, "dt=0 不应推进 clock 成员");
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"],
+        "dt=0 仍必须派发本帧事件（F5.1）"
+    );
 
     factory.advance_time_with(0.0, 100.1);
-    assert!(factory.take_flushed_events().is_empty());
+    assert_eq!(
+        log.lock().unwrap().len(),
+        2,
+        "无事件帧不得重放上一帧事件（派发不是快照）"
+    );
 }
 
 #[test]
@@ -408,46 +440,52 @@ fn member_receives_scaled_signed_dt_for_fractional_and_negative_time_scale() {
     }
 }
 
-/// S4-Event：flush 每次用本帧 pending 整体替换上一帧快照；未 take 的旧快照
-/// 也会在下一次 flush 时被无事件帧替换，且同帧重复 take 第二次为空。
+/// S5-Event：事件按入队顺序派发且不重放；同值/不同值的独立事件都必须保留
+/// （D-4.33 / D-5.5——Rust 不做内容去重，也不保留“上一帧快照”）。
 #[test]
-fn event_snapshot_is_replaced_even_when_previous_batch_was_not_taken() {
+fn events_dispatch_once_in_order_without_replaying_previous_frames() {
     let mut factory = BaseFactory::new();
+    let armature = add_empty_armature(&mut factory, Arc::new(AtomicUsize::new(0)));
+    factory
+        .attach_armature(factory.root_clock(), armature)
+        .expect("attach member");
 
-    factory.buffer_event(EventObject {
-        event_type: EventObject::FRAME_EVENT.to_owned(),
-        name: "first".to_owned(),
-        ..EventObject::default()
-    });
-    factory.buffer_event(EventObject {
-        event_type: EventObject::FRAME_EVENT.to_owned(),
-        name: "second".to_owned(),
-        ..EventObject::default()
-    });
+    let log = Arc::new(Mutex::new(Vec::<EventObject>::new()));
+    let sink = Arc::clone(&log);
+    factory
+        .armature_mut(armature)
+        .proxy
+        .add_db_event_listener(
+            EventObject::FRAME_EVENT,
+            Box::new(move |event| sink.lock().unwrap().push(event.clone())),
+        );
+
+    for name in ["first", "second"] {
+        factory.buffer_event(EventObject {
+            event_type: EventObject::FRAME_EVENT.to_owned(),
+            name: name.to_owned(),
+            armature: Some(armature),
+            ..EventObject::default()
+        });
+    }
     factory.advance_time_with(0.1, 100.0);
 
-    let first = factory.take_flushed_events();
     assert_eq!(
-        first.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.name.as_str())
+            .collect::<Vec<_>>(),
         ["first", "second"],
-        "同值/不同值事件都应保留入队顺序（S4-Event 不做内容去重）"
-    );
-    assert!(
-        factory.take_flushed_events().is_empty(),
-        "同一帧第 2 次 take_flushed_events() 必须为空"
+        "同帧事件应按入队顺序各派发一次（不做内容去重）"
     );
 
-    // 第二帧产生事件但**不 take**，第三帧无事件 → 旧快照必须被空快照替换。
-    factory.buffer_event(EventObject {
-        event_type: EventObject::FRAME_EVENT.to_owned(),
-        name: "stale".to_owned(),
-        ..EventObject::default()
-    });
+    // 第二帧无事件：上一帧已派发的事件不能被重放。
     factory.advance_time_with(0.1, 100.1);
-    factory.advance_time_with(0.1, 100.2);
-    assert!(
-        factory.take_flushed_events().is_empty(),
-        "无事件帧必须用空快照替换上一帧（即使上一帧未被 take）"
+    assert_eq!(
+        log.lock().unwrap().len(),
+        2,
+        "无事件帧不得重放上一帧事件"
     );
 }
 

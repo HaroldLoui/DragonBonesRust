@@ -1045,9 +1045,9 @@ mod tests {
     use crate::animation::timeline_state::TimelinePlayState;
     use crate::animation::timeline_states::{TimelineInstance, TimelineTarget};
     use crate::animation::world_clock::ClockArena;
-    use crate::armature::{ArmatureIdx, ArmatureProxy, NullArmatureProxy, RuntimeCtx};
+    use crate::armature::{ArmatureIdx, NullArmatureProxy, RuntimeCtx};
     use crate::core::enums::{AnimationFadeOutMode, TimelineType};
-    use crate::event::EventObject;
+    use crate::event::{EventDispatcher, EventObject};
     use crate::model::{AnimationData, ArmatureData, DragonBonesData, IrArrays};
     use std::sync::Arc;
 
@@ -1474,7 +1474,7 @@ mod tests {
 
         let mut armatures = Vec::new();
         let mut clocks = ClockArena::default();
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         let mut runtime = RuntimeCtx::new(
             &mut armatures,
             &mut clocks,
@@ -1797,7 +1797,7 @@ mod tests {
         let mut z_order_dirty = false;
         let mut z_index_dirty = false;
         let mut proxy = NullArmatureProxy::new();
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         {
             let mut armatures = Vec::new();
             let mut clocks = ClockArena::default();
@@ -1949,7 +1949,7 @@ mod tests {
         if has_listener {
             proxy.add_db_event_listener(EventObject::COMPLETE, Box::new(|_| {}));
         }
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         {
             let mut armatures = Vec::new();
             let mut clocks = ClockArena::default();
@@ -2017,7 +2017,7 @@ mod tests {
             proxy.add_db_event_listener(EventObject::FADE_OUT, Box::new(|_| {}));
             proxy.add_db_event_listener(EventObject::FADE_OUT_COMPLETE, Box::new(|_| {}));
         }
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         {
             let mut armatures = Vec::new();
             let mut clocks = ClockArena::default();
@@ -2140,7 +2140,7 @@ mod tests {
         let mut z_order_dirty = false;
         let mut z_index_dirty = false;
         let mut proxy = NullArmatureProxy::new();
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         {
             let mut armatures = Vec::new();
             let mut clocks = ClockArena::default();

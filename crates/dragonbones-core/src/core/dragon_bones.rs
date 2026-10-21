@@ -1,7 +1,8 @@
-//! `core/DragonBones.ts` 的静态部分。
+//! `core/DragonBones.ts` 的静态部分 + 实例 runtime 归属说明。
 //!
-//! 实例类（`_clock` / `_events` / `_objects` / `advanceTime` / `bufferEvent`）依赖
-//! `WorldClock`（阶段 4）与 `EventObject`（阶段 5），本阶段不实现，阶段 5 收口（P0-12）。
+//! 官方实例字段（`_clock` / `_events` / `_objects` / `_eventManager` / `advanceTime`）
+//! 在 Rust 由 [`crate::factory::BaseFactory`] 唯一持有（阶段 4/5 决策：不引入第二个
+//! runtime owner）。本模块只保留可静态引用的常量。
 
 /// DragonBones 命名空间常量。
 pub struct DragonBones;

@@ -1613,7 +1613,7 @@ mod tests {
 
         let mut clocks = ClockArena::new();
         let _valid = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
 
         let mut slot = Slot {
             slot_name: "child-slot".to_string(),

@@ -17,7 +17,7 @@ use dragonbones_core::armature::{
     DisplayHandle, ListenerId, NullArmatureProxy, Slot, SlotIdx,
 };
 use dragonbones_core::core::enums::ActionType;
-use dragonbones_core::event::EventObject;
+use dragonbones_core::event::{EventDispatcher, EventObject};
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
 use dragonbones_core::model::{ActionData, ArmatureData, DisplayData, DisplayKind};
@@ -58,7 +58,9 @@ impl ArmatureProxy for AdvanceCounterProxy {
     fn dispose(&mut self, dispose_proxy: bool) {
         self.inner.dispose(dispose_proxy);
     }
+}
 
+impl EventDispatcher for AdvanceCounterProxy {
     fn add_db_event_listener(&mut self, ty: &str, listener: DbEventListener) -> ListenerId {
         self.inner.add_db_event_listener(ty, listener)
     }
@@ -319,11 +321,12 @@ fn sub_armature_wiring_inherit_variants_and_dispose() {
     assert_eq!(factory.armature(child_idx).parent, None);
     assert!(!factory.clock_contains(root_clock, AnimatableHandle::Armature(child_idx)));
 
-    // e) dispose 父骨架 → 子骨架 arena 槽位 None（递归释放，D-3.1）
+    // e) dispose 父骨架 → 下一次全局 advance 的帧首 flush 递归释放（D-3.1 / D-5.6）
     factory.dispose_armature(parent_idx);
+    factory.advance_time(0.0);
     assert!(
         factory.armatures[parent_idx.index()].is_none(),
-        "dispose 后父骨架 arena 槽位应为 None"
+        "dispose + flush 后父骨架 arena 槽位应为 None"
     );
     assert!(
         factory.armatures[child_idx.index()].is_none(),

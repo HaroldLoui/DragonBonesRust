@@ -79,7 +79,8 @@ pub struct Armature {
     pub parent: Option<(ArmatureIdx, SlotIdx)>,
     /// Clock 回指（Armature.ts:116）；只允许经 runtime 关系操作更新。
     pub(super) clock: Option<ClockId>,
-    // TODO 阶段 5（P0-12）: `_dragonBones`（Armature.ts:115）
+    // D-5.1：官方 `_dragonBones`（Armature.ts:115）由 `BaseFactory` 的
+    // `event_manager` + `pending_recycles` 承担；Armature 不存第二份 runtime owner。
     // TODO 阶段 6（P1-5）: `_replaceTextureAtlasData`（:110）、`_replacedTexture`（:111）
 }
 
@@ -353,8 +354,8 @@ impl Armature {
     ///   （`model_mapping.md` §4 数据销毁语义偏差）→ 不复刻，直接继续。
     /// - `:313` AnimationState 的 fade/playhead、Action/ZOrder 与 timeline cursor 在阶段 4
     ///   接入；具体轴的 pose/value blend 由任务 6 实现。
-    /// - 阶段 4 的 Frame/Sound 与生命周期事件只缓冲到 RuntimeCtx；正式 listener dispatch
-    ///   和可能的同步重入留阶段 5。
+    /// - 阶段 4 的 Frame/Sound 与生命周期事件只缓冲到 RuntimeCtx；阶段 5 已由
+    ///   `BaseFactory::advance_time` 在 clock 之后派发（本函数不 dispatch、不可重入）。
     ///
     /// 借用方案：字段级解构（`let Self { … } = self`）后各段只碰拆出的字段；
     /// `cache_frame_rate()` / `idx` 依赖 `&self`（`armature_data()` 读 data），在
@@ -566,8 +567,8 @@ impl Armature {
 
         // ---- ⑦ action 队列（:352-383）----
         if !actions.is_empty() {
-            // 阶段 4 只缓冲 Frame/Sound 事件，不会同步调用 listener，因此不会在这里重入
-            // 并修改 actions。阶段 5 若 listener dispatch 带来可重入 action，再评估 drain 语义。
+            // 阶段 5 的 listener dispatch 发生在 clock 之后（BaseFactory::dispatch_events），
+            // 不进入本循环；action 队列不会在迭代中被重入修改。
             for action in actions.iter() {
                 if let Some(action_data) = action.action_data.as_ref() {
                     // :355-376 只处理 Play；非 Play 的 Frame/Sound 已在 TimelineState
@@ -601,8 +602,8 @@ impl Armature {
                         }
                     }
                 }
-                // :379 `action.returnToPool()`——Rust 无池：action 随迭代结束 drop
-                //（D-4.1 池语义偏差；阶段 5 接 TypeId 池后再议）
+                // :379 `action.returnToPool()`——Rust 不池化：action 随迭代结束 drop
+                //（D-5.3；action 事件不逃出 advanceTime）
             }
             actions.clear(); // :382 `actions.length = 0`
         }
@@ -716,7 +717,7 @@ impl Armature {
         self.display = DisplayHandle::Null; // :175
         // TODO 阶段 6（P1-5）：`:176` `_replaceTextureAtlasData = null`、
         // `:177` `_replacedTexture = null`——字段未落地。
-        // TODO 阶段 5（P0-12）：`:178` `_dragonBones = null`——字段未落地。
+        // :178 `_dragonBones = null`：Rust 无该字段（D-5.1，runtime owner 在 BaseFactory）。
         // :179 `_clock = null` 已由 BaseFactory 的关系 detach 在 on_clear 前完成。
         self.parent = None; // :180
     }

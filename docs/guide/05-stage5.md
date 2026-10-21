@@ -21,6 +21,7 @@
 - [任务 6 — BaseObject 收口与差异登记](#任务-6--baseobject-收口与差异登记)
 - [任务 7 — Review 与 P0 验收](#任务-7--review-与-p0-验收)
 - [建议的第一步](#建议的第一步)
+- [实施检查点（2026-10-21）](#实施检查点2026-10-21)
 - [常见错误速查](#常见错误速查)
 - [完成后](#完成后)
 
@@ -556,10 +557,13 @@ impl EventDispatcher for RecordingProxy {
       "events": [
         { "armature": 0, "type": "fadeIn", "name": "walk", "bone": null, "slot": null }
       ],
-      "pose": {
-        "bones": { "root": [13 个 f64] },
-        "slots": { "slot": [15 个 f64] }
-      }
+      "pose": [
+        {
+          "armature": 0,
+          "bones": { "root": [13 个 f64] },
+          "slots": { "slot": [15 个 f64] }
+        }
+      ]
     }
   ]
 }
@@ -590,6 +594,8 @@ impl EventDispatcher for RecordingProxy {
 7 组配对（资产 → A/B）：`Dragon`（walk/stand）、`Dragon_Blend`（walk/jump）、`PlantAnimate`（Shoot/Idle）、`PlantAnimate_compressed`（Shoot/Idle）、`Rooster_Ani`（rooster_run_anim/rooster_idle_anim）、`Rooster_Blend`（同）、`Rooster_P1`（同）。`龙` 与 `Surface_P1_4` 只有单动画，只进入 `replay/event_dense/timescale/dual/dispose`。
 
 **覆盖口径**：requirements 的“9 素材 × 全动画 × 全用例”按笛卡尔积是约 3000 个 120 帧转储。矩阵按**语义覆盖**执行：`replay`/`event_dense` 覆盖全部 37 个动画；需要“两个动画”的场景覆盖全部可配对资产（7 组）＋单动画资产的退化用例；`goto`/`timescale` 取 9 个代表动画。理由：状态机语义由场景而不是素材决定，重复转储只增加体积；若 review 要求扩大，优先把 `fade_cross` 扩到全部可配对动画，而不是复制 `event_dense`。
+
+**文件布局**：配对/代表场景写 `testdata/matrix/<scenario>/<asset>.json`；全动画场景写 `testdata/matrix/<scenario>/<asset>/<anim>.json`。`meta` 带 `skeFile` / `animA` / `animB`，Rust harness 据此复现脚本，不额外维护第二份 case 表。
 
 **体积预算**：`testdata/matrix` 目标 ≤ 20 MB。若超预算，优先把 `replay/event_dense` 的 `pose` 保持省略、减少 `checkpoints` 到 4 个，而不是删场景。
 
@@ -779,6 +785,46 @@ node tools/gen_matrix.mjs        # 结果必须与入库 matrix 零 diff
 **1C：矩阵**：先做 `dbharness.mjs` 重构并用“37 golden 零 diff”锁住，再做 `matrix.mjs`/`gen_matrix.mjs`，最后写 Rust harness。
 
 每个子卡以“测试描述预期 → 实现 → `cargo test --workspace` + clippy”闭环；事件与回收的顺序错误会污染后面所有数值，不要跳过 1A/1B 直接做矩阵。
+
+---
+
+## 实施检查点（2026-10-21）
+
+阶段 5 已按本指南落地，验收结果如下。
+
+### 已完成
+
+- **任务 1**：`event/i_event_dispatcher.rs` 新增 `EventDispatcher` / `ListenerId::next()`；`ArmatureProxy: EventDispatcher`；`pending_events` 改 `VecDeque`；`advance_time` 三段式（flush → clock → dispatch）；`SOUND` 先骨架后全局；`dt=0` 仍派发。
+- **任务 2**：`PendingRecycle::Armature` + `flush_recycles`；`dispose_armature` 改为“上锁 + 入队”，帧首才 BFS 清场 / clock detach / `on_clear` / `free.push`；D-4.31 关闭。
+- **任务 3**：`tests/common/recording.rs` 提供 `EventLog` / `RecordingProxy` / `RecordingEventManager`；`take_flushed_events` 已从 `src` 与 `tests` 清零；37 个 baseline golden 未重新生成，事件序列零 diff。
+- **任务 4/5**：`tools/dbharness.mjs` 抽取共享环境（`jsdump` 重跑 37 golden 零 diff）；`matrix.mjs`/`gen_matrix.mjs`/`matrix_cases.mjs` 生成 **131 个** matrix golden（5.45 MB）；`tests/golden_matrix.rs` 逐帧 states/events + checkpoint pose 对拍全绿，最大绝对误差 `8.527e-14`。
+- **任务 6**：删除 `core/base_object.rs`（TypeId 池 / `ObjectBuffer` / `Poolable`）与 `tests/pool.rs`；`model_mapping.md` 新增 D-5.1~D-5.6，D-4.1/2/3/4.10/4.31/4.33 已更新。
+
+### 矩阵发现并修复的阶段 4 缺陷
+
+`BaseTimelineState::set_current_time` 的帧游标复位条件误写成
+`previous_state < TimelinePlayState::Start`（恒 false），官方是 `prevState < 0`
+（即 `< Play`）。baseline（状态一上来就是 Play）不触发；`fadeIn` 的
+`pauseFadeIn` 让新状态先以 Start 到达 frame 0（`frame_index` 已被置 0），
+淡入结束时不再 `_onArriveAtFrame`，导致 Rooster_P1 idle 的 ZOrder 时间轴
+不生效（`beak.zOrder` 10 vs 11）。修正后 `golden_matrix` 全绿、baseline
+37 golden 不受影响；`tests/event_dispatch.rs` / `tests/lifecycle.rs` 另行覆盖
+派发与回收时序。
+
+### 验收数字
+
+```text
+cargo test --workspace                 212 passed / 0 failed
+cargo clippy --workspace --all-targets -- -D warnings   零警告
+node tools/gen_golden.mjs              37 ok / 0 fail，入库 golden 零 diff
+node tools/gen_matrix.mjs              131 ok / 0 fail，入库 matrix 零 diff
+node tools/gen_pose.mjs                9 ok / 0 fail
+```
+
+### 仍然保留的偏差
+
+- **D-5.4**：listener 不能同步变更运行时（官方可通过 `event.armature.animation`）；Bevy 层用事件 + 后续 system 表达。未来若需要同步变更，单独立项 `EventContext`。
+- **D-5.3**：`EventObject` 派发后直接 drop（官方下一帧回收）。未做事件池；若 profiling 证明事件分配是热点，再引入 typed `Vec<EventObject>` 复用并登记。
 
 ---
 

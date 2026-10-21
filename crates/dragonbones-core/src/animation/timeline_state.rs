@@ -137,7 +137,10 @@ impl BaseTimelineState {
             return false;
         }
 
-        if (previous_state < TimelinePlayState::Start && self.play_state != previous_state)
+        // JS `prevState < 0`（0 = Play）：从 Start 进入 Play 时清空帧游标，
+        // 使下一次 update 重新 `_onArriveAtFrame`。阶段 4 误写成 `< Start`
+        // （恒 false），淡入暂停后的首帧会漏掉 ZOrder 等“到达帧”副作用。
+        if (previous_state < TimelinePlayState::Play && self.play_state != previous_state)
             || (self.play_state <= TimelinePlayState::Play
                 && self.current_play_times != previous_play_times)
         {

@@ -6,6 +6,8 @@
 //! which is reserved for future child-clock inheritance and currently has no
 //! reader in production code.
 
+use std::collections::VecDeque;
+
 use thiserror::Error;
 
 use crate::animation::world_clock::{
@@ -19,7 +21,7 @@ use super::{Armature, ArmatureIdx};
 pub struct RuntimeCtx<'a> {
     armatures: &'a mut [Option<Armature>],
     clocks: &'a mut ClockArena,
-    pending_events: &'a mut Vec<EventObject>,
+    pending_events: &'a mut VecDeque<EventObject>,
     current_armature: Option<ArmatureIdx>,
     /// 预留字段：构造时由调用方复制当前骨架的 clock，供后续子 clock 继承
     /// 逻辑读取；阶段 4 生产代码无调用方（`RuntimeCtx::new` 的调用面在
@@ -39,7 +41,7 @@ impl<'a> RuntimeCtx<'a> {
     pub(crate) fn new(
         armatures: &'a mut [Option<Armature>],
         clocks: &'a mut ClockArena,
-        pending_events: &'a mut Vec<EventObject>,
+        pending_events: &'a mut VecDeque<EventObject>,
         current_armature: Option<ArmatureIdx>,
         current_clock: Option<ClockId>,
     ) -> Self {
@@ -172,9 +174,9 @@ impl<'a> RuntimeCtx<'a> {
         true
     }
 
-    /// Queues a newly-created event. Stage 4 does not dispatch it here.
+    /// Queues a newly-created event for the next runtime dispatch.
     pub(crate) fn buffer_event(&mut self, event: EventObject) {
-        self.pending_events.push(event);
+        self.pending_events.push_back(event);
     }
 }
 
@@ -185,6 +187,7 @@ mod tests {
     use crate::armature::{Armature, ArmatureIdx, DisplayHandle, NullArmatureProxy};
     use crate::event::EventObject;
     use crate::model::DragonBonesData;
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     fn armature() -> Armature {
@@ -202,7 +205,7 @@ mod tests {
         let mut armatures = vec![Some(armature())];
         let mut clocks = ClockArena::new();
         let clock = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
-        let mut pending_events = Vec::new();
+        let mut pending_events = VecDeque::new();
 
         let context = RuntimeCtx::new(
             &mut armatures,
@@ -221,7 +224,7 @@ mod tests {
         let mut clocks = ClockArena::new();
         let old_clock = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
         let new_clock = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
-        let mut pending_events = Vec::new();
+        let mut pending_events = VecDeque::new();
 
         {
             let mut context =
@@ -257,7 +260,7 @@ mod tests {
         let mut armatures = vec![Some(armature())];
         let mut clocks = ClockArena::new();
         let old_clock = clocks.insert(WorldClock::new_with_system_time(0.0, 100.0));
-        let mut pending_events = Vec::new();
+        let mut pending_events = VecDeque::new();
 
         {
             let mut context =
@@ -290,7 +293,7 @@ mod tests {
     fn buffer_event_appends_without_value_deduplication() {
         let mut armatures = Vec::new();
         let mut clocks = ClockArena::new();
-        let mut pending_events = Vec::new();
+        let mut pending_events = VecDeque::new();
         {
             let mut context =
                 RuntimeCtx::new(&mut armatures, &mut clocks, &mut pending_events, None, None);

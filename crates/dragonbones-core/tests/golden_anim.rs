@@ -1,44 +1,31 @@
-//! Stage 4 animation pose and event-enqueue golden comparison.
+//! Stage 4/5 animation pose and dispatched-event golden comparison.
 
 mod common;
 
 use common::ir_snapshot::{asset_root, tex_stem};
+use common::{EventLog, RecordingProxy};
 use common::{all_golden_files, read_value};
-use dragonbones_core::armature::NullArmatureProxy;
 use dragonbones_core::event::EventObject;
 use dragonbones_core::factory::BaseFactory;
 use serde_json::Value;
 use std::path::Path;
 
-const EVENT_TYPES: [&str; 9] = [
-    EventObject::START,
-    EventObject::LOOP_COMPLETE,
-    EventObject::COMPLETE,
-    EventObject::FADE_IN,
-    EventObject::FADE_IN_COMPLETE,
-    EventObject::FADE_OUT,
-    EventObject::FADE_OUT_COMPLETE,
-    EventObject::FRAME_EVENT,
-    EventObject::SOUND_EVENT,
-];
-
 #[test]
-fn animation_poses_and_enqueued_events_match_all_goldens() {
+fn animation_poses_and_dispatched_events_match_all_goldens() {
     for golden_path in all_golden_files() {
         run_animation_golden(&golden_path);
     }
 }
 
-/// S4-Event listener 闸门正/反向对照：同一 Shoot fixture 先带 9 类 panic 探针
-/// 证明该动画确实产生并 flush 事件，再清空 listener 证明 Frame/lifecycle 全部被闸门抑制。
-/// 探针只打开 `hasDBEventListener`，flush 不 dispatch，因此 panic 回调不会被调用。
+/// S5-Event listener 闸门正/反向对照：同一 Shoot fixture 先注册 9 类 listener
+/// 证明事件确实产生并**派发**，再清空 listener 证明 Frame/lifecycle 全部被入队闸门抑制。
 #[test]
 fn event_listener_gates_suppress_frame_and_lifecycle_actions() {
     let positive = run_shoot_listener_probe(true);
     assert!(
         !positive.is_empty(),
-        "正向对照失败：9 类探针全部注册时 Shoot 应 flush 出非空事件快照，\
-         否则后续「无 listener 为空」无法证明闸门生效（S4-Event）"
+        "正向对照失败：9 类 listener 全部注册时 Shoot 应派发非空事件，\
+         否则后续「无 listener 为空」无法证明闸门生效（S5-Event）"
     );
     assert!(
         positive
@@ -64,8 +51,8 @@ fn event_listener_gates_suppress_frame_and_lifecycle_actions() {
     let negative = run_shoot_listener_probe(false);
     assert!(
         negative.is_empty(),
-        "反向对照失败：未注册任何 listener 时 Frame/lifecycle 事件应全部不入队，\
-         实际 flush 出 {:?}（S4-Event listener 闸门）",
+        "反向对照失败：未注册任何 listener 时 Frame/lifecycle 事件应全部不入队、不派发，\
+         实际派发 {:?}（S5-Event listener 闸门；Sound 例外不在此动画触发路径）",
         negative
             .iter()
             .map(|event| event.event_type.as_str())
@@ -86,27 +73,18 @@ fn run_shoot_listener_probe(with_probes: bool) -> Vec<EventObject> {
         .parse_dragon_bones_data(&ske, ske_stem)
         .expect("parse PlantAnimate");
     assert!(factory.parse_texture_atlas_data(&tex, ske_stem));
+
+    let log = EventLog::default();
+    let mut proxy = RecordingProxy::new(log.clone());
+    if with_probes {
+        proxy.record_all();
+    }
     let armature_idx = factory
-        .build_armature(
-            armature_name,
-            ske_stem,
-            "",
-            ske_stem,
-            Box::new(NullArmatureProxy::new()),
-        )
+        .build_armature(armature_name, ske_stem, "", ske_stem, Box::new(proxy))
         .expect("build Plant armature");
     factory
         .attach_armature(factory.root_clock(), armature_idx)
         .expect("attach Plant to root clock");
-    if with_probes {
-        let armature = factory.armature_mut(armature_idx);
-        for event_type in EVENT_TYPES {
-            armature.proxy.add_db_event_listener(
-                event_type,
-                Box::new(|_| panic!("stage 4 只 enqueue、不 dispatch listener")),
-            );
-        }
-    }
     assert!(
         factory
             .armature_mut(armature_idx)
@@ -119,7 +97,7 @@ fn run_shoot_listener_probe(with_probes: bool) -> Vec<EventObject> {
     let mut events = Vec::new();
     for _ in 0..120 {
         factory.advance_time(dt);
-        events.extend(factory.take_flushed_events());
+        events.extend(log.drain());
     }
     events
 }
@@ -151,35 +129,23 @@ fn run_animation_golden(golden_path: &Path) {
         factory.parse_texture_atlas_data(&tex, ske_stem),
         "{golden_name}: texture atlas parse"
     );
+    let log = EventLog::default();
+    let mut proxy = RecordingProxy::new(log.clone());
+    proxy.record_all();
     let armature_idx = factory
-        .build_armature(
-            armature_name,
-            ske_stem,
-            "",
-            ske_stem,
-            Box::new(NullArmatureProxy::new()),
-        )
+        .build_armature(armature_name, ske_stem, "", ske_stem, Box::new(proxy))
         .unwrap_or_else(|| panic!("{golden_name}: failed to build `{armature_name}`"));
     factory
         .attach_armature(factory.root_clock(), armature_idx)
         .unwrap_or_else(|error| panic!("{golden_name}: attach to root clock: {error}"));
-
-    {
-        let armature = factory.armature_mut(armature_idx);
-        for event_type in EVENT_TYPES {
-            armature.proxy.add_db_event_listener(
-                event_type,
-                Box::new(|_| panic!("stage 4 must enqueue events without dispatching")),
-            );
-        }
-        assert!(
-            armature
-                .animation
-                .goto_and_play_by_time(animation_name, 0.0, -1)
-                .is_some(),
-            "{golden_name}: animation should exist"
-        );
-    }
+    assert!(
+        factory
+            .armature_mut(armature_idx)
+            .animation
+            .goto_and_play_by_time(animation_name, 0.0, -1)
+            .is_some(),
+        "{golden_name}: animation should exist"
+    );
 
     assert_eq!(frames.len(), 120, "{golden_name}: expected 120 frames");
     let want_bone_names = string_list(&meta["boneNames"]);
@@ -188,7 +154,7 @@ fn run_animation_golden(golden_path: &Path) {
     let mut max_rel = 0.0_f64;
     for (frame_index, frame) in frames.iter().enumerate() {
         factory.advance_time(dt);
-        let got_events = factory.take_flushed_events();
+        let got_events = log.drain();
         compare_events(&golden_name, frame_index, frame, &got_events);
 
         let armature = factory.armature(armature_idx);
@@ -338,12 +304,12 @@ fn compare_values(
             "{golden_name} frame {frame_index} {target_kind} `{target_name}`[{index}]: \
              golden 期望值必须是数字，实际 {expected}（任务 7：禁止 null→NaN 静默哨兵）"
         );
-        let expected = expected
-            .as_f64()
-            .unwrap_or_else(|| panic!(
+        let expected = expected.as_f64().unwrap_or_else(|| {
+            panic!(
                 "{golden_name} frame {frame_index} {target_kind} `{target_name}`[{index}]: \
                  JSON number 无法转成 f64（实际 {expected}）"
-            ));
+            )
+        });
         assert!(
             expected.is_finite() && got.is_finite(),
             "{golden_name} frame {frame_index} {target_kind} `{target_name}`[{index}]: \
@@ -386,6 +352,6 @@ fn compare_events(golden_name: &str, frame_index: usize, frame: &Value, got: &[E
         .collect();
     assert_eq!(
         actual, want,
-        "{golden_name} frame {frame_index} enqueued events"
+        "{golden_name} frame {frame_index} dispatched events"
     );
 }

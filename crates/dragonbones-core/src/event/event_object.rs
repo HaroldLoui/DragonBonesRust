@@ -1,8 +1,9 @@
-//! `event/EventObject.ts`（282 行）——阶段 3 最小骨架。
+//! `event/EventObject.ts`（282 行）。
 //!
-//! 阶段 3 只需：字段 + 事件名常量 + `actionDataToInstance`（Slot 子骨架接线、
-//! 工厂 defaultActions、Armature action 队列三处调用）。进 TypeId 池
-//! （`core::base_object`）、完整派发链、`animationState` 字段归阶段 5（P0-12）。
+//! 字段 + 事件名常量 + `actionDataToInstance`（Slot 子骨架接线、工厂 defaultActions、
+//! Armature action 队列三处调用）。阶段 5 起事件由 `BaseFactory` 的 `VecDeque`
+//! 派发后立即 drop（D-5.3）；`Default` 即 TS `_onClear` 复位态。
+//! `animationState` 字段继续按 D-4.20 省略（core/golden 不读）。
 //!
 //! D-4.20 扩充一句：`action_data` 存 `ActionData` **克隆**（TS 存引用，Rust data 层
 //! 不可变 → 值语义克隆）之外，另设 `bone_name` / `slot_name` **冗余名字字段**——

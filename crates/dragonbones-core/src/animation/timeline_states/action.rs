@@ -450,7 +450,7 @@ mod tests {
         };
         let mut armatures = Vec::new();
         let mut clocks = ClockArena::default();
-        let mut pending_events = Vec::new();
+        let mut pending_events = std::collections::VecDeque::new();
         let mut runtime = RuntimeCtx::new(
             &mut armatures,
             &mut clocks,
@@ -471,7 +471,7 @@ mod tests {
         );
 
         update_action_timeline(&mut timeline, &mut state, &mut update_context, &mut runtime);
-        (pending_events, actions)
+        (pending_events.into_iter().collect(), actions)
     }
 
     #[test]

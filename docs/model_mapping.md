@@ -540,7 +540,7 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 主要入口：`parse_dragon_bones_data` / `parse_texture_atlas_data`、
 `build_armature(armature_name, db_name, skin_name, atlas_name, proxy) -> Option<ArmatureIdx>`
 （多 proxy 参数 + `Option` 返回，D-4.15；收尾 `invalid_update(null, true)` + `advance_time(0.0)`，F3.11）、
-`dispose_armature`（BFS 子骨架递归 + `on_clear` + `free.push`，D-4.17）、`advance_time`（遍历 arena，
+`dispose_armature`（只上锁 + 入 `pending_recycles`；帧首 flush 做 BFS 子骨架递归 + `on_clear` + `free.push`，D-5.6）、`advance_time`（flush → 遍历 arena → 派发，
 阶段 5 WorldClock 接管）、`alloc_armature_slot`。
 
 ### 3.20 `Animation.ts` → `animation/player.rs`（阶段 3 为 `animation/mod.rs` 占位；阶段 4 实体化见 §3.21）
@@ -573,8 +573,8 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 
 | # | TS 行为 | Rust 处理 | 原因 |
 |---|---|---|---|
-| D-4.1 | 对象池 `_isInPool` 重复入池检测 | 无该字段 | move 语义下同一对象不可能被两次归还（编译期消除） |
-| D-4.2 | `bufferObject` 的 `indexOf` 去重 | `ObjectBuffer::push` 直接入队 | 同上，push 消费所有权 |
+| D-4.1 | 全局对象池 `BaseObject`（`borrowObject` / `returnToPool` / `_isInPool` / `setMaxCount` / `clearPool` / `hashCode`） | **不移植**：无 TypeId 池；复用由 armature `free` 栈、`StateArena` 槽位、`Vec` 容量承担；生命周期语义由 `pending_recycles` 承担（D-5.1） | 运行时零调用；类型擦除池与所有权方向相反；对动画无数值影响 |
+| D-4.2 | `bufferObject` 的 `indexOf` 身份去重 | `PendingRecycle` + `dispose_armature` 的 `lock_update` 幂等；事件派发后直接 drop | 值语义无对象身份；dispose 重复调用由 lock 消除（D-5.5），同值事件必须都保留（D-4.33） |
 | D-4.3 | model 对象经 `returnToPool` 复用、`_onClear` 清空 | 拥有树 + `Default` | model 不进池（F1.5）；默认值仍逐行对齐 `_onClear` |
 | D-4.4 | `SlotData.color` 清空后为 `null` | `ColorTransform::default()` | 避免 `null` 状态；值与 `createColor()` 一致 |
 | D-4.5 | `ArmatureData.parent` 清空后为 `null` | `Option<Arc<RootInfo>>` | 见第 2 节注 |
@@ -582,14 +582,14 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.7 | 整数样字符串键 `for..in` 排序规则 | `IndexMap` 纯插入序 | 9 素材无整数样键，登记为已知差异（F1.6） |
 | D-4.8 | `AnimationData.cacheFrames` / `ArmatureData.setCacheFrame` 与 bone/slot cachedFrameIndices 写侧 | 保留 cache 结构（单状态 cache interval / cache frame index 计算分支）；`cachedFrames` 与 bone/slot `cachedFrameIndices` 写侧仍未实现 | P1-4；pose 与 37 个动画 golden 不依赖缓存写路径 |
 | D-4.9 | `BinaryOffset` 单个 `const enum` 五组共用、判别值大量重复 | 五组 `binary_offset::*` 模块常量（`usize`） | 单 Rust enum 触发 E0081（实测）；下标语义用 const（enum 的类型区分在 `as usize` 使用点丢失，见 `01-stage1.md` 任务 3）；值与 TS 逐项一致，`tests/enums.rs` 守护 |
-| D-4.10 | Armature/Bone/Slot/Constraint 走 TypeId 池（`borrowObject` / `returnToPool`） | 不进池：`BaseFactory.armatures: Vec<Option<Armature>>` + `free` 空位栈——`dispose = on_clear + free.push`，build 经 `alloc_armature_slot` 优先复用空位，且 `min_exclusive` 保证**子 idx > 父 idx** | 指南 D-3.1 池语义决策（03-stage3 坑 12）；Bone/Slot/Constraint 随 `Armature.bones/slots/constraints` 生灭（`_onClear` 副作用照抄） |
+| D-4.10 | Armature/Bone/Slot/Constraint 走 TypeId 池（`borrowObject` / `returnToPool`） | 不进池：`BaseFactory.armatures: Vec<Option<Armature>>` + `free` 空位栈——`dispose = 上锁 + 入回收队列`，帧首 flush 时 `on_clear + free.push`；build 经 `alloc_armature_slot` 优先复用空位，且 `min_exclusive` 保证**子 idx > 父 idx** | 指南 D-3.1/D-5.6；Bone/Slot/Constraint 随 `Armature.bones/slots/constraints` 生灭（`_onClear` 副作用照抄） |
 | D-4.11 | `Armature.ts:302 / :306` 两处 warn-return（`_armatureData === null` / `_parent === null`） | 不复刻，`advance_time` 上锁后直接继续 | Rust 持 `Arc<DragonBonesData>`，数据活到无引用（`on_clear` 清 `armature_name` 使 `armature_data()` 不可达）→ 分支不可达（指南 D-3.3，armature.rs 方法文档） |
 | D-4.12 | `TransformObject` 静态 `_helpMatrix/_helpTransform/_helpPoint`（TransformObject.ts:37-39；Surface.ts:186 等同款） | 调用点局部临时值 | 不复刻 `thread_local` 样板（纯实现细节）；值拷贝天然消除“静态被下次调用覆盖”的别名隐患（transform_object.rs 模块文档） |
 | D-4.13 | TS `ColorTransform.identity()` | Rust 侧方法名 `clear()`（Point/Rectangle 同名；Matrix/Transform 仍 `identity()`） | 阶段 1 遗留待记项（geom 落地时统一命名，无行为差异） |
 | D-4.14 | `Bone.init:358 _addBone(this)` / `Slot.init:665 _addSlot(this)`（init 内 push 自身，按对象身份 `indexOf` 去重） | `init` 不 push、只预置 `idx = len()`，由调用方 `armature.add_bone/add_slot` 推入；去重改成**按名字**判重（warn + 忽略本次推入） | Rust 无法在 `&mut self` 的 `init` 内移动自身入容器；装配循环“建一根推一根”顺序不变（bone.rs / slot.rs 方法文档、`_build_bones`/`_build_slots` 注） |
 | D-4.15 | 指南任务 7 草图 `build_armature(armatureName, dragonBonesName, skinName, textureAtlasName)` 返回裸 idx | 多 `proxy: Box<dyn ArmatureProxy>` 参数、返回 `Option<ArmatureIdx>` | D-3.4 调用方注入（jsdump `NullFactory._buildArmature` 在内部 `new EvProxy()` 的等价迁移）；`None` = JS `null`（fill 失败/数据缺失）（base_factory.rs 方法文档） |
 | D-4.16 | 对象身份比较：`_displayFrame` 对象引用、`display === _rawDisplay` / `_meshDisplay` 等 `!==` | 值比较/下标：`display_frame: Option<usize>`、`DisplayHandle` 值相等 | 同值 ⟹ 同变换/同几何/同纹理 → 刷与不刷结果一致，已论证无行为差异（slot.rs `DisplayFrame`/`update_display_data` 文档） |
-| D-4.17 | `Slot._onClear:279` 递归 `eachDisplay.dispose()`（子骨架）与 `Armature._onClear:123-124` `_clock.remove` | `Slot::on_clear` 只做本地复位 + adapter 分发；子骨架递归由 `BaseFactory::dispose_armature` BFS 实现，clock detach 在 factory 释放 arena slot 前完成 | `on_clear` 拿不到 `RuntimeCtx`（阶段 3 借用契约）；唯一关系 owner 为 `BaseFactory`，详见阶段 4 任务 1 |
+| D-4.17 | `Slot._onClear:279` 递归 `eachDisplay.dispose()`（子骨架）与 `Armature._onClear:123-124` `_clock.remove` | `Slot::on_clear` 只做本地复位 + adapter 分发；子骨架递归由 `BaseFactory` 的帧首 `flush_recycles`/`dispose_armature_now` BFS 实现，clock detach 在 factory 释放 arena slot 前完成 | `on_clear` 拿不到 `RuntimeCtx`（阶段 3 借用契约）；唯一关系 owner 为 `BaseFactory`，详见阶段 4 任务 1 / 阶段 5 任务 2 |
 | D-4.18 | `Slot.ts:541 / :549` 子骨架 clock 继承、`:554` `cacheFrameRate` 写回 data（`armatureData.cacheFrames` setter） | child clock detach/inherit 已由 RuntimeCtx 关系入口接线；cacheFrameRate 对 cachedFrames 的写侧仍未实现 | clock 行为经 `world_clock`/`armature_unit` 测试；cachedFrames 留 P1-4 |
 | D-4.19 | 指南 F3.1「9 素材全部无约束」实测为错误事实；TS `Constraint.ts:72/:87/:198` `_scaleEnabled` 整行注释（TODO） | **IK 约束阶段 3 提前实现（F3.1 勘误）**：原始 JSON 键是 `constraint` 之外的 **`"ik"`**——`龙`（IK_L/IK_R，weight=0）与 `Rooster_Ani/Blend/P1`（bone_ik/bone_ik1，weight 缺省 1.0）共 4 个 IK 走真身；Path 仍为 stub（0 素材，真身留 P1-2）；同时忽略 `scale_enabled` | 静姿态差分证明必须真身——否则 rotation 回填链（`updateByConstraint` → `isCache=true` → `fromMatrix`）缺失，龙素材 rotation 必错；`scale_enabled` 忽略 = 对齐 TS 现状（constraint.rs 模块文档） |
 | D-4.20 | `EventObject.bone/slot` 存对象引用、`actionData` 存引用、含 `animationState` 字段 | `bone/slot` 存本骨架内索引（`Option<BoneIdx>` / `Option<SlotIdx>`）+ 冗余名字；`action_data` 存克隆；不存 `animation_state` | D-3.2 / D-1.1；`animationState` 虽在 TS 写入，但核心与 golden 不读取（F4.27），因此不引入跨 StateArena 的生命周期引用；监听器修改克隆 `UserData` 不会写回 data |
@@ -602,13 +602,19 @@ TS 抽象基类 `Constraint`（:27-66）+ `IKConstraint`（:67-228）合体单�
 | D-4.27 | `Surface.init:451` 读 geometry 的 IR 根（TS 两跳对象引用，null 即崩溃） | `geometry.root` 缺失 → warn + 空顶点缓冲（`_update_vertices` / 曲面采样对空缓冲防御性跳过） | `finalize_root` 未跑属坏数据；TS 该路径读 undefined 得 NaN 污染矩阵，Rust 保持矩阵不动（surface.rs `SurfaceState::init` 记对照表偏差） |
 | D-4.28 | 病态配置 `target == chain`（Constraint.ts:173 改写 ikGlobal 后 :176 再读） | 不复刻特殊处理（无等价路径） | 本库 4 个 IK 的 target 均为独立效果骨、`sortBones.wait_constraint` 保证 `idx < root` → 不可达（constraint.rs 模块文档，登记见阶段 3 报告） |
 | D-4.29 | 槽排序比较器 `Armature.ts:46-48` `a…>b…?1:-1` 永不返回 0；V8 对等键组实测逆序 | Rust 稳定 `sort_by_key(zIndex*1000+zOrder)`，等键保持原序 | 官方公开路径 `z_order` 恒唯一；等键不可达。ZOrder timeline 的越界索引继续按 TS `continue` 处理，golden 验证完整路径 |
-| D-4.30 | `IEventDispatcher.removeDBEventListener(type, listener, thisObject)` 按三元组删单个；jsdump `EvProxy` 的 remove 是 no-op | `add_db_event_listener` 返回 `ListenerId(u64)` 句柄、`remove_db_event_listener(id)` 按句柄删单个 | `Box<dyn Fn>` 无身份可比；句柄化是 Rust 惯用形态，阶段 5 事件系统按此接（i_armature_proxy.rs 文档，调用方现为 0） |
-| D-4.31 | `Armature.dispose:265-270` 只 `_lockUpdate=true` + `_dragonBones.bufferObject(this)`，真正 `_onClear` 由 DragonBones **下一帧** flush | `BaseFactory::dispose_armature` 就地 `on_clear`（含 `db_clear`）+ BFS 递归子骨架 + `free.push` | 结果面等价（dispose 后不可达），时机提前一帧；官方缓冲语义随阶段 5 `bufferObject` 链一并复核（base_factory.rs `dispose_armature` 文档） |
+| D-4.30 | `IEventDispatcher.removeDBEventListener(type, listener, thisObject)` 按三元组删单个；jsdump `EvProxy` 的 remove 是 no-op | `EventDispatcher` 基础 trait（`ArmatureProxy: EventDispatcher`）；`add_db_event_listener` 返回 `ListenerId`、`remove_db_event_listener(id)` 按句柄删单个；`ListenerId::next()` 供适配层发号 | `Box<dyn Fn>` 无身份可比；句柄化是 Rust 惯用形态（i_armature_proxy.rs / event/i_event_dispatcher.rs 文档） |
+| D-4.31 | `Armature.dispose:265-270` 只 `_lockUpdate=true` + `_dragonBones.bufferObject(this)`，真正 `_onClear` 由 DragonBones **下一帧** flush | **阶段 5 已对齐（D-5.6）**：`BaseFactory::dispose_armature` 只上锁 + 入 `pending_recycles`；下一次 `advance_time` 帧首 `flush_recycles` 才 BFS 清场 + clock detach + `free.push` | `advance_one` 因 `lock_update` 早退；dispose 窗口内仍可查询（base_factory.rs / armature.rs） |
 | D-4.32 | TS `AnimationTimelines` 通过对象引用建立 parent/child 状态图，不防御数据环 | Rust 在关联前检查祖先链并拒绝会形成环的 StateId 关系；parent 回收时解除 child parent 并标记 child 可回收 | 属于避免递归/失效 StateId 关系的安全限制；正常 acyclic golden 行为全等，异常循环配置目前无官方素材/验收输入 |
-| D-4.33 | `DragonBones.bufferEvent` 按**对象身份** `indexOf` 去重（`DragonBones.ts:334-338`） | 阶段 4 事件按值拥有，`buffer_event` 每次产生新事件直接追加，**不做内容去重**；两条同值独立事件都必须保留（S4-Event） | 值语义没有对象身份可比；按内容去重会吞掉同值事件（`runtime_ctx.rs` / `base_factory.rs`） |
+| D-4.33 | `DragonBones.bufferEvent` 按**对象身份** `indexOf` 去重（`DragonBones.ts:334-338`） | 事件按值拥有，`buffer_event` 每次产生新事件直接入 `VecDeque`，**不做内容去重**；两条同值独立事件都必须保留并各派发一次（S5-Event） | 值语义没有对象身份可比；按内容去重会吞掉同值事件（`runtime_ctx.rs` / `base_factory.rs` / `tests/event_dispatch.rs`） |
 | D-4.34 | clock 嵌套**自环/环**：官方 `WorldClock.add` 不防环，递归推进即无限递归（`WorldClock.ts:168-254`） | 关系入口 `attach_clock` 拒绝自环/祖先环（`ClockError::Cycle`）；clock 关系查询/推进保留 visited 防护 | 防止栈溢出；异常循环配置无官方素材，正常 acyclic 行为全等（world_clock.rs / base_factory.rs；与 D-4.32 的 AnimationState graph 环分开） |
 | D-4.35 | 运行时 `Slot.z_index` 为 `i32`（TS `_zIndex` 为 number；SlotZIndex blend 可产生小数、排序用原值） | 每步 SlotZIndex blend 后以 `(value * blend_weight) as i32` 截断为整数 | 阶段 3 字段形态；素材无 SlotZIndex 数据；阶段 6 接真实 zIndex 时间轴时复核/改 f64（timeline_states/slot.rs） |
 | D-4.36 | 子骨架 animation inheritance 的状态创建：官方在 `playConfig` 内**同步**调用 `child.animation.fadeIn`（`Animation.ts:443-452`） | Rust 在 `play_config` 将请求压入 `pending_child_animations`，同一帧 `Armature::advance_time` 尾部通过 `process_child_animation_requests` 排空（`player.rs` / `armature.rs`） | 借用边界（play 路径不持 `RuntimeCtx`）；arena 序父<子保证同帧推进；`play()` 返回瞬间子状态尚未创建是该偏差的唯一可观察面 |
+| D-5.1 | 全局 `BaseObject` TypeId 池、`setMaxCount`/`clearPool`/`hashCode` 公共调参 | 删除；对象复用由 arena/free 栈与 `Vec` 容量承担，生命周期语义由 `pending_recycles` 承担 | 运行时零调用；无动画可观察行为（`core/base_object.rs` 已删除，`tests/pool.rs` 已移除） |
+| D-5.2 | `AnimationState` fade 完成后从活动表移除，但下一帧才 `bufferObject` 清场（Animation.ts:199,238） | `StateArena` 立即释放 + generation 失效 | 事件不存 `animationState`（D-4.20），parent/child 引用已解除；无观察面 |
+| D-5.3 | `EventObject` 派发后下一帧 `returnToPool`；Armature action 队列事件处理完 `returnToPool` | 派发调用栈结束后直接 drop；action 事件随 `advanceTime` 结束 drop | 回调签名 `Fn(&EventObject)` 使引用不可逃逸，克隆是独立所有权；无观察面 |
+| D-5.4 | listener 可通过 `event.armature.animation` 同步改状态/销毁骨架 | core 监听器只有 `Fn(&EventObject)`，不能取得 `&mut BaseFactory`；Bevy 层转成事件后由后续 system 执行变更 | 避免 `Rc<RefCell<BaseFactory>>` 与借用冲突；不影响数值 golden（无 golden 用 listener 改状态） |
+| D-5.5 | `bufferEvent` / `bufferObject` 的对象身份去重 | 值语义不去重（同值事件保留）；dispose 重复调用由 `lock_update` 幂等 | D-4.33 的延续 |
+| D-5.6 | `Armature.dispose` 的“上锁 + 下一帧清场” | `dispose_armature` = 上锁 + `pending_recycles.push(Armature)`；帧首 `flush_recycles` 做 BFS/clock detach/`on_clear`/`free.push` | 撤销 D-4.31 的一帧提前偏差（`tests/lifecycle.rs`） |
 
 ### 4.1 阶段 2 必读：IR 量化事实（实测，修正 requirements D1）
 
