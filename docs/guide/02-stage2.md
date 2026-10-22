@@ -191,7 +191,7 @@ pub fn is_supported_version(raw: &Value) -> bool {
 ```rust
 const ASSETS: &[(&str, &str)] = &[
     ("Dragon", "Dragon_ske"), ("Dragon_Blend", "Dragon_Blend_ske"),
-    ("PlantAnimate", "PlantAnimate_ske"), ("PlantAnimate_compressed", "PlantAnimate_ske_compressed"),
+    ("PlantAnimate", "PlantAnimate_ske"), ("PlantAnimate_compressed", "PlantAnimate_ske"),
     ("Rooster_Ani", "Rooster_Ani_ske"), ("Rooster_Blend", "Rooster_Blend_ske"),
     ("Rooster_P1", "Rooster_P1_ske"), ("Surface_P1_4", "Surface_P1_4_ske"), ("龙", "龙_ske"),
 ]; // tex 文件名 = ske 名替换 _ske(_compressed)?.json → _tex.json

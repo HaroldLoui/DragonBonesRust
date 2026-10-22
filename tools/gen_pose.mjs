@@ -20,7 +20,7 @@ for (const ske of skes) {
   const tex = ske.replace(/_ske(_compressed)?[.]json$/, "_tex.json");   // F7
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;                               // F7: 从数据读（9 素材单骨架）
-  // 文件名: Dragon_ske → Dragon.json, PlantAnimate_ske_compressed → PlantAnimate_compressed.json
+  // 文件名: Dragon_ske → Dragon.json, PlantAnimate_ske → PlantAnimate_compressed.json
   const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
   const out = path.join(OUT, `${stem}.json`);
   const r = spawnSync(process.execPath, [

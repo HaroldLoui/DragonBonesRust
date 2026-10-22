@@ -15,7 +15,7 @@ const ASSETS: &[(&str, &str)] = &[
     ("Dragon", "Dragon_ske"),
     ("Dragon_Blend", "Dragon_Blend_ske"),
     ("PlantAnimate", "PlantAnimate_ske"),
-    ("PlantAnimate_compressed", "PlantAnimate_ske_compressed"),
+    ("PlantAnimate_compressed", "PlantAnimate_ske"),
     ("Rooster_Ani", "Rooster_Ani_ske"),
     ("Rooster_Blend", "Rooster_Blend_ske"),
     ("Rooster_P1", "Rooster_P1_ske"),

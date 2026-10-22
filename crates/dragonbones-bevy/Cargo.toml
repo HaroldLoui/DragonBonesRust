@@ -1,0 +1,16 @@
+[package]
+name = "dragonbones-bevy"
+version = "0.1.0"
+edition = "2024"
+description = "Bevy adapter for the DragonBones runtime reimplementation"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+dragonbones-core = { path = "../dragonbones-core" }
+bevy = { version = "0.20", default-features = false, features = ["2d", "png"] }
+serde_json = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+bevy = { version = "0.20", default-features = false, features = ["2d", "png"] }

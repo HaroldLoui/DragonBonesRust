@@ -8,7 +8,7 @@ export const ASSETS = [
   { name: "PlantAnimate", file: "PlantAnimate_ske.json", pair: ["Shoot", "Idle"], rep: "Shoot" },
   {
     name: "PlantAnimate_compressed",
-    file: "PlantAnimate_ske_compressed.json",
+    file: "PlantAnimate_ske.json",
     pair: ["Shoot", "Idle"],
     rep: "Shoot",
   },

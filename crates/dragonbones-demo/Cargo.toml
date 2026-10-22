@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dragonbones-bevy = { path = "../dragonbones-bevy" }
+bevy = { version = "0.20", default-features = false, features = ["2d", "png", "ui", "default_font"] }
+serde_json = { workspace = true }

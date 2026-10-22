@@ -20,7 +20,7 @@ for (const ske of skes) {
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;                               // F7: 从数据读
   const anims = data.armature[0].animation.map(a => a.name);
-  // 目录名: Dragon_ske → Dragon, PlantAnimate_ske_compressed → PlantAnimate_compressed
+  // 目录名: Dragon_ske → Dragon, PlantAnimate_ske → PlantAnimate_compressed
   const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
   for (const anim of anims) {
     const out = path.join(OUT, stem, `${anim}.json`);

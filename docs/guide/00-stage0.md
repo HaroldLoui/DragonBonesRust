@@ -315,7 +315,7 @@ for (const ske of skes) {
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;                               // F7: 从数据读
   const anims = data.armature[0].animation.map(a => a.name);
-  // 目录名: Dragon_ske → Dragon, PlantAnimate_ske_compressed → PlantAnimate_compressed
+  // 目录名: Dragon_ske → Dragon, PlantAnimate_ske → PlantAnimate_compressed
   const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
   for (const anim of anims) {
     const out = path.join(OUT, stem, `${anim}.json`);
@@ -332,7 +332,7 @@ console.log(`golden done: ${ok} ok, ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);
 ```
 
-**注意（实测踩过的坑）**：`stem` 的 `_ske_compressed` 替换必须在 `_ske` 之前判断不了——上面写法是先去 `.json`、再精确匹配 `_ske` 结尾、再匹配 `_ske_compressed` 结尾，顺序保证 `PlantAnimate_ske_compressed` 不会和 `PlantAnimate` 落到同一目录互相覆盖（初版会覆盖成 31 个文件）。
+**注意（实测踩过的坑）**：`stem` 的 `_ske_compressed` 替换必须在 `_ske` 之前判断不了——上面写法是先去 `.json`、再精确匹配 `_ske` 结尾、再匹配 `_ske_compressed` 结尾，顺序保证 `PlantAnimate_ske` 不会和 `PlantAnimate` 落到同一目录互相覆盖（初版会覆盖成 31 个文件）。
 
 **素材清单（实测核对过，golden 目录名 ↔ 骨架名 ↔ 动画数）**：
 
@@ -341,7 +341,7 @@ process.exit(fail === 0 ? 0 : 1);
 | Dragon | Dragon_ske | Dragon | 19 | 18 | 4 | 24 |
 | Dragon_Blend | Dragon_Blend_ske | Dragon | 19 | 18 | 4 | 24 |
 | PlantAnimate | PlantAnimate_ske | MegaGatlingPea | 29 | 31 | 6 | 30 |
-| PlantAnimate_compressed | PlantAnimate_ske_compressed | MegaGatlingPea | 29 | 31 | 6 | 30 |
+| PlantAnimate_compressed | PlantAnimate_ske | MegaGatlingPea | 29 | 31 | 6 | 30 |
 | Rooster_Ani | Rooster_Ani_ske | armatureName | 63 | 15 | 5 | 24 |
 | Rooster_Blend | Rooster_Blend_ske | armatureName | 63 | 15 | 5 | 24 |
 | Rooster_P1 | Rooster_P1_ske | armatureName | 63 | 15 | 5 | 24 |

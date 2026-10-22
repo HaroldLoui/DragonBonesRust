@@ -574,7 +574,7 @@ fn pose_golden_plant_animate() {
     check_pose(POSE_NAMES[3]);
 }
 
-/// 素材 5：`PlantAnimate_compressed`（压缩 JSON 版本，key = `PlantAnimate_ske_compressed`）。
+/// 素材 5：`PlantAnimate_compressed`（压缩 JSON 版本，key = `PlantAnimate_ske`）。
 #[test]
 fn pose_golden_plant_animate_compressed() {
     check_pose(POSE_NAMES[4]);

@@ -132,7 +132,7 @@ readonly armature / readonly animation
 | 龙 | stand | ✔ (14 顶点) | — | 自有 png |
 | Dragon_Blend | stand, walk, jump, fall | — | **add, multiply, overlay, screen** | 共用 Dragon_tex.png |
 | Dragon | stand, walk, jump, fall | — | — | Dragon_tex.png |
-| PlantAnimate_ske_compressed | Idle, Shoot, Death, Food, Water, Random | — | — | PlantAnimate_tex.png |
+| PlantAnimate_ske | Idle, Shoot, Death, Food, Water, Random | — | — | PlantAnimate_tex.png |
 | PlantAnimate_ske | 同上 | — | — | PlantAnimate_tex.png |
 | Rooster_Ani | 5 个 rooster_* 动画 | ✔ (8) | — | Rooster_Ani_tex.png |
 | Rooster_Blend | 同上 | ✔ (8) | **add** | 共用 Rooster_Ani_tex.png |
@@ -142,7 +142,7 @@ readonly armature / readonly animation
 补充事实：
 
 - 全部为 **DragonBones 5.5 数据格式**，单骨架、单页图集
-- `PlantAnimate_ske_compressed.json`（37KB）与 `PlantAnimate_ske.json`（251KB）**键集合与帧计数完全一致**，前者只是移除了空白字符的同一格式，无需专门处理逻辑
+- `PlantAnimate_ske.json`（37KB）与 `PlantAnimate_ske.json`（251KB）**键集合与帧计数完全一致**，前者只是移除了空白字符的同一格式，无需专门处理逻辑
 - 文件名含非 ASCII 字符（中文），需验证 Bevy 资源加载路径处理（风险 R7）
 - 仓库 `Pixi/Demos/` 下还有大量额外素材，含 `.dbbin` 二进制样本，可用于 P1 阶段测试
 
@@ -203,7 +203,7 @@ readonly armature / readonly animation
 |---|---|
 | P2-1 | `DragonBonesPlugin` + 自定义 `AssetLoader`（`_ske.json` / `_tex.json` / `_tex.png` → Bevy Asset） |
 | P2-2 | 实体映射：骨架根实体 + 每 Slot 一个子实体 |
-| P2-3 | 每帧同步：骨架世界矩阵 → 网格顶点（含 skew 剪切，见 R2） |
+| P2-3 | 每帧同步：骨架世界矩阵 → Bevy `GlobalTransform`（含 skew 剪切，见 R2；直写 affine，无需顶点烘焙） |
 | P2-4 | 颜色同步：`ColorTransform` → 顶点色（乘子 + 偏移） |
 | P2-5 | zOrder / zIndex → 绘制顺序（见 R3） |
 | P2-6 | blend 模式 → 自定义 `Material2d`（见 R1） |
@@ -695,6 +695,10 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 ### 阶段 7 — Bevy 适配层
 
+> **实现状态（2026-10-21）**：MVP 已落地 `crates/dragonbones-bevy` + `crates/dragonbones-demo`。
+> 已支持：ske/tex 资源加载、armature/slot 实体、B2 `GlobalTransform` 直写、image/非蒙皮 mesh/蒙皮 mesh（含 FFD）、颜色乘子、z 排序、时间驱动。
+> 未完成：Add/Multiply/Screen/Overlay blend、rotated atlas、Surface mesh 顶点变形、child armature、事件转发；demo 通过命令行参数选择单个 rig（`--demo <name>` 或位置参数，可选 dragon/dragon_blend/plant/rooster/long/surface）；动画组在 Bevy UI 覆盖层中展示，运行时用 `1-9` / `Left` / `Right` 切换（起始动画不是命令行参数）。
+
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
 > **前置**：先完成 §5 的预研问题 Q1–Q3，再动手。
@@ -725,35 +729,39 @@ ArmatureRoot (实体)
 
 **问题**：Bevy 的 `Transform` 是 TRS 分解（translation + rotation + scale），**无法表达剪切（skew）**。而 DragonBones 的 `Transform` 同时有 `skewX/skewY`，当两者不等时就是剪切矩阵。
 
-**推荐方案 A：顶点烘焙**
+**采用方案 B（B2）：直写 `GlobalTransform` 的 affine 分量**
 
 ```
-每帧：slot 的局部仿射矩阵 (a,b,c,d,tx,ty) 直接乘进 quad 的 4 个顶点坐标
-     实体 Transform 保持 identity
-     骨架根实体承担世界变换
+每帧（PostUpdate）：
+  root = armature_root.GlobalTransform.affine()
+  slot.GlobalTransform = root * affine(slot.global_transform_matrix) + sort_z
+  蒙皮 mesh：顶点在 armature 空间重建，slot.GlobalTransform = root
 ```
 
-- 优点：完全绕开 TRS 分解损失，天然支持 skew；每帧重建 4 顶点开销极小
-- 缺点：失去 GPU 实例化；实体层级只用于组织，不参与渲染变换
-- 这正是 Pixi 适配层的做法的等价形式（`PixiSlot._updateTransformV4` 直接写 display 的矩阵）
+- 关键事实：Bevy 的 `GlobalTransform` 是 `Affine3A`；`Mesh2d` 提取、2D 裁剪和 picking 都直接读取完整 affine，所以 **skew 不需要顶点烘焙**。
+- 调度：`after(TransformSystems::Propagate)`、`before(VisibilitySystems::CalculateBounds/UpdateFrusta/CheckVisibility)`；每帧全量写所有 slot（root 移动时 Bevy 会把 slot 的 GT 冲成占位值，不能只同步 dirty slot）。
+- `dragonbones-core` 的 `global_transform_matrix` 已经包含 inherit/约束/Surface 语义，适配层只做 f64→f32 与布局转换（core 行向量 → Bevy 列向量；Y-down 在 armature root 做一次共轭）。
+- 优点：保留标准 `Mesh2d` 批处理/裁剪；无顶点烘焙开销；精确支持 skew。
+- 代价：`GlobalTransform` 直写是版本敏感的 workaround；`Transform` 只是 required-component 占位符；第三方插件不能对含 shear 的 GT 调用 `compute_transform/rotation/scale`。
+- 实现：`crates/dragonbones-bevy`（`DragonBonesPlugin` + `DragonBonesSlot` + B2 sync）。
 
-**备选方案 B**：直接写 `GlobalTransform` 的 affine 分量，绕过 transform propagation。复杂度高（要处理传播系统的覆盖时机），不推荐首选。
+**备选/历史方案 A：顶点烘焙** 仍可用于特殊渲染后端，但本项目 MVP 未使用；蒙皮 mesh 的顶点本来就在 armature 空间，直接以 `root` 作 GT 即可。
 
 #### 7.4 颜色同步（P2-4）
 
-`ColorTransform`（乘子 + 偏移）烘进**顶点色**：
+MVP 用 `ColorMaterial` 的 per-slot color 做乘子：
 
 ```
-vertexRGBA = texture * multiplier + offset
-alpha 还要乘 _globalAlpha
+color = (rM, gM, bM, aM * _globalAlpha)
 ```
 
-优点：免去 material uniform 同步，每 slot 不同色天然支持。
+- 每个 slot 一个材质，避免 material uniform 同步；`ColorTransform` 的 RGB/alpha offset 暂不支持（需要自定义 shader 或顶点色）。
+- 后续若要支持 offset，可改为 per-vertex color + 自定义 `Material2d`。
 
 #### 7.5 zOrder 排序（P2-5）
 
-- 方案 1（首选）：正交相机下 `slot 的 GlobalTransform.z = -index * 0.001`，依赖 Bevy 透明队列按 z 排序 → **需先验证 Q1**
-- 方案 2：自定义 phase sort key
+- 方案 1（已实现）：正交相机下 `slot 的 GlobalTransform.z = +index * 0.001`（index = core `Armature.slots` 排序后的位置，back→front；Bevy 透明 phase 按 z 升序，大 z 后画）
+- 方案 2：自定义 phase sort key（若后续需要更精确的 zIndex/zOrder 或 blend 分桶）
 - 需要覆盖的风险 R5：槽排序比较器平局行为
 
 #### 7.6 blend 模式（P2-6）
@@ -803,7 +811,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 
 **常见坑**
 
-- 骨骼/插槽实体数量多时，每帧全量同步会有开销 → 用脏标记只更新 dirty slot
+- 每帧必须全量同步所有 slot 的 `GlobalTransform`：root `Transform` 移动时 Bevy 的传播会先把所有子实体 GT 重写成占位值；只同步“dirty slot”会让未 dirty 的 slot 塌回 root/identity。性能优化必须把 root/父级变化纳入脏集合，或直接接受全量（本仓库素材规模足够小）。
 - mesh 顶点缓冲重建要用 `RenderAssetUsages` / `BufferVec` 复用，避免每帧新建 `Mesh`
 - Bevy 的 2D 相机是 Y 向上，DragonBones 数据默认 `yDown = true`（`DragonBones.ts:289`）→ 需要一次 Y 轴翻转，**只在根实体做一次，不要每层都翻**
 
@@ -846,7 +854,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 | ID | 风险 | 等级 | 对策 |
 |---|---|---|---|
 | **R1** | Overlay（及 Darken / HardLight / Difference 等）blend 模式无法用 wgpu 固定混合因子表达（分段非双线性函数） | 中 | P2 先交付 Normal / Add / Multiply / Screen（覆盖 assets 实际用到的 3 种）；Overlay 走自定义 shader 路线单独立项 |
-| **R2** | Bevy `Transform` 是 TRS 分解，**无法表达 skew 剪切** | 高 | 阶段 7.3 方案 A（顶点烘焙），第一周先做技术验证 |
+| **R2** | Bevy `Transform` 是 TRS 分解，**无法表达 skew 剪切** | 高 | 阶段 7.3 采用 B2：直写 `GlobalTransform` 的 affine（已实现）；`Transform` 只作占位，不参与 slot 变换 |
 | **R3** | Bevy 0.19.1 透明 2D 队列排序语义未确认 | 中 | Q1 实测；备选自定义 sort key |
 | **R4** | JS 数值语义（`Math.round` 半数方向等）静默偏差 | 高 | D2 对照表 + IR 逐元素断言（阶段 2 就能拦住） |
 | **R5** | 槽位排序比较器平局时返回 `-1`（不一致），V8 TimSort 与 Rust 排序结果可能不同 | 中 | zOrder 时间轴专项用例；必要时实现为"按 (zIndex*1000+zOrder, 原始索引)"的全序比较 |
