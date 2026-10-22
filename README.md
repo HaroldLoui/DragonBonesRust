@@ -26,10 +26,19 @@
 >
 > `PlantAnimate_ske.json` 现在保留的是压缩（minified）JSON 内容；独立的
 > `PlantAnimate_ske_compressed.json` 已合并删除。压缩版与原版键集合和帧计数一致。
+>
+> `DragonBonesJS/` 是 git submodule，固定在上游 commit `64b6c69`。只跑
+> `cargo build/test` 不需要它；重新生成黄金数据或对照 TS 源码时需要初始化子模块。
 
 ## 快速开始
 
 ```powershell
+# 新克隆：连同参考运行时一起拉取
+git clone --recurse-submodules https://github.com/HaroldLoui/DragonBonesRust.git
+
+# 已有克隆：初始化子模块
+git submodule update --init --recursive
+
 # 运行全部测试（core 的黄金数据 + Bevy 适配层测试）
 cargo test --workspace
 
@@ -67,7 +76,7 @@ crates/
 assets/                # DragonBones 素材（_ske.json / _tex.json / _tex.png）
 testdata/              # JS 参考实现生成的黄金数据
 docs/                  # 需求、阶段指南、模型映射、设计文档
-DragonBonesJS/         # 官方 TS 参考运行时（对照用）
+DragonBonesJS/         # 官方 TS 参考运行时（git submodule，pinned commit）
 tools/                 # JS 参考数据/黄金数据生成脚本
 ```
 
@@ -124,7 +133,7 @@ TransformSystems::Propagate
 
 本项目使用“官方 TS + Node 参考运行”的方式生成黄金数据：
 
-- `DragonBonesJS/`：官方参考实现；
+- `DragonBonesJS/`：官方参考实现（git submodule，固定 commit `64b6c69`）；
 - `testdata/`：JS 运行时输出的矩阵、姿态、IR、事件等黄金数据；
 - `crates/dragonbones-core/tests/`：逐项差分测试；
 - `tools/`：生成黄金数据的脚本。
