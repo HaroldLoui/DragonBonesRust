@@ -24,9 +24,6 @@
 
 > 版本：本地开发使用 **Rust 1.99.1**、**Bevy 0.20.0**。
 >
-> `PlantAnimate_ske.json` 现在保留的是压缩（minified）JSON 内容；独立的
-> `PlantAnimate_ske_compressed.json` 已合并删除。压缩版与原版键集合和帧计数一致。
->
 > `DragonBonesJS/` 是 git submodule，固定在上游 commit `64b6c69`。只跑
 > `cargo build/test` 不需要它；重新生成黄金数据或对照 TS 源码时需要初始化子模块。
 
@@ -148,6 +145,7 @@ cargo test --workspace
 - [TS → Rust 模型映射](docs/model_mapping.md)
 - [阶段 0](docs/guide/00-stage0.md) / [1](docs/guide/01-stage1.md) / [2](docs/guide/02-stage2.md) / [3](docs/guide/03-stage3.md) / [4](docs/guide/04-stage4.md) / [5](docs/guide/05-stage5.md) / [6](docs/guide/06-stage6.md)
 - [Bevy skew/适配设计调研](docs/design/bevy_skew_transform.md)
+- [性能与产品优化路线图](docs/optimization-roadmap.md)
 - [Bevy 适配层 README](crates/dragonbones-bevy/README.md)
 
 ## 仓库
