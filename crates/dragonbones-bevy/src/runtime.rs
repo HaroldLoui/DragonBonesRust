@@ -7,11 +7,12 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 use bevy::sprite_render::Material2dPlugin;
 use bevy::transform::TransformSystems;
-use dragonbones_core::armature::{ArmatureIdx, NullArmatureProxy, SlotIdx};
+use dragonbones_core::armature::{ArmatureIdx, SlotIdx};
 use dragonbones_core::factory::BaseFactory;
 
 use crate::asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoader};
 use crate::blend::DragonBonesBlend;
+use crate::events::{BevyArmatureProxy, DragonBonesEvent, DragonBonesEventQueue};
 use crate::material::{self, DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
 use crate::render;
 use crate::sync;
@@ -158,6 +159,8 @@ impl Plugin for DragonBonesPlugin {
             .register_asset_loader(AtlasAssetLoader)
             .init_resource::<DragonBonesMaterials>()
             .init_resource::<DragonBonesSyncConfig>()
+            .init_resource::<DragonBonesEventQueue>()
+            .add_message::<DragonBonesEvent>()
             .insert_non_send(DragonBonesRuntime::default())
             .configure_sets(
                 Update,
@@ -181,7 +184,14 @@ impl Plugin for DragonBonesPlugin {
                 (
                     cleanup_armatures.in_set(DragonBonesSystems::Cleanup),
                     setup_armatures.in_set(DragonBonesSystems::Setup),
-                    advance_dragonbones.in_set(DragonBonesSystems::Advance),
+                    (
+                        advance_dragonbones.in_set(DragonBonesSystems::Advance),
+                        // Events buffered by this frame's advance must be readable
+                        // in the same frame.
+                        crate::events::forward_dragonbones_events
+                            .in_set(DragonBonesSystems::Advance)
+                            .after(advance_dragonbones),
+                    ),
                 ),
             )
             .add_systems(
@@ -251,6 +261,7 @@ fn setup_armatures(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<DragonBonesMaterial>>,
     mut material_cache: ResMut<DragonBonesMaterials>,
+    event_queue: Res<DragonBonesEventQueue>,
     query: Query<(Entity, &DragonBonesArmature, Option<&DragonBonesInstance>)>,
 ) {
     for (root, request, instance) in &query {
@@ -288,7 +299,7 @@ fn setup_armatures(
             &db_key,
             "",
             &atlas_key,
-            Box::new(NullArmatureProxy::new()),
+            Box::new(BevyArmatureProxy::new(event_queue.clone())),
         ) else {
             warn!(
                 "DragonBones: failed to build armature `{}` from {:?}",

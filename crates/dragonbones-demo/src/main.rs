@@ -43,7 +43,25 @@ fn main() {
         .add_plugins(DragonBonesPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, (switch_animation, update_animation_hud).chain())
+        .add_systems(Update, log_dragonbones_events)
         .run();
+}
+
+/// Prints the animation events the adapter forwards into Bevy messages.
+///
+/// The demo logs every event at `info` so the bridge is visible while running;
+/// a real game would usually filter for `complete` / `frameEvent` / `soundEvent`.
+fn log_dragonbones_events(mut events: MessageReader<DragonBonesEvent>) {
+    for event in events.read() {
+        info!(
+            "DragonBones event: {} (armature {:?}, name {:?}, bone {:?}, slot {:?})",
+            event.event_type(),
+            event.armature,
+            event.event.name,
+            event.event.bone_name,
+            event.event.slot_name,
+        );
+    }
 }
 
 const DEMO_NAMES: &[&str] = &[

@@ -153,6 +153,29 @@ Benchmarks (also measure 1/10/100 armatures while animating):
 cargo bench -p dragonbones-bevy
 ```
 
+## Events
+
+Core dispatches every animation event (`start`, `complete`, `loopComplete`,
+`fadeIn*`, `frameEvent`, `soundEvent`, …) through the armature proxy. The adapter
+installs `BevyArmatureProxy`, which records them in a queue; a system in
+`DragonBonesSystems::Advance` drains the queue into `DragonBonesEvent` messages in
+the same frame:
+
+```rust
+fn on_events(mut events: MessageReader<DragonBonesEvent>) {
+    for event in events.read() {
+        if event.event_type() == EventObject::COMPLETE {
+            info!("animation finished for armature {:?}", event.armature);
+        }
+    }
+}
+```
+
+`DragonBonesEvent` carries the core armature index and the complete core
+`EventObject` (time, name, bone/slot names, action data, user data). Note that
+core only *creates* an event when the proxy reports a listener for that type, so
+`BevyArmatureProxy::has_db_event_listener` reports `true` for every type.
+
 ## Not yet implemented
 
 - Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
@@ -161,7 +184,6 @@ cargo bench -p dragonbones-bevy
 - Surface mesh vertex deformation for mesh displays (Surface image slots work
   through the core's surface matrix).
 - Child-armature slot displays and replacement textures.
-- Event-to-Bevy event forwarding.
 - Batching / armature-level dirty flags for *animated* armatures (the sync pass
   still runs every frame while a pose changes).
 

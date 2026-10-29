@@ -246,9 +246,11 @@ cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armat
 
 - `DragonBonesPlayer` / `AnimationPlayer` 风格的组件 API：play/pause/stop/seek/speed/loop/fade；
 - 动画状态机：layer、group、fade in/out、transition、priority；
-- 动画事件到 Bevy `Message`/`Event` 的桥接（start/complete/frame event/sound）；
+- 动画事件到 Bevy `Message` 的桥接（✅ 已实现 2026-10-29）：`BevyArmatureProxy` 把 core 派发的每个 `EventObject` 记录到共享队列，`forward_dragonbones_events` 转成 `DragonBonesEvent` message（start / complete / loopComplete / fadeIn* / frameEvent / soundEvent，携带 armature 索引与完整事件字段）；参见下文 §4.1 说明；
 - 多 armature 同时播放、独立时间缩放；
 - 与 Bevy `Time`、pause、fixed update 的统一调度。
+
+**事件桥接实现细节**（2026-10-29）：core 只在 `proxy.has_db_event_listener(type)` 为真时才创建/缓冲事件，因此 `BevyArmatureProxy::has_db_event_listener` 恒返回 `true`（"Bevy 桥永久监听"）；普通监听器注册仍委托给 `NullArmatureProxy`。事件在同一帧的 `DragonBonesSystems::Advance` 内被转发，消费方用 `MessageReader<DragonBonesEvent>` 读取。集成测试见 `crates/dragonbones-bevy/tests/events.rs`（loopComplete、armature 归属、队列不重放）。
 
 ### 4.2 渲染完整度
 
