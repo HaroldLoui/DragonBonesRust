@@ -10,13 +10,14 @@
 - **产品上最大的缺口**：动画状态机/事件、blend mode、换装/child armature、编辑与调试体验。
 
 > **实现状态（2026-10-29）**：P0 与首批 P1 项已落地——
-> - **§3 benchmark 基线**：core 25 个 + 适配层 9 个 criterion benchmark（见 §3 实测数字）；
+> - **§3 benchmark 基线 + CPU profile**：core 25 个 + 适配层 11 个 criterion benchmark（含 rig 对比与 baseline，见 §3 实测数字）；rig 对比定位到动画场景的适配层开销主要在 CPU 蒙皮/FFD（§1.4、§3.2）；
 > - 1.1 slot 索引缓存（`sync.rs` 每 armature 每帧一次 `SlotIdx → order` 映射，去掉每 slot 线性查找）；
 > - 1.2 armature 级脏标记（pose hash + root affine 比较，静态角色跳过全量 slot sync，见 §1.2）；
 > - 1.3 的 ① 共享材质 + 顶点色（一个 atlas page 一个材质，per-slot 颜色写 `ATTRIBUTE_COLOR`），以及 ②④ 自定义 `Material2d`：按 `(atlas image, blend mode)` 共享材质，Normal / Add / Multiply / Screen 走固定管线混合状态；
-> - 1.5 `despawn → dispose` 生命周期与资产/注册回收（`runtime.rs` 的 `ArmatureBinding` + `DragonBonesSystems::Cleanup`）。
+> - 1.5 `despawn → dispose` 生命周期与资产/注册回收（`runtime.rs` 的 `ArmatureBinding` + `DragonBonesSystems::Cleanup`）；
+> - 1.6 直写 `GlobalTransform` 的 schedule 集成测试（真实 `TransformPlugin`）。
 >
-> 仍待做：1.3 的 ③ 合批、1.4 GPU skinning、1.6 直写 GT 的集成测试保护，以及 §4 的产品项（Overlay 等需要读目标像素的 blend mode 也还在等 shader 方案）。
+> 仍待做：1.4 GPU skinning（本轮 profile 后成为下一个优先项）、1.3 的 ③ 合批、§3.3 的 GPU 侧 profile，以及 §4 的产品项（Overlay 等需要读目标像素的 blend mode 也还在等 shader 方案）。
 
 ---
 
@@ -59,15 +60,15 @@ armature.slots
 - 开关：`DragonBonesSyncConfig { skip_clean_armatures }`（默认 `true`），置 `false` 可强制回到“每帧全量写”；
 - 测试：`crates/dragonbones-bevy/tests/lifecycle.rs` 用“篡改 slot `GlobalTransform`”作为探针，验证干净 armature 不重写、动画推进后会重同步、关闭开关后每帧都写。
 
-静态（不推进动画）只跑 `PostUpdate` 的 A/B 实测（RTX 4080 / i7-14700K，criterion，`cargo bench -p dragonbones-bevy`）：
+静态（不推进动画）只跑 `PostUpdate` 的 A/B 实测（2026-10-29 复核；RTX 4080 / i7-14700K，criterion，`cargo bench -p dragonbones-bevy`）。`sync/baseline`（有资产、无 armature）测得一次 `PostUpdate` 的固定开销约 3.2 µs（含 `Material2dPlugin` 在 headless 下的记账系统）；因此下表用 **10→100 armature 的增量斜率**给出每个 armature 的 sync 成本，避免固定开销干扰 A/B 对比：
 
 | 场景 | 关闭脏标记 | 开启脏标记 | 收益 |
 |---|---|---|---|
-| 1 armature | 2.156 µs | 1.220 µs | −43% |
-| 10 armatures | 11.51 µs | 5.196 µs | −55% |
-| 100 armatures | 118.2 µs | 46.45 µs | −61% |
+| 每个 idle armature 的 sync 增量 | 1.35 µs | 0.51 µs | −62% |
 
-动画中的 armature 每帧都会 dirty，收益来自“不重复算”而不是“跳过”，因此该场景下与旧路径基本持平（1/10/100 armature 分别为 4.21 / 31.4 / 339.0 µs，含 core `advance_time`）。
+原始读数（10 / 100 armature）：关闭 41.0 / 162.6 µs，开启 33.0 / 78.6 µs。单个 armature 的一次 `PostUpdate`（约 27 µs）被固定开销主导，不参与对比。
+
+动画中的 armature 每帧都会 dirty，脏标记无法跳过整骨架；Dragon（18 slot）每个 armature 约 3.9 µs（含 core 1.45 µs），Rooster（15 slot，含蒙皮 mesh）约 11.6 µs（含 core 6.3 µs）——蒙皮路径见 §1.4 的 profile 结论。
 
 ### 1.3 材质与 draw call
 
@@ -95,6 +96,8 @@ for each vertex:
 ```
 
 然后把新的 `ATTRIBUTE_POSITION` 写回 `Mesh` 资产。当前素材只有几百个顶点，CPU 足够，但这是最典型的上限。
+
+**profile 结论（2026-10-29，`cargo bench -p dragonbones-bevy`）**：见 §3.2 的 rig 对比——animated Dragon 约 2.5 µs/armature（18 slot，图集 quad 为主），animated Rooster 约 5.3 µs/armature（15 slot，含 weighted mesh，另有 63 骨骼进入 pose hash）。按 slot 折算，蒙皮 rig 的同步成本约为图片 rig 的 **2.6 倍**，且这部分全部在 CPU（float 循环 + 每帧 `Assets<Mesh>::get_mut` + 顶点重传）。据此下一步优先 **GPU skinning**，而不是先做合批：骨骼矩阵进 storage buffer，顶点 shader 按权重混合，mesh 资产不再逐帧变更。
 
 可选路线：
 
@@ -220,19 +223,23 @@ cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armat
 
 ### 3.2 Bevy 适配层（无渲染 headless `App`）
 
-`sync/static/*` 只跑 `PostUpdate`（不推进动画），`sync/animated/*` 每次先 `advance_time(1/60)` 再同步：
+`sync/baseline/*`（有资产、无 armature）测 `PostUpdate` 固定开销；`sync/static/*` 只跑 `PostUpdate`（不推进动画）；`sync/animated/*` 每次先 `advance_time(1/60)` 再同步；`advance/*` 只推进动画（纯 core 成本）。2026-10-29 复测：
 
 | 场景 | 耗时 |
 |---|---|
-| static 1 / 10 / 100 armature，脏标记关 | 2.156 µs / 11.51 µs / 118.2 µs |
-| static 1 / 10 / 100 armature，脏标记开 | 1.220 µs / 5.196 µs / 46.45 µs |
-| animated 1 / 10 / 100 armature | 4.21 µs / 31.4 µs / 339.0 µs |
+| `sync/baseline`（无 armature，跑一次 `PostUpdate`） | 3.2 µs |
+| static 10 / 100 armature，脏标记关 | 41.0 µs / 162.6 µs（增量 1.35 µs/armature） |
+| static 10 / 100 armature，脏标记开 | 33.0 µs / 78.6 µs（增量 0.51 µs/armature） |
+| animated Dragon 1 / 10 armature | 30.6 µs / 65.8 µs（3.9 µs/armature） |
+| advance-only Dragon 1 / 10 | 1.48 µs / 14.5 µs（1.45 µs/armature） |
+| animated Rooster 1 / 10 armature | 36.0 µs / 140.2 µs（11.6 µs/armature） |
+| advance-only Rooster 1 / 10 | 6.36 µs / 62.8 µs（6.27 µs/armature） |
 
-**读数**：干净的静态角色只付一次 pose hash（约 0.5 µs/armature），动画中的角色成本与 armature 数近似线性（100 armature 339 µs ≈ 3.4 µs/armature，其中含 core `advance_time`）。剩下的大头是 CPU 蒙皮/FFD 与每帧 mesh 资产回写，即 1.4 的 GPU skinning 方向。
+**读数**：`animated` 减去 `advance` 得到适配层每 armature 的 sync 成本——Dragon（18 slot，图集 quad 为主）约 2.5 µs，Rooster（15 slot，含 weighted mesh）约 5.3 µs，**按 slot 折算蒙皮路径贵约 2.6 倍**，即 CPU 蒙皮/FFD 是动画场景下适配层的主要开销（见 §1.4 的 GPU skinning 决策）。core `advance_time` 在 Rooster（63 骨骼）上 6.3 µs/armature，已超过适配层 sync，属于 §2 的 core 动画推进本身。
 
 ### 3.3 待补的基线
 
-1. **渲染 profile**：Tracy / `bevy_diagnostic` / GPU capture，确认瓶颈在 CPU sync、draw call 还是 fill rate；
+1. **渲染 profile**（🟡 CPU 侧已完成 2026-10-29）：用 rig 对比（Dragon 图片 slot vs Rooster 蒙皮 slot）定位到动画场景的适配层开销主要在 CPU 蒙皮/FFD（§3.2）；GPU 侧（Tracy / GPU capture：draw call、fill rate）仍待做，需要带渲染器的 profile 环境；
 2. **内存 profile**：armature/mesh/material 生命周期（1.5 已补 dispose，仍需量化长期运行是否平稳）；
 3. **回归门槛**：目前 CI 只保证 benchmark 能编译（`clippy --all-targets`），数字仍靠手动记录；后续可加 benchmark job 或定期存档 `target/criterion` 结果。
 
