@@ -1,8 +1,8 @@
 # DragonBones Rust 运行时 — 需求文档与实施指南
 
-> 版本：v1.0（2026-10-03）
-> 状态：调研完成，待实施
-> 关联目录：`DragonBonesJS/`（官方 JS 参考实现）、`assets/`（待播放素材）、`src/`（当前为空壳）
+> 版本：v1.0（2026-10-03）；状态更新 2026-10-25
+> 状态：阶段 0–6 已完成（core 与 JS 黄金数据差分全绿）；阶段 7 Bevy 适配层 MVP 已落地，并完成生命周期/共享材质/slot 索引三项收口
+> 关联目录：`DragonBonesJS/`（官方 JS 参考实现）、`assets/`（待播放素材）、`crates/`（Rust 实现）
 
 ---
 
@@ -698,6 +698,10 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 > **实现状态（2026-10-21）**：MVP 已落地 `crates/dragonbones-bevy` + `crates/dragonbones-demo`。
 > 已支持：ske/tex 资源加载、armature/slot 实体、B2 `GlobalTransform` 直写、image/非蒙皮 mesh/蒙皮 mesh（含 FFD）、颜色乘子、z 排序、时间驱动。
 > 未完成：Add/Multiply/Screen/Overlay blend、rotated atlas、Surface mesh 顶点变形、child armature、事件转发；demo 通过命令行参数选择单个 rig（`--demo <name>` 或位置参数，可选 dragon/dragon_blend/plant/rooster/long/surface）；动画组在 Bevy UI 覆盖层中展示，运行时用 `1-9` / `Left` / `Right` 切换（起始动画不是命令行参数）。
+>
+> **2026-10-25 收口**：despawn → dispose 生命周期（core arena、skeleton/atlas 注册、mesh/material 资产回收）；按 atlas page 共享 `ColorMaterial` + per-slot 顶点色；sync 系统改为 O(slots) 的 `SlotIdx → order` 映射。对应实现见 `crates/dragonbones-bevy/src/{runtime,sync,render,material}.rs`，测试见 `crates/dragonbones-bevy/tests/lifecycle.rs`。
+>
+> **2026-10-29 收口**：armature 级脏标记（pose hash + root affine，`DragonBonesSyncConfig` 可关）；criterion benchmark 基线（core 25 个 + 适配层 9 个）；自定义 `Material2d` 支持 Normal/Add/Multiply/Screen，按 `(atlas image, blend)` 共享材质（Overlay 等需读目标像素的模式仍回退 Normal）。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend}.rs`。
 
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 

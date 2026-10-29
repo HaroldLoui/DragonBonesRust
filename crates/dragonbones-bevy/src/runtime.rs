@@ -1,13 +1,18 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bevy::asset::AssetApp;
 use bevy::camera::visibility::VisibilitySystems;
+use bevy::math::Affine3A;
 use bevy::prelude::*;
+use bevy::sprite_render::Material2dPlugin;
 use bevy::transform::TransformSystems;
 use dragonbones_core::armature::{ArmatureIdx, NullArmatureProxy, SlotIdx};
 use dragonbones_core::factory::BaseFactory;
 
 use crate::asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoader};
+use crate::blend::DragonBonesBlend;
+use crate::material::{self, DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
 use crate::render;
 use crate::sync;
 
@@ -18,6 +23,85 @@ use crate::sync;
 #[derive(Default)]
 pub struct DragonBonesRuntime {
     pub factory: BaseFactory,
+    /// Adapter bookkeeping for every built armature, used to release core and
+    /// GPU state when the root entity is despawned.
+    pub(crate) bindings: HashMap<ArmatureIdx, ArmatureBinding>,
+    /// `factory.data_map` / `factory.atlas_map` reference counts. The adapter
+    /// registers one entry per unique asset handle; the entry is removed with
+    /// the last armature that used it.
+    data_refs: HashMap<String, usize>,
+    atlas_refs: HashMap<String, usize>,
+}
+
+/// What the adapter owns on behalf of one armature instance.
+pub(crate) struct ArmatureBinding {
+    root: Entity,
+    armature: ArmatureIdx,
+    slots: Vec<Entity>,
+    meshes: Vec<Handle<Mesh>>,
+    /// Every `(atlas image, blend mode)` material key this armature acquired,
+    /// deduplicated. Cleanup releases exactly these keys, so the shared material
+    /// cache's reference counts stay balanced even when slots change blend mode
+    /// at runtime (the old key is kept until the armature is disposed, which
+    /// bounds the set to at most four keys per atlas page).
+    pub(crate) materials: HashSet<MaterialKey>,
+    dragon_bones_key: String,
+    atlas_key: String,
+    /// Root affine written by the last sync, used for the armature-level dirty
+    /// check.
+    pub(crate) last_root: Option<Affine3A>,
+    /// Pose hash of the last sync, used for the armature-level dirty check.
+    pub(crate) last_pose: Option<u64>,
+}
+
+/// Tuning knobs for the adapter's per-frame slot sync.
+///
+/// The resource must be inserted *before* [`DragonBonesPlugin`] to take effect
+/// (the plugin only calls `init_resource`, which keeps an existing value).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DragonBonesSyncConfig {
+    /// Skip the whole per-slot sync pass for an armature whose pose hash and
+    /// root affine are unchanged since the previous frame.
+    ///
+    /// This is what makes idle armatures (paused animation, static props) cheap:
+    /// instead of rewriting every slot, the adapter only hashes the pose. Set to
+    /// `false` to force the pre-optimization behaviour (every slot, every frame).
+    pub skip_clean_armatures: bool,
+}
+
+impl Default for DragonBonesSyncConfig {
+    fn default() -> Self {
+        Self {
+            skip_clean_armatures: true,
+        }
+    }
+}
+
+impl DragonBonesRuntime {
+    fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
+        *self
+            .data_refs
+            .entry(dragon_bones_key.to_owned())
+            .or_insert(0) += 1;
+        *self.atlas_refs.entry(atlas_key.to_owned()).or_insert(0) += 1;
+    }
+
+    fn release_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
+        if let Some(count) = self.data_refs.get_mut(dragon_bones_key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.data_refs.remove(dragon_bones_key);
+                let _ = self.factory.data_map.shift_remove(dragon_bones_key);
+            }
+        }
+        if let Some(count) = self.atlas_refs.get_mut(atlas_key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.atlas_refs.remove(atlas_key);
+                let _ = self.factory.atlas_map.shift_remove(atlas_key);
+            }
+        }
+    }
 }
 
 /// Request an armature on an entity. The entity is the armature root; its
@@ -50,6 +134,8 @@ pub struct DragonBonesSlot {
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DragonBonesSystems {
+    /// Release armatures whose root entity disappeared before building new ones.
+    Cleanup,
     Setup,
     Advance,
     SyncTransforms,
@@ -60,14 +146,27 @@ pub struct DragonBonesPlugin;
 
 impl Plugin for DragonBonesPlugin {
     fn build(&self, app: &mut App) {
+        // The custom material's fragment shader is embedded in this crate;
+        // register it before adding the material plugin so the shader asset is
+        // available when the first pipeline is specialized.
+        material::register(app);
+
         app.init_asset::<SkeletonAsset>()
             .init_asset::<AtlasAsset>()
+            .add_plugins(Material2dPlugin::<DragonBonesMaterial>::default())
             .register_asset_loader(SkeletonAssetLoader)
             .register_asset_loader(AtlasAssetLoader)
+            .init_resource::<DragonBonesMaterials>()
+            .init_resource::<DragonBonesSyncConfig>()
             .insert_non_send(DragonBonesRuntime::default())
             .configure_sets(
                 Update,
-                (DragonBonesSystems::Setup, DragonBonesSystems::Advance).chain(),
+                (
+                    DragonBonesSystems::Cleanup,
+                    DragonBonesSystems::Setup,
+                    DragonBonesSystems::Advance,
+                )
+                    .chain(),
             )
             .configure_sets(
                 PostUpdate,
@@ -80,6 +179,7 @@ impl Plugin for DragonBonesPlugin {
             .add_systems(
                 Update,
                 (
+                    cleanup_armatures.in_set(DragonBonesSystems::Cleanup),
                     setup_armatures.in_set(DragonBonesSystems::Setup),
                     advance_dragonbones.in_set(DragonBonesSystems::Advance),
                 ),
@@ -91,13 +191,66 @@ impl Plugin for DragonBonesPlugin {
     }
 }
 
+/// Releases the core armature, its meshes and its shared atlas material when a
+/// root entity (or at least its [`DragonBonesInstance`]) disappears.
+///
+/// Core `dispose_armature` only queues the disposal (`Armature.dispose()` in the
+/// reference implementation buffers the object); the real `on_clear` runs in the
+/// next `advance_time`, which happens later in this same `Update` because
+/// [`DragonBonesSystems::Cleanup`] is ordered before
+/// [`DragonBonesSystems::Advance`].
+#[allow(clippy::type_complexity)]
+fn cleanup_armatures(
+    mut commands: Commands,
+    mut removed: RemovedComponents<DragonBonesInstance>,
+    mut runtime: NonSendMut<DragonBonesRuntime>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<DragonBonesMaterial>>,
+    mut material_cache: ResMut<DragonBonesMaterials>,
+) {
+    for entity in removed.read() {
+        let Some(armature_idx) = runtime
+            .bindings
+            .iter()
+            .find(|(_, binding)| binding.root == entity)
+            .map(|(armature_idx, _)| *armature_idx)
+        else {
+            continue;
+        };
+        let Some(binding) = runtime.bindings.remove(&armature_idx) else {
+            continue;
+        };
+
+        for mesh in &binding.meshes {
+            meshes.remove(mesh.id());
+        }
+        for key in &binding.materials {
+            material_cache.release(*key, &mut materials);
+        }
+        runtime.release_data(&binding.dragon_bones_key, &binding.atlas_key);
+
+        // Slots are Bevy children of the root, so they are already gone when the
+        // root was despawned; this only matters if a user removed the instance
+        // component while keeping the root entity alive.
+        for slot in binding.slots {
+            if let Ok(mut slot_commands) = commands.get_entity(slot) {
+                slot_commands.despawn();
+            }
+        }
+
+        runtime.factory.dispose_armature(binding.armature);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn setup_armatures(
     mut commands: Commands,
     mut runtime: NonSendMut<DragonBonesRuntime>,
     skeletons: Res<Assets<SkeletonAsset>>,
     atlases: Res<Assets<AtlasAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut materials: ResMut<Assets<DragonBonesMaterial>>,
+    mut material_cache: ResMut<DragonBonesMaterials>,
     query: Query<(Entity, &DragonBonesArmature, Option<&DragonBonesInstance>)>,
 ) {
     for (root, request, instance) in &query {
@@ -164,36 +317,77 @@ fn setup_armatures(
         // force one update so the first rendered frame is posed.
         runtime.factory.advance_one(armature_idx, 0.0);
 
-        let Some(armature) = runtime
-            .factory
-            .armatures
-            .get(armature_idx.index())
-            .and_then(Option::as_ref)
-        else {
-            continue;
-        };
-        let armature_scale = armature.armature_data().scale;
         let atlas_size = UVec2::new(
             atlas.data.width.max(1.0) as u32,
             atlas.data.height.max(1.0) as u32,
         );
-        let mut slot_entities = Vec::with_capacity(armature.slots.len());
-        for slot in &armature.slots {
-            let entity = render::spawn_slot(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                root,
-                armature_idx,
-                armature,
-                slot,
-                &atlas.texture,
-                atlas_size,
-                armature_scale,
-            );
-            slot_entities.push(entity);
+        let mut slot_entities = Vec::new();
+        let mut mesh_handles = Vec::new();
+        // One shared material per (atlas page, blend mode) used by this
+        // armature; the set is what cleanup releases.
+        let mut armature_materials: HashMap<DragonBonesBlend, Handle<DragonBonesMaterial>> =
+            HashMap::new();
+        {
+            let Some(armature) = runtime
+                .factory
+                .armatures
+                .get(armature_idx.index())
+                .and_then(Option::as_ref)
+            else {
+                // `advance_one` above cannot drop the armature.
+                warn!("DragonBones: armature {armature_idx:?} disappeared after build");
+                continue;
+            };
+            let armature_scale = armature.armature_data().scale;
+            slot_entities.reserve(armature.slots.len());
+            mesh_handles.reserve(armature.slots.len());
+            for slot in &armature.slots {
+                let blend = DragonBonesBlend::from_core(slot.blend_mode);
+                let material = if let Some(material) = armature_materials.get(&blend) {
+                    material.clone()
+                } else {
+                    let material = material_cache.acquire(&atlas.texture, blend, &mut materials);
+                    armature_materials.insert(blend, material.clone());
+                    material
+                };
+                let (entity, mesh) = render::spawn_slot(
+                    &mut commands,
+                    &mut meshes,
+                    root,
+                    armature_idx,
+                    armature,
+                    slot,
+                    &material,
+                    blend,
+                    &atlas.texture,
+                    atlas_size,
+                    armature_scale,
+                );
+                slot_entities.push(entity);
+                mesh_handles.push(mesh);
+            }
         }
 
+        let acquired_materials = armature_materials
+            .into_keys()
+            .map(|blend| MaterialKey::new(&atlas.texture, blend))
+            .collect();
+
+        runtime.retain_data(&db_key, &atlas_key);
+        runtime.bindings.insert(
+            armature_idx,
+            ArmatureBinding {
+                root,
+                armature: armature_idx,
+                slots: slot_entities.clone(),
+                meshes: mesh_handles,
+                materials: acquired_materials,
+                dragon_bones_key: db_key,
+                atlas_key,
+                last_root: None,
+                last_pose: None,
+            },
+        );
         commands.entity(root).insert(DragonBonesInstance {
             armature: armature_idx,
             slots: slot_entities,

@@ -43,7 +43,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 
 The entity carrying [`DragonBonesArmature`] is the armature root. Its `Transform`
 is the armature's world placement; each slot is spawned as a child with a
-`Mesh2d` + `MeshMaterial2d<ColorMaterial>` and a `DragonBonesSlot` marker.
+`Mesh2d` + `MeshMaterial2d<DragonBonesMaterial>` and a `DragonBonesSlot` marker.
 
 ## Implemented (MVP)
 
@@ -54,20 +54,113 @@ is the armature's world placement; each slot is spawned as a child with a
 - Image slots (atlas region + trim frame + pivot).
 - Non-skinned mesh slots, including FFD/deform vertex updates.
 - Weighted/skinned mesh slots rebuilt in armature space every frame.
-- Color multipliers + global alpha via `ColorMaterial` (offsets ignored).
+- Color multipliers + global alpha baked into per-vertex colors, with one shared
+  `DragonBonesMaterial` per `(atlas page, blend mode)` (see below).
+- DragonBones blend modes: Normal / Add / Multiply / Screen through a custom
+  `Material2d` (fixed-function blend states); Overlay and other modes that need
+  render-target reads fall back to Normal.
 - Slot draw order via Bevy's transparent-phase z sort.
 - Visibility from slot/bone visibility and display presence.
+- Despawn → dispose lifecycle: despawning the armature root releases the core
+  armature (through the reference implementation's deferred `dispose` buffer),
+  the skeleton/atlas registrations and the mesh/material assets.
+- O(1) per-slot work in the sync system: a `SlotIdx` → draw-order map is built
+  once per armature per frame instead of a linear search per slot.
+- Armature-level dirty check: a pose hash + root affine comparison skips the whole
+  per-slot pass for idle armatures (see below and
+  `cargo bench -p dragonbones-bevy`).
+
+## Lifecycle: despawn → dispose
+
+`DragonBonesPlugin` records an `ArmatureBinding` (root entity, slot entities,
+mesh handles, atlas image, factory cache keys) for every built armature. A
+`RemovedComponents<DragonBonesInstance>` system in `DragonBonesSystems::Cleanup`
+runs before setup/advance and, for a despawned root:
+
+1. removes the slot mesh assets from `Assets<Mesh>`;
+2. drops one reference from the shared atlas material cache (removing the
+   material with the last armature);
+3. decrements the factory's `data_map` / `atlas_map` reference counts and
+   removes the entries with the last armature;
+4. calls `BaseFactory::dispose_armature`, whose actual `on_clear` runs at the
+   start of the `advance_time` later in the same frame.
+
+## Materials, per-slot color and blend modes
+
+Slots only need a per-slot tint and a per-slot blend mode, not a per-slot
+texture: every slot of an armature samples the same atlas page. The adapter
+therefore creates **one `DragonBonesMaterial` per `(atlas page image, blend
+mode)`** (`src/material.rs`) and bakes the DragonBones color multiplier + global
+alpha into the mesh `ATTRIBUTE_COLOR` attribute.
+
+`DragonBonesMaterial` is a small custom `Material2d`:
+
+- its only bindings are the atlas page texture and sampler;
+- the blend mode is forwarded through `#[bind_group_data(DragonBonesBlend)]`, so
+  Bevy compiles one pipeline per blend mode and every slot sharing
+  `(image, blend)` shares one material asset, bind group and draw batch;
+- `specialize` replaces the color target's blend state:
+  Normal `SrcAlpha/OneMinusSrcAlpha`, Add `SrcAlpha/One`, Multiply
+  `Dst/OneMinusSrcAlpha`, Screen `One/OneMinusSrc` (all `BlendOperation::Add`,
+  alpha component always `OVER`);
+- the fragment shader (`src/dragonbones_material.wesl`) samples the atlas and
+  multiplies by the vertex color, mirroring `ColorMaterial`'s output/tonemapping
+  tail.
+
+Notes:
+
+- Overlay / Darken / Lighten / HardLight / Difference / Subtract / … need reads
+  of the render target inside the shader. They currently fall back to Normal
+  (the pre-blend-mode behaviour); a shader-based path is a follow-up.
+- The blend factors are the straight-alpha form used by Bevy's 2D pipeline.
+  Normal and Add are exact; Multiply/Screen match a premultiplied reference
+  (Pixi) only where the slot is fully opaque, so soft alpha edges of those slots
+  are approximate until a premultiplied shader path lands.
+- A runtime blend-mode change (slot timeline) swaps the slot's material handle;
+  the armature keeps each `(image, blend)` reference it ever acquired until
+  disposal, which keeps the cache refcounts strictly balanced.
+
+## Armature-level dirty check
+
+Every frame the sync system hashes the armature pose (FNV-1a over slot order,
+slot matrices, display frames, visibility, colors, interpolated deform vertices
+and all bone matrices) and compares it plus the root affine with the values
+stored in the `ArmatureBinding`. Unchanged armatures skip the per-slot pass
+entirely. This is what makes idle characters cheap:
+
+| static sync, `PostUpdate` only | dirty check off | dirty check on |
+|---|---|---|
+| 1 armature | 2.156 µs | 1.220 µs |
+| 10 armatures | 11.51 µs | 5.196 µs |
+| 100 armatures | 118.2 µs | 46.45 µs |
+
+A hash is used instead of a hand-maintained dirty flag so that *every* mutation
+source (animation advance, play/seek, replace APIs, moving the root) invalidates
+the cache without extra bookkeeping. Disable it when you need the old behaviour:
+
+```rust
+app.insert_resource(DragonBonesSyncConfig {
+    skip_clean_armatures: false,
+});
+```
+
+Benchmarks (also measure 1/10/100 armatures while animating):
+
+```text
+cargo bench -p dragonbones-bevy
+```
 
 ## Not yet implemented
 
-- Add/Multiply/Screen/Overlay blend modes (currently normal alpha blending).
+- Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
+  currently fall back to Normal.
 - Rotated atlas regions (`rotated: true`); no current asset uses them.
 - Surface mesh vertex deformation for mesh displays (Surface image slots work
   through the core's surface matrix).
 - Child-armature slot displays and replacement textures.
 - Event-to-Bevy event forwarding.
-- Dirty-slot optimization; the adapter syncs all slots every frame because a
-  moving root makes Bevy rewrite child `GlobalTransform`s.
+- Batching / armature-level dirty flags for *animated* armatures (the sync pass
+  still runs every frame while a pose changes).
 
 ## Demo
 

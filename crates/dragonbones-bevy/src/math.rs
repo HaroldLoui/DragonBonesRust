@@ -30,7 +30,8 @@ pub fn write_global_transform(global: &mut GlobalTransform, affine: Affine3A) {
 }
 
 /// DragonBones color multiplier + alpha. Color offsets are intentionally not
-/// represented by `ColorMaterial`; they are a post-MVP concern.
+/// represented (vertex colors only carry multipliers); they are a post-MVP
+/// concern.
 #[must_use]
 pub fn color_from_transform(transform: &ColorTransform, global_alpha: f64) -> Color {
     let alpha = (transform.alpha_multiplier * global_alpha).clamp(0.0, 1.0) as f32;

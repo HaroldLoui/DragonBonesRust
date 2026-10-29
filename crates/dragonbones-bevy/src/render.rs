@@ -1,12 +1,14 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::sprite_render::{AlphaMode2d, ColorMaterial};
+use bevy::sprite_render::MeshMaterial2d;
 
 use dragonbones_core::armature::{Armature, ArmatureIdx, BoneIdx, Slot};
 use dragonbones_core::core::enums::binary_offset;
 use dragonbones_core::model::{GeometryData, TextureData};
 
+use crate::blend::DragonBonesBlend;
+use crate::material::DragonBonesMaterial;
 use crate::math::slot_color;
 use crate::runtime::DragonBonesSlot;
 
@@ -50,40 +52,60 @@ pub(crate) struct UnskinnedMeshData {
 #[derive(Component)]
 pub struct DragonBonesSlotVisual {
     pub kind: SlotRenderKind,
-    pub atlas_texture: Handle<Image>,
     pub atlas_size: UVec2,
+    /// Atlas page image this slot samples. Together with [`Self::blend`] it
+    /// identifies the shared [`DragonBonesMaterial`] of the slot, which is what
+    /// the sync pass uses when the core slot's blend mode changes at runtime.
+    pub atlas_image: Handle<Image>,
+    /// Blend mode currently applied by the slot's material.
+    pub blend: DragonBonesBlend,
     pub last_display_frame: Option<usize>,
+    /// Last color baked into the mesh's `ATTRIBUTE_COLOR`; the slot only rewrites
+    /// vertex colors when this changes.
+    pub color: Color,
     pub(crate) weighted: Option<WeightedMeshData>,
     pub(crate) unskinned: Option<UnskinnedMeshData>,
 }
 
+/// Bakes a uniform color into the mesh's vertex color attribute.
+///
+/// Slots share one material per `(atlas page, blend mode)`, so the per-slot
+/// DragonBones color multiplier (and global alpha) has to travel with the
+/// geometry. [`DragonBonesMaterial`]'s fragment shader multiplies the sampled
+/// texture by the vertex color when the mesh has `ATTRIBUTE_COLOR`. Vertex
+/// colors are linear-space, hence `Color::to_linear`.
+pub(crate) fn apply_vertex_color(mesh: &mut Mesh, color: Color) {
+    let linear = color.to_linear();
+    let value = [linear.red, linear.green, linear.blue, linear.alpha];
+    let vertex_count = mesh.count_vertices();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![value; vertex_count]);
+}
+
 /// Spawn one slot entity under the armature root.
+///
+/// Returns the spawned entity and the mesh handle so the runtime can release the
+/// mesh asset when the armature is disposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_slot(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
     root: Entity,
     armature_idx: ArmatureIdx,
     armature: &Armature,
     slot: &Slot,
-    atlas_texture: &Handle<Image>,
+    material: &Handle<DragonBonesMaterial>,
+    blend: DragonBonesBlend,
+    atlas_image: &Handle<Image>,
     atlas_size: UVec2,
     armature_scale: f64,
-) -> Entity {
+) -> (Entity, Handle<Mesh>) {
     let (mesh, kind, weighted, unskinned) =
         build_slot_visual(slot, armature, atlas_size, armature_scale);
-    let material = ColorMaterial {
-        color: slot_color(slot),
-        texture: Some(atlas_texture.clone()),
-        alpha_mode: AlphaMode2d::Blend,
-        ..default()
-    };
-    let material_handle = materials.add(material);
-    commands
+    let mesh_handle = meshes.add(mesh);
+    let entity = commands
         .spawn((
-            Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(material_handle),
+            Mesh2d(mesh_handle.clone()),
+            MeshMaterial2d(material.clone()),
             Transform::default(),
             Visibility::Hidden,
             ChildOf(root),
@@ -93,18 +115,42 @@ pub(crate) fn spawn_slot(
             },
             DragonBonesSlotVisual {
                 kind,
-                atlas_texture: atlas_texture.clone(),
                 atlas_size,
+                atlas_image: atlas_image.clone(),
+                blend,
                 last_display_frame: slot.display_frame,
+                color: slot_color(slot),
                 weighted,
                 unskinned,
             },
         ))
-        .id()
+        .id();
+    (entity, mesh_handle)
 }
 
 /// Build the mesh and any per-frame skinning data for a slot.
+///
+/// The mesh already carries the slot's current color as vertex colors; see
+/// [`apply_vertex_color`].
 pub(crate) fn build_slot_visual(
+    slot: &Slot,
+    armature: &Armature,
+    atlas_size: UVec2,
+    armature_scale: f64,
+) -> (
+    Mesh,
+    SlotRenderKind,
+    Option<WeightedMeshData>,
+    Option<UnskinnedMeshData>,
+) {
+    let (mut mesh, kind, weighted, unskinned) =
+        build_slot_geometry(slot, armature, atlas_size, armature_scale);
+    apply_vertex_color(&mut mesh, slot_color(slot));
+    (mesh, kind, weighted, unskinned)
+}
+
+/// Geometry-only half of [`build_slot_visual`]: no vertex color attribute yet.
+fn build_slot_geometry(
     slot: &Slot,
     armature: &Armature,
     atlas_size: UVec2,
