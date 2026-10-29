@@ -1,5 +1,5 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
+use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::sprite_render::MeshMaterial2d;
 
@@ -33,11 +33,16 @@ pub(crate) struct BoneWeight {
 }
 
 /// CPU-side data needed to update a skinned mesh every frame.
+///
+/// `positions` is a per-slot scratch buffer: the skinning loop fills it every
+/// frame and the result is copied into the existing mesh attribute in place, so
+/// steady-state updates allocate nothing (see [`write_positions`]).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WeightedMeshData {
     pub vertices: Vec<Vec<BoneWeight>>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+    positions: Vec<[f32; 3]>,
 }
 
 /// CPU-side data for an unskinned mesh whose vertices may be moved by a
@@ -45,6 +50,26 @@ pub(crate) struct WeightedMeshData {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnskinnedMeshData {
     pub base_positions: Vec<[f32; 3]>,
+    /// Reused scratch buffer for the deformed positions (see [`write_positions`]).
+    positions: Vec<[f32; 3]>,
+}
+
+/// Writes `positions` into the mesh's position attribute, reusing the existing
+/// attribute storage when possible.
+///
+/// The previous implementation built a fresh `Vec` and called
+/// `insert_attribute` on every skinned slot every frame; at 60 Hz that is an
+/// allocation + copy per slot per frame. Keeping the scratch buffer in the slot
+/// visual and writing in place removes the steady-state allocation.
+fn write_positions(mesh: &mut Mesh, positions: &[[f32; 3]]) {
+    if let Some(VertexAttributeValues::Float32x3(values)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+        && values.len() == positions.len()
+    {
+        values.copy_from_slice(positions);
+    } else {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.to_vec());
+    }
 }
 
 /// Adapter-side slot data needed to rebuild the mesh when the display frame
@@ -192,31 +217,33 @@ fn build_slot_geometry(
 
 /// Apply the current FFD/deform offsets to an unskinned mesh.
 pub(crate) fn update_unskinned_positions(
-    data: &UnskinnedMeshData,
+    data: &mut UnskinnedMeshData,
     deform: &[f64],
     mesh: &mut Mesh,
 ) {
     if deform.len() < data.base_positions.len() * 2 {
         return;
     }
-    let mut positions = Vec::with_capacity(data.base_positions.len());
-    for (index, base) in data.base_positions.iter().enumerate() {
-        positions.push([
-            base[0] + deform[index * 2] as f32,
-            base[1] + deform[index * 2 + 1] as f32,
-            base[2],
-        ]);
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    data.positions.clear();
+    data.positions
+        .extend(data.base_positions.iter().enumerate().map(|(index, base)| {
+            [
+                base[0] + deform[index * 2] as f32,
+                base[1] + deform[index * 2 + 1] as f32,
+                base[2],
+            ]
+        }));
+    write_positions(mesh, &data.positions);
 }
 
 /// Recompute skinned vertex positions from the current bone matrices.
 pub(crate) fn update_weighted_positions(
-    data: &WeightedMeshData,
+    data: &mut WeightedMeshData,
     armature: &Armature,
     mesh: &mut Mesh,
 ) {
-    let mut positions = Vec::with_capacity(data.vertices.len());
+    data.positions.clear();
+    data.positions.reserve(data.vertices.len());
     for influences in &data.vertices {
         let mut x = 0.0f64;
         let mut y = 0.0f64;
@@ -234,11 +261,11 @@ pub(crate) fn update_weighted_positions(
             y += (matrix.b * influence.x as f64 + matrix.d * influence.y as f64 + matrix.ty)
                 * weight;
         }
-        positions.push([x as f32, y as f32, 0.0]);
+        data.positions.push([x as f32, y as f32, 0.0]);
     }
-    // Replacing the attribute is safe here: this runs in PostUpdate before
-    // render extraction, and the mesh is created with MAIN_WORLD usage.
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    // Writing in place is safe here: this runs in PostUpdate before render
+    // extraction, and the mesh is created with MAIN_WORLD usage.
+    write_positions(mesh, &data.positions);
 }
 
 fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature) -> Mesh {
@@ -375,6 +402,7 @@ fn build_unskinned_mesh(
 
     let data = UnskinnedMeshData {
         base_positions: positions.clone(),
+        positions: Vec::new(),
     };
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -478,6 +506,7 @@ fn decode_weighted_mesh(
         vertices,
         uvs,
         indices,
+        positions: Vec::new(),
     }
 }
 

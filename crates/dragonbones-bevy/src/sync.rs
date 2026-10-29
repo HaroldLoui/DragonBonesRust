@@ -229,12 +229,12 @@ pub(crate) fn sync_dragonbones(
             visual.weighted = weighted;
             visual.unskinned = unskinned;
         } else if visual.kind == SlotRenderKind::ArmatureSpace
-            && let Some(weighted) = visual.weighted.as_ref()
+            && let Some(weighted) = visual.weighted.as_mut()
             && let Some(mut mesh) = meshes.get_mut(&mesh_handle.0)
         {
             update_weighted_positions(weighted, armature, &mut mesh);
         } else if visual.kind == SlotRenderKind::Local
-            && let Some(unskinned) = visual.unskinned.as_ref()
+            && let Some(unskinned) = visual.unskinned.as_mut()
             && let Some(frame) = slot
                 .display_frame
                 .and_then(|index| slot.display_frames.get(index))

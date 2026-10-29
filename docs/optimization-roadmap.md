@@ -107,6 +107,10 @@ for each vertex:
 - 继续 CPU 更新时：复用 `Vec` 缓冲、避免每帧分配；注意 `Mesh::insert_attribute` 与 render extraction 的时序，必要时使用自定义 render phase / `BufferVec` 管理动态顶点；
 - 对重建中的 mesh 维护正确的 `Aabb`，或谨慎使用 `NoFrustumCulling`。
 
+**已实现（2026-10-29）**：CPU 侧先做低风险优化——`WeightedMeshData` / `UnskinnedMeshData` 持有 per-slot 复用的 `positions` scratch buffer，`write_positions` 用 `Mesh::attribute_mut` 原地写顶点，稳态下每帧不再分配 `Vec`、不再替换整个 attribute。实测（`cargo bench -p dragonbones-bevy`，animated）：Rooster 10 armature 140.2 → 133.9 µs（−4.5%），Dragon 不变（其 slot 多为图集 quad，不走蒙皮路径）。
+
+**GPU skinning 暂缓（有据可依）**：profile 显示当前素材每个 armature 的 CPU 蒙皮成本约 5.3 µs（Rooster 15 slot / 63 骨骼），绝对值仍小于一帧预算；而 GPU skinning 需要自定义 vertex shader 复刻 `mesh2d` 的内部 bindings（版本敏感），并把骨骼矩阵做成 storage buffer。等蒙皮顶点数/角色数上来、或 §3.3 的 GPU 侧 profile 证明顶点重传是瓶颈时再做；届时优先在 `DragonBonesMaterial` 上加 vertex shader 分支，而不是另起材质。
+
 ### 1.5 生命周期与内存（✅ 已实现 2026-10-25）
 
 当前 `DragonBonesRuntime` 持有 `BaseFactory`，但 root 实体 despawn 时没有对应的 `dispose_armature`；`DragonBonesInstance.slots` 也没有清理逻辑。建议：
