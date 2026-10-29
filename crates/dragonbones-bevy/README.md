@@ -176,8 +176,36 @@ fn on_events(mut events: MessageReader<DragonBonesEvent>) {
 core only *creates* an event when the proxy reports a listener for that type, so
 `BevyArmatureProxy::has_db_event_listener` reports `true` for every type.
 
+## Animation commands
+
+Game code never touches the non-send runtime: it sends `DragonBonesCommand`
+messages to the armature root entity. Commands are applied before the frame's
+`advance_time`, so a `Play` starts animating in the same frame:
+
+```rust
+fn switch(mut commands: MessageWriter<DragonBonesCommand>, root: Entity) {
+    commands.write(DragonBonesCommand::play(root, "walk"));
+    commands.write(DragonBonesCommand::pause(root));
+    commands.write(DragonBonesCommand::set_speed(root, 0.5));
+    commands.write(DragonBonesCommand::play_config(
+        root,
+        DragonBonesPlayConfig::new("attack")
+            .with_play_times(1)
+            .with_fade_in_time(0.1)
+            .with_position(0.2),
+    ));
+}
+```
+
+Supported actions: `Play` / `PlayConfig` (fade-in, start position, play count,
+time scale) / `Stop` / `Pause` / `Resume` / `SetSpeed`. Pause and speed work by
+setting the time scale of every active `AnimationState`; the demo's keyboard
+animation switching uses this API.
+
 ## Not yet implemented
 
+- Animation state machine (layer / group / transition / priority) and seeking the
+  playhead of a running animation without restarting it.
 - Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
   currently fall back to Normal.
 - Rotated atlas regions (`rotated: true`); no current asset uses them.

@@ -14,6 +14,7 @@ use crate::asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoa
 use crate::blend::DragonBonesBlend;
 use crate::events::{BevyArmatureProxy, DragonBonesEvent, DragonBonesEventQueue};
 use crate::material::{self, DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
+use crate::player::{DragonBonesCommand, apply_dragonbones_commands};
 use crate::render;
 use crate::sync;
 
@@ -161,6 +162,7 @@ impl Plugin for DragonBonesPlugin {
             .init_resource::<DragonBonesSyncConfig>()
             .init_resource::<DragonBonesEventQueue>()
             .add_message::<DragonBonesEvent>()
+            .add_message::<DragonBonesCommand>()
             .insert_non_send(DragonBonesRuntime::default())
             .configure_sets(
                 Update,
@@ -185,13 +187,15 @@ impl Plugin for DragonBonesPlugin {
                     cleanup_armatures.in_set(DragonBonesSystems::Cleanup),
                     setup_armatures.in_set(DragonBonesSystems::Setup),
                     (
-                        advance_dragonbones.in_set(DragonBonesSystems::Advance),
-                        // Events buffered by this frame's advance must be readable
-                        // in the same frame.
-                        crate::events::forward_dragonbones_events
-                            .in_set(DragonBonesSystems::Advance)
-                            .after(advance_dragonbones),
-                    ),
+                        // Commands take effect before this frame's advance, and the
+                        // events buffered by the advance must be readable in the
+                        // same frame.
+                        apply_dragonbones_commands,
+                        advance_dragonbones,
+                        crate::events::forward_dragonbones_events,
+                    )
+                        .chain()
+                        .in_set(DragonBonesSystems::Advance),
                 ),
             )
             .add_systems(

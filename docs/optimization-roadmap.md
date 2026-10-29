@@ -255,13 +255,15 @@ cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armat
 
 当前 demo 是“播放一个动画 + UI 切换”，产品化还需要：
 
-- `DragonBonesPlayer` / `AnimationPlayer` 风格的组件 API：play/pause/stop/seek/speed/loop/fade；
+- `DragonBonesPlayer` / `AnimationPlayer` 风格的组件 API：play/pause/stop/seek/speed/loop/fade（✅ 部分实现 2026-10-29）：`DragonBonesCommand` message + `DragonBonesPlayConfig`，支持 play / play_config（fade_in、起始 position、time_scale、play_times）/ stop / pause / resume / set_speed，命令在 `DragonBonesSystems::Advance` 里先于本帧 advance 应用；运行中 seek（不重启动画改播放头）与 `AnimationPlayer` 式时间轴拖动仍待做；
 - 动画状态机：layer、group、fade in/out、transition、priority；
 - 动画事件到 Bevy `Message` 的桥接（✅ 已实现 2026-10-29）：`BevyArmatureProxy` 把 core 派发的每个 `EventObject` 记录到共享队列，`forward_dragonbones_events` 转成 `DragonBonesEvent` message（start / complete / loopComplete / fadeIn* / frameEvent / soundEvent，携带 armature 索引与完整事件字段）；参见下文 §4.1 说明；
 - 多 armature 同时播放、独立时间缩放；
 - 与 Bevy `Time`、pause、fixed update 的统一调度。
 
 **事件桥接实现细节**（2026-10-29）：core 只在 `proxy.has_db_event_listener(type)` 为真时才创建/缓冲事件，因此 `BevyArmatureProxy::has_db_event_listener` 恒返回 `true`（"Bevy 桥永久监听"）；普通监听器注册仍委托给 `NullArmatureProxy`。事件在同一帧的 `DragonBonesSystems::Advance` 内被转发，消费方用 `MessageReader<DragonBonesEvent>` 读取。集成测试见 `crates/dragonbones-bevy/tests/events.rs`（loopComplete、armature 归属、队列不重放）。
+
+**动画命令 API 实现细节**（2026-10-29）：游戏代码不接触 non-send 的 `DragonBonesRuntime`，而是向 armature root 实体发 `DragonBonesCommand` message；`apply_dragonbones_commands` 在 `Update` 的 `Advance` 集合里先于 `advance_dragonbones` 运行，因此 play/stop 当帧生效。pause/resume/set_speed 通过设置当前所有 `AnimationState::time_scale` 实现（Pause=0，Resume=1，速度可再调）；`play_config` 暴露 core `AnimationConfig` 的 fade_in_time / position / time_scale / play_times。demo 的键盘切动画已改为使用该 API（dogfooding）。测试见 `crates/dragonbones-bevy/tests/player.rs`。
 
 ### 4.2 渲染完整度
 

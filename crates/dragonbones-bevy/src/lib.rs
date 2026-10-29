@@ -23,6 +23,7 @@ mod blend;
 mod events;
 mod material;
 mod math;
+mod player;
 mod render;
 mod runtime;
 mod sync;
@@ -32,6 +33,7 @@ pub use blend::DragonBonesBlend;
 pub use events::DragonBonesEvent;
 pub use material::DragonBonesMaterial;
 pub use math::{matrix_to_affine3a, slot_z};
+pub use player::{DragonBonesAction, DragonBonesCommand, DragonBonesPlayConfig};
 pub use render::{DragonBonesSlotVisual, SlotRenderKind};
 pub use runtime::{
     DragonBonesArmature, DragonBonesInstance, DragonBonesPlugin, DragonBonesRuntime,
@@ -40,8 +42,9 @@ pub use runtime::{
 
 pub mod prelude {
     pub use crate::{
-        AtlasAsset, DragonBonesArmature, DragonBonesBlend, DragonBonesEvent, DragonBonesInstance,
-        DragonBonesMaterial, DragonBonesPlugin, DragonBonesSlot, DragonBonesSlotVisual,
-        DragonBonesSyncConfig, SkeletonAsset, SlotRenderKind,
+        AtlasAsset, DragonBonesAction, DragonBonesArmature, DragonBonesBlend, DragonBonesCommand,
+        DragonBonesEvent, DragonBonesInstance, DragonBonesMaterial, DragonBonesPlayConfig,
+        DragonBonesPlugin, DragonBonesSlot, DragonBonesSlotVisual, DragonBonesSyncConfig,
+        SkeletonAsset, SlotRenderKind,
     };
 }

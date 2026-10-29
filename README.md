@@ -121,12 +121,13 @@ TransformSystems::Propagate
 - 每帧 O(slots) 的 slot 索引（`SlotIdx` → 顺序映射），不再逐 slot 线性查找
 - armature 级脏标记（pose hash）：静态/暂停的角色跳过全量 slot 同步，可用 `DragonBonesSyncConfig` 关闭
 - 动画事件（start / complete / loopComplete / frameEvent / soundEvent …）转发为 Bevy `Message`：`DragonBonesEvent`
+- 运行时动画命令 API：`DragonBonesCommand` message 支持 play / play_config（fade、起始位置、速度、播放次数）/ stop / pause / resume / set_speed，命令在当帧 advance 之前生效
 - Bevy UI 动画列表 + 键盘切换
 - 9 个素材中的主要 rig 目视验证
 
 待做（后续打磨）：
 
-- `DragonBonesPlayer` 组件 API（play/pause/seek/speed）与动画状态机
+- 动画状态机（layer / group / transition / priority）与运行中 seek
 - Overlay / Darken / Lighten 等需要读渲染目标的 blend mode（当前回退 Normal）
 - `rotated: true` 图集子纹理
 - Surface mesh 的逐顶点变形
