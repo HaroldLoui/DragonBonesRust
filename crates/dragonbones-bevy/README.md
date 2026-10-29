@@ -69,6 +69,9 @@ is the armature's world placement; each slot is spawned as a child with a
 - Armature-level dirty check: a pose hash + root affine comparison skips the whole
   per-slot pass for idle armatures (see below and
   `cargo bench -p dragonbones-bevy`).
+- Schedule-integration tests (`tests/schedule.rs`, with the real `TransformPlugin`)
+  guard the direct `GlobalTransform` write against Bevy upgrades: the adapter must
+  run after `TransformSystems::Propagate`, and later systems must see its values.
 
 ## Lifecycle: despawn → dispose
 

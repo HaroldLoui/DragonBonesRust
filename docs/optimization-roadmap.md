@@ -116,7 +116,7 @@ for each vertex:
 
 **已实现**：`runtime.rs` 为每个 armature 保存 `ArmatureBinding`（root 实体、slot 实体、mesh handle、atlas image、factory 缓存 key）；`DragonBonesSystems::Cleanup` 通过 `RemovedComponents<DragonBonesInstance>` 在 setup/advance 之前回收 mesh/material 资产、递减 `data_map`/`atlas_map` 引用计数并调用 `dispose_armature`（真正的 `on_clear` 由同一帧稍后的 `advance_time` flush）。slot 实体是 root 的 Bevy children（`linked_spawn`），随 root 递归 despawn。
 
-### 1.6 `GlobalTransform` 直写的版本风险
+### 1.6 `GlobalTransform` 直写的版本风险（✅ 已有 schedule 集成测试 2026-10-29）
 
 B2 路径依赖：
 
@@ -130,6 +130,14 @@ B2 路径依赖：
 - Bevy 升级 checklist 中固定检查 `TransformSystems::Propagate`、`VisibilitySystems` 和 `GlobalTransform`；
 - 关注上游是否提供官方的 custom/affine local transform 扩展点，出现后可以迁移；
 - 文档明确：含 shear 的 GT 不能调用 `compute_transform/rotation/scale`。
+
+**已实现**：`crates/dragonbones-bevy/tests/schedule.rs` 安装了真实 `TransformPlugin`（headless，无渲染），用三个测试锁住关键契约：
+
+1. root 移动后，propagation 会重写子实体的 `GlobalTransform`，适配层必须在**之后**重新写入 slot 的世界矩阵——测试断言 slot 世界矩阵 == root affine × slot 局部矩阵（若 sync 早于 propagate 就会塌成 root affine 而失败）；
+2. 蒙皮 slot（Rooster_Ani 的 weighted mesh）的世界矩阵只等于 root affine + 绘制顺序 z；
+3. 排在 `DragonBonesSystems::SyncTransforms` 之后的其他 system 能看到适配层写入的值（`Probe` system 断言）。
+
+仍未覆盖：headless 环境下的 visibility/culling 与 render extraction（需要 RenderPlugin/相机），以及 order-ambiguity 审计（Bevy 内部系统本身存在允许的 ambiguity）。Bevy 升级时仍需按 checklist 人工核对这三条。
 
 ---
 

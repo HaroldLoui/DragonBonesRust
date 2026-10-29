@@ -29,6 +29,7 @@ mod sync;
 pub use asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoader};
 pub use blend::DragonBonesBlend;
 pub use material::DragonBonesMaterial;
+pub use math::{matrix_to_affine3a, slot_z};
 pub use render::{DragonBonesSlotVisual, SlotRenderKind};
 pub use runtime::{
     DragonBonesArmature, DragonBonesInstance, DragonBonesPlugin, DragonBonesRuntime,
