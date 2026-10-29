@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::MeshMaterial2d;
 
 use dragonbones_core::armature::{Armature, ArmatureIdx, BoneIdx, Slot};
-use dragonbones_core::core::enums::binary_offset;
+use dragonbones_core::core::enums::{BoneType, binary_offset};
 use dragonbones_core::model::{GeometryData, TextureData};
 
 use crate::blend::DragonBonesBlend;
@@ -46,12 +46,94 @@ pub(crate) struct WeightedMeshData {
 }
 
 /// CPU-side data for an unskinned mesh whose vertices may be moved by a
-/// DragonBones FFD (deform) timeline.
+/// DragonBones FFD (deform) timeline or, when the slot's parent bone is a
+/// Surface, warped per vertex by the Surface's local-to-armature matrix.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnskinnedMeshData {
     pub base_positions: Vec<[f32; 3]>,
+    /// Parent Surface bone when this mesh is a surface display; the slot then
+    /// uses [`SlotRenderKind::ArmatureSpace`] and vertices are warped per frame.
+    pub(crate) surface: Option<BoneIdx>,
     /// Reused scratch buffer for the deformed positions (see [`write_positions`]).
     positions: Vec<[f32; 3]>,
+}
+
+/// The slot's current FFD/deform offsets when the geometry inherits deform.
+pub(crate) fn slot_deform(slot: &Slot) -> &[f64] {
+    if slot
+        .geometry_data
+        .as_ref()
+        .is_some_and(|geometry| geometry.inherit_deform)
+    {
+        slot.display_frame
+            .and_then(|index| slot.display_frames.get(index))
+            .map_or(&[], |frame| frame.deform_vertices.as_slice())
+    } else {
+        &[]
+    }
+}
+
+/// The parent Surface bone when this slot renders a surface mesh.
+fn slot_parent_surface(armature: &Armature, slot: &Slot) -> Option<BoneIdx> {
+    armature
+        .bones
+        .get(slot.parent.index())
+        .filter(|bone| bone.bone_type != BoneType::Bone)
+        .map(|_| slot.parent)
+}
+
+/// Warps base (content-space) vertices through the Surface matrix.
+///
+/// Mirrors the reference adapters (`EgretSlot.ts:504-522`): for a surface mesh
+/// each vertex is transformed by `Surface._getGlobalTransformMatrix(x, y)` and
+/// the result lives in armature space, so the slot transform must be identity.
+fn surface_positions(
+    armature: &Armature,
+    surface: BoneIdx,
+    base_positions: &[[f32; 3]],
+    deform: &[f64],
+) -> Vec<[f32; 3]> {
+    let Some(bone) = armature.bones.get(surface.index()) else {
+        return base_positions.to_vec();
+    };
+    base_positions
+        .iter()
+        .enumerate()
+        .map(|(index, base)| {
+            let mut x = base[0] as f64;
+            let mut y = base[1] as f64;
+            if deform.len() >= index * 2 + 2 {
+                x += deform[index * 2];
+                y += deform[index * 2 + 1];
+            }
+            let matrix = bone.get_global_transform_matrix(x, y);
+            [
+                (matrix.a * x + matrix.c * y + matrix.tx) as f32,
+                (matrix.b * x + matrix.d * y + matrix.ty) as f32,
+                0.0,
+            ]
+        })
+        .collect()
+}
+
+/// Recomputes surface-mesh vertices from the current Surface lattice.
+pub(crate) fn update_surface_positions(
+    data: &mut UnskinnedMeshData,
+    armature: &Armature,
+    deform: &[f64],
+    mesh: &mut Mesh,
+) {
+    let Some(surface) = data.surface else {
+        return;
+    };
+    data.positions.clear();
+    data.positions.extend(surface_positions(
+        armature,
+        surface,
+        &data.base_positions,
+        deform,
+    ));
+    write_positions(mesh, &data.positions);
 }
 
 /// Writes `positions` into the mesh's position attribute, reusing the existing
@@ -199,7 +281,18 @@ fn build_slot_geometry(
             let mesh = build_weighted_mesh(&data, armature);
             return (mesh, SlotRenderKind::ArmatureSpace, Some(data), None);
         }
-        let (mesh, data) = build_unskinned_mesh(geometry, texture, atlas_size, armature_scale);
+        let (mut mesh, mut data) =
+            build_unskinned_mesh(geometry, texture, atlas_size, armature_scale);
+        if let Some(surface) = slot_parent_surface(armature, slot) {
+            // Surface mesh: per-vertex Surface warp in armature space.
+            data.surface = Some(surface);
+            let positions =
+                surface_positions(armature, surface, &data.base_positions, slot_deform(slot));
+            data.positions.clear();
+            data.positions.extend_from_slice(&positions);
+            write_positions(&mut mesh, &positions);
+            return (mesh, SlotRenderKind::ArmatureSpace, None, Some(data));
+        }
         return (mesh, SlotRenderKind::Local, None, Some(data));
     }
 
@@ -405,6 +498,7 @@ fn build_unskinned_mesh(
 
     let data = UnskinnedMeshData {
         base_positions: positions.clone(),
+        surface: None,
         positions: Vec::new(),
     };
     let mut mesh = Mesh::new(

@@ -271,7 +271,7 @@ cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armat
 
 - **blend mode**（🟡 部分完成，2026-10-29）：Normal / Add / Multiply / Screen 已由自定义 `Material2d` 支持——用固定管线混合状态实现，材质按 `(atlas image, blend)` 共享（一套 pipeline 对应一种 blend）；Overlay（以及 Darken / Lighten / HardLight / Difference / Subtract 等需要读目标像素的模式）仍回退为 Normal，等待 shader 级混合方案；
 - **rotated atlas region**（✅ 已实现 2026-10-29）：`rotated: true` 的图集区域按参考适配器语义渲染——内容尺寸取旋转后的 region（宽高互换，仅无 trim frame 时，对齐 TS `Slot.ts:422-424`），UV 用 `u' = 1 - v, v' = u` 旋转（对齐 `PhaserSlot.ts:174-182` / `CocosSlot.ts:221-229`）；贴图/蒙皮 mesh 的 UV 都走同一个 `atlas_uv` 映射。实现见 `render.rs`，测试见 `tests/rotated_atlas.rs`（合成 rotated 骨架 + 图集，端到端断言顶点与 UV）；
-- **Surface mesh** 的逐顶点变形；
+- **Surface mesh** 的逐顶点变形（✅ 已实现 2026-10-29）：父骨是 Surface 的 mesh display 现在按参考适配器语义渲染——slot 用 armature-space（identity local transform），每个顶点经 `Surface._getGlobalTransformMatrix(x, y)` 变换到 armature 空间，并叠加 FFD deform（对齐 `EgretSlot.ts:504-522`）；Surface 晶格本身由 core 计算，adapter 每帧按骨架 dirty 重算。实现见 `render.rs` 的 `surface_positions` / `update_surface_positions`，测试见 `tests/surface_mesh.rs`（合成 surface 骨架，静态 warp + 随父骨动画逐帧更新）；
 - **child armature** 与嵌套骨架；
 - replace texture / replace skin / 换装；
 - 更精确的 zOrder / zIndex 排序；

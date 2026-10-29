@@ -10,8 +10,8 @@ use crate::blend::DragonBonesBlend;
 use crate::material::{DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
 use crate::math::{matrix_to_affine3a, slot_color, slot_z, write_global_transform};
 use crate::render::{
-    DragonBonesSlotVisual, SlotRenderKind, apply_vertex_color, build_slot_visual,
-    update_unskinned_positions, update_weighted_positions,
+    DragonBonesSlotVisual, SlotRenderKind, apply_vertex_color, build_slot_visual, slot_deform,
+    update_surface_positions, update_unskinned_positions, update_weighted_positions,
 };
 use crate::runtime::{
     DragonBonesInstance, DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig,
@@ -233,19 +233,18 @@ pub(crate) fn sync_dragonbones(
             && let Some(mut mesh) = meshes.get_mut(&mesh_handle.0)
         {
             update_weighted_positions(weighted, armature, &mut mesh);
-        } else if visual.kind == SlotRenderKind::Local
+        } else if visual.kind == SlotRenderKind::ArmatureSpace
             && let Some(unskinned) = visual.unskinned.as_mut()
-            && let Some(frame) = slot
-                .display_frame
-                .and_then(|index| slot.display_frames.get(index))
-            && !frame.deform_vertices.is_empty()
-            && slot
-                .geometry_data
-                .as_ref()
-                .is_some_and(|geometry| geometry.inherit_deform)
+            && unskinned.surface.is_some()
             && let Some(mut mesh) = meshes.get_mut(&mesh_handle.0)
         {
-            update_unskinned_positions(unskinned, &frame.deform_vertices, &mut mesh);
+            update_surface_positions(unskinned, armature, slot_deform(slot), &mut mesh);
+        } else if visual.kind == SlotRenderKind::Local
+            && let Some(unskinned) = visual.unskinned.as_mut()
+            && !slot_deform(slot).is_empty()
+            && let Some(mut mesh) = meshes.get_mut(&mesh_handle.0)
+        {
+            update_unskinned_positions(unskinned, slot_deform(slot), &mut mesh);
         }
 
         if visual.color != color

@@ -58,6 +58,9 @@ is the armature's world placement; each slot is spawned as a child with a
   same mapping is used for mesh and skinned-mesh UVs.
 - Non-skinned mesh slots, including FFD/deform vertex updates.
 - Weighted/skinned mesh slots rebuilt in armature space every frame.
+- Surface mesh displays: when the slot's parent bone is a Surface, vertices are
+  warped per vertex by the Surface matrix in armature space (matching the
+  reference adapters), with FFD deform applied first.
 - Color multipliers + global alpha baked into per-vertex colors, with one shared
   `DragonBonesMaterial` per `(atlas page, blend mode)` (see below).
 - DragonBones blend modes: Normal / Add / Multiply / Screen through a custom
@@ -212,8 +215,6 @@ animation switching uses this API.
   playhead of a running animation without restarting it.
 - Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
   currently fall back to Normal.
-- Surface mesh vertex deformation for mesh displays (Surface image slots work
-  through the core's surface matrix).
 - Child-armature slot displays and replacement textures.
 - Batching / armature-level dirty flags for *animated* armatures (the sync pass
   still runs every frame while a pose changes).
