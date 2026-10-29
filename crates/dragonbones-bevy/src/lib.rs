@@ -36,15 +36,15 @@ pub use math::{matrix_to_affine3a, slot_z};
 pub use player::{DragonBonesAction, DragonBonesCommand, DragonBonesPlayConfig};
 pub use render::{DragonBonesSlotVisual, SlotRenderKind};
 pub use runtime::{
-    DragonBonesArmature, DragonBonesInstance, DragonBonesPlugin, DragonBonesRuntime,
-    DragonBonesSlot, DragonBonesSyncConfig, DragonBonesSystems,
+    DragonBonesArmature, DragonBonesChildArmature, DragonBonesInstance, DragonBonesPlugin,
+    DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig, DragonBonesSystems,
 };
 
 pub mod prelude {
     pub use crate::{
-        AtlasAsset, DragonBonesAction, DragonBonesArmature, DragonBonesBlend, DragonBonesCommand,
-        DragonBonesEvent, DragonBonesInstance, DragonBonesMaterial, DragonBonesPlayConfig,
-        DragonBonesPlugin, DragonBonesSlot, DragonBonesSlotVisual, DragonBonesSyncConfig,
-        SkeletonAsset, SlotRenderKind,
+        AtlasAsset, DragonBonesAction, DragonBonesArmature, DragonBonesBlend,
+        DragonBonesChildArmature, DragonBonesCommand, DragonBonesEvent, DragonBonesInstance,
+        DragonBonesMaterial, DragonBonesPlayConfig, DragonBonesPlugin, DragonBonesSlot,
+        DragonBonesSlotVisual, DragonBonesSyncConfig, SkeletonAsset, SlotRenderKind,
     };
 }

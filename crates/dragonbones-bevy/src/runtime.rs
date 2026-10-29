@@ -7,7 +7,7 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 use bevy::sprite_render::Material2dPlugin;
 use bevy::transform::TransformSystems;
-use dragonbones_core::armature::{ArmatureIdx, SlotIdx};
+use dragonbones_core::armature::{Armature, ArmatureIdx, DisplayHandle, SlotIdx};
 use dragonbones_core::factory::BaseFactory;
 
 use crate::asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoader};
@@ -38,7 +38,6 @@ pub struct DragonBonesRuntime {
 /// What the adapter owns on behalf of one armature instance.
 pub(crate) struct ArmatureBinding {
     root: Entity,
-    armature: ArmatureIdx,
     slots: Vec<Entity>,
     meshes: Vec<Handle<Mesh>>,
     /// Every `(atlas image, blend mode)` material key this armature acquired,
@@ -54,6 +53,25 @@ pub(crate) struct ArmatureBinding {
     pub(crate) last_root: Option<Affine3A>,
     /// Pose hash of the last sync, used for the armature-level dirty check.
     pub(crate) last_pose: Option<u64>,
+    /// Parent armature when this binding belongs to a child-armature display.
+    pub(crate) parent: Option<ArmatureIdx>,
+    /// Last effective visibility inherited from the parent slot, so a parent
+    /// slot hiding/showing forces the child armature's slots to resync.
+    pub(crate) last_parent_visible: Option<bool>,
+}
+
+/// Marks the root entity spawned for a child-armature display.
+///
+/// Child armatures are built by core when a slot's display is an armature; the
+/// adapter spawns a nested root entity under the owning slot entity and drives
+/// its slots through the same sync path. The child armature's world transform is
+/// the owning slot's world transform.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DragonBonesChildArmature {
+    /// Slot entity of the parent armature whose display is this armature.
+    pub parent_slot: Entity,
+    /// Core armature instance of the parent.
+    pub parent: ArmatureIdx,
 }
 
 /// Tuning knobs for the adapter's per-frame slot sync.
@@ -205,14 +223,15 @@ impl Plugin for DragonBonesPlugin {
     }
 }
 
-/// Releases the core armature, its meshes and its shared atlas material when a
-/// root entity (or at least its [`DragonBonesInstance`]) disappears.
+/// Releases the core armature tree, its meshes and its shared atlas materials
+/// when a root entity (or at least its [`DragonBonesInstance`]) disappears.
 ///
 /// Core `dispose_armature` only queues the disposal (`Armature.dispose()` in the
 /// reference implementation buffers the object); the real `on_clear` runs in the
 /// next `advance_time`, which happens later in this same `Update` because
 /// [`DragonBonesSystems::Cleanup`] is ordered before
-/// [`DragonBonesSystems::Advance`].
+/// [`DragonBonesSystems::Advance`]. Child armatures are disposed by core's own
+/// recursive BFS, so the adapter only releases their GPU assets and entities.
 #[allow(clippy::type_complexity)]
 fn cleanup_armatures(
     mut commands: Commands,
@@ -223,7 +242,7 @@ fn cleanup_armatures(
     mut material_cache: ResMut<DragonBonesMaterials>,
 ) {
     for entity in removed.read() {
-        let Some(armature_idx) = runtime
+        let Some(root_armature) = runtime
             .bindings
             .iter()
             .find(|(_, binding)| binding.root == entity)
@@ -231,28 +250,262 @@ fn cleanup_armatures(
         else {
             continue;
         };
-        let Some(binding) = runtime.bindings.remove(&armature_idx) else {
+        // Child-armature roots are adapter-internal (children of a parent slot):
+        // when they are torn down, the top-level cleanup below releases the whole
+        // subtree. Despawning a child root on its own is not supported.
+        if runtime
+            .bindings
+            .get(&root_armature)
+            .is_some_and(|binding| binding.parent.is_some())
+        {
             continue;
-        };
-
-        for mesh in &binding.meshes {
-            meshes.remove(mesh.id());
         }
-        for key in &binding.materials {
-            material_cache.release(*key, &mut materials);
-        }
-        runtime.release_data(&binding.dragon_bones_key, &binding.atlas_key);
 
-        // Slots are Bevy children of the root, so they are already gone when the
-        // root was despawned; this only matters if a user removed the instance
-        // component while keeping the root entity alive.
-        for slot in binding.slots {
-            if let Ok(mut slot_commands) = commands.get_entity(slot) {
-                slot_commands.despawn();
+        // Collect the armature and every child-armature binding below it.
+        let mut subtree = Vec::new();
+        let mut stack = vec![root_armature];
+        while let Some(current) = stack.pop() {
+            subtree.push(current);
+            for (armature_idx, binding) in &runtime.bindings {
+                if binding.parent == Some(current) {
+                    stack.push(*armature_idx);
+                }
             }
         }
 
-        runtime.factory.dispose_armature(binding.armature);
+        for armature_idx in subtree {
+            let Some(binding) = runtime.bindings.remove(&armature_idx) else {
+                continue;
+            };
+            for mesh in &binding.meshes {
+                meshes.remove(mesh.id());
+            }
+            for key in &binding.materials {
+                material_cache.release(*key, &mut materials);
+            }
+            runtime.release_data(&binding.dragon_bones_key, &binding.atlas_key);
+
+            if binding.parent.is_none() {
+                // Slots are Bevy children of the root, so they are already gone
+                // when the root was despawned; this only matters if a user
+                // removed the instance component while keeping the root alive.
+                for slot in binding.slots {
+                    if let Ok(mut slot_commands) = commands.get_entity(slot) {
+                        slot_commands.despawn();
+                    }
+                }
+            }
+            // Child roots are descendants of the parent root; despawn explicitly
+            // only for the component-removed-while-alive case (slot children are
+            // despawned recursively by Bevy).
+            if binding.parent.is_some()
+                && let Ok(mut child_commands) = commands.get_entity(binding.root)
+            {
+                child_commands.despawn();
+            }
+        }
+
+        runtime.factory.dispose_armature(root_armature);
+    }
+}
+
+/// Result of spawning one armature's slot entities.
+struct SpawnedSlots {
+    slot_entities: Vec<Entity>,
+    mesh_handles: Vec<Handle<Mesh>>,
+    material_keys: HashSet<MaterialKey>,
+}
+
+/// Spawns one entity per slot of `armature_idx` under `parent`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_armature_slots(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<DragonBonesMaterial>,
+    material_cache: &mut DragonBonesMaterials,
+    runtime: &DragonBonesRuntime,
+    parent: Entity,
+    armature_idx: ArmatureIdx,
+    atlas_texture: &Handle<Image>,
+    atlas_size: UVec2,
+) -> Option<SpawnedSlots> {
+    let armature = runtime
+        .factory
+        .armatures
+        .get(armature_idx.index())
+        .and_then(Option::as_ref)?;
+    let armature_scale = armature.armature_data().scale;
+    let mut slot_entities = Vec::with_capacity(armature.slots.len());
+    let mut mesh_handles = Vec::with_capacity(armature.slots.len());
+    // One shared material per (atlas page, blend mode) used by this armature;
+    // the key set is what cleanup releases.
+    let mut armature_materials: HashMap<DragonBonesBlend, Handle<DragonBonesMaterial>> =
+        HashMap::new();
+    for slot in &armature.slots {
+        let blend = DragonBonesBlend::from_core(slot.blend_mode);
+        let material = if let Some(material) = armature_materials.get(&blend) {
+            material.clone()
+        } else {
+            let material = material_cache.acquire(atlas_texture, blend, materials);
+            armature_materials.insert(blend, material.clone());
+            material
+        };
+        let (entity, mesh) = render::spawn_slot(
+            commands,
+            meshes,
+            parent,
+            armature_idx,
+            armature,
+            slot,
+            &material,
+            blend,
+            atlas_texture,
+            atlas_size,
+            armature_scale,
+        );
+        slot_entities.push(entity);
+        mesh_handles.push(mesh);
+    }
+    let material_keys = armature_materials
+        .into_keys()
+        .map(|blend| MaterialKey::new(atlas_texture, blend))
+        .collect();
+    Some(SpawnedSlots {
+        slot_entities,
+        mesh_handles,
+        material_keys,
+    })
+}
+
+/// Child armature instances referenced by `armature`'s slot displays, paired
+/// with the slot entity that displays them (deduplicated per child instance).
+fn child_armature_refs(
+    armature: &Armature,
+    slot_entities: &[Entity],
+) -> Vec<(ArmatureIdx, Entity)> {
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    for (order, slot) in armature.slots.iter().enumerate() {
+        let Some(&slot_entity) = slot_entities.get(order) else {
+            continue;
+        };
+        let mut candidates: Vec<ArmatureIdx> = slot
+            .display_frames
+            .iter()
+            .filter_map(|frame| match frame.display {
+                Some(DisplayHandle::Armature(idx)) => Some(idx),
+                _ => None,
+            })
+            .collect();
+        if let Some(child) = slot.child_armature {
+            candidates.push(child);
+        }
+        for child in candidates {
+            if seen.insert(child) {
+                refs.push((child, slot_entity));
+            }
+        }
+    }
+    refs
+}
+
+/// Spawns nested root entities (and their slots) for every child armature below
+/// `parent_idx`, recursively.
+#[allow(clippy::too_many_arguments)]
+fn spawn_child_armatures(
+    commands: &mut Commands,
+    runtime: &mut DragonBonesRuntime,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<DragonBonesMaterial>,
+    material_cache: &mut DragonBonesMaterials,
+    parent_idx: ArmatureIdx,
+    parent_slot_entities: &[Entity],
+    atlas_texture: &Handle<Image>,
+    atlas_size: UVec2,
+) {
+    let mut pending: Vec<(ArmatureIdx, Entity, ArmatureIdx)> = {
+        let Some(parent) = runtime
+            .factory
+            .armatures
+            .get(parent_idx.index())
+            .and_then(Option::as_ref)
+        else {
+            return;
+        };
+        child_armature_refs(parent, parent_slot_entities)
+            .into_iter()
+            .map(|(child, slot)| (parent_idx, slot, child))
+            .collect()
+    };
+    while let Some((parent_armature, parent_slot, child_idx)) = pending.pop() {
+        if runtime.bindings.contains_key(&child_idx) {
+            continue;
+        }
+        let child_root = commands
+            .spawn((
+                Transform::default(),
+                Visibility::Hidden,
+                ChildOf(parent_slot),
+                DragonBonesChildArmature {
+                    parent_slot,
+                    parent: parent_armature,
+                },
+            ))
+            .id();
+        let Some(spawned) = spawn_armature_slots(
+            commands,
+            meshes,
+            materials,
+            material_cache,
+            runtime,
+            child_root,
+            child_idx,
+            atlas_texture,
+            atlas_size,
+        ) else {
+            commands.entity(child_root).despawn();
+            continue;
+        };
+        let Some((db_key, atlas_key)) = runtime
+            .bindings
+            .get(&parent_armature)
+            .map(|binding| (binding.dragon_bones_key.clone(), binding.atlas_key.clone()))
+        else {
+            commands.entity(child_root).despawn();
+            continue;
+        };
+        let grandchildren = runtime
+            .factory
+            .armatures
+            .get(child_idx.index())
+            .and_then(Option::as_ref)
+            .map(|child| child_armature_refs(child, &spawned.slot_entities))
+            .unwrap_or_default();
+        runtime.retain_data(&db_key, &atlas_key);
+        runtime.bindings.insert(
+            child_idx,
+            ArmatureBinding {
+                root: child_root,
+                slots: spawned.slot_entities.clone(),
+                meshes: spawned.mesh_handles,
+                materials: spawned.material_keys,
+                dragon_bones_key: db_key,
+                atlas_key,
+                last_root: None,
+                last_pose: None,
+                last_parent_visible: None,
+                parent: Some(parent_armature),
+            },
+        );
+        commands.entity(child_root).insert(DragonBonesInstance {
+            armature: child_idx,
+            slots: spawned.slot_entities,
+        });
+        pending.extend(
+            grandchildren
+                .into_iter()
+                .map(|(child, slot)| (child_idx, slot, child)),
+        );
     }
 }
 
@@ -336,77 +589,53 @@ fn setup_armatures(
             atlas.data.width.max(1.0) as u32,
             atlas.data.height.max(1.0) as u32,
         );
-        let mut slot_entities = Vec::new();
-        let mut mesh_handles = Vec::new();
-        // One shared material per (atlas page, blend mode) used by this
-        // armature; the set is what cleanup releases.
-        let mut armature_materials: HashMap<DragonBonesBlend, Handle<DragonBonesMaterial>> =
-            HashMap::new();
-        {
-            let Some(armature) = runtime
-                .factory
-                .armatures
-                .get(armature_idx.index())
-                .and_then(Option::as_ref)
-            else {
-                // `advance_one` above cannot drop the armature.
-                warn!("DragonBones: armature {armature_idx:?} disappeared after build");
-                continue;
-            };
-            let armature_scale = armature.armature_data().scale;
-            slot_entities.reserve(armature.slots.len());
-            mesh_handles.reserve(armature.slots.len());
-            for slot in &armature.slots {
-                let blend = DragonBonesBlend::from_core(slot.blend_mode);
-                let material = if let Some(material) = armature_materials.get(&blend) {
-                    material.clone()
-                } else {
-                    let material = material_cache.acquire(&atlas.texture, blend, &mut materials);
-                    armature_materials.insert(blend, material.clone());
-                    material
-                };
-                let (entity, mesh) = render::spawn_slot(
-                    &mut commands,
-                    &mut meshes,
-                    root,
-                    armature_idx,
-                    armature,
-                    slot,
-                    &material,
-                    blend,
-                    &atlas.texture,
-                    atlas_size,
-                    armature_scale,
-                );
-                slot_entities.push(entity);
-                mesh_handles.push(mesh);
-            }
-        }
-
-        let acquired_materials = armature_materials
-            .into_keys()
-            .map(|blend| MaterialKey::new(&atlas.texture, blend))
-            .collect();
+        let Some(spawned) = spawn_armature_slots(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut material_cache,
+            &runtime,
+            root,
+            armature_idx,
+            &atlas.texture,
+            atlas_size,
+        ) else {
+            // `advance_one` above cannot drop the armature.
+            warn!("DragonBones: armature {armature_idx:?} disappeared after build");
+            continue;
+        };
 
         runtime.retain_data(&db_key, &atlas_key);
         runtime.bindings.insert(
             armature_idx,
             ArmatureBinding {
                 root,
-                armature: armature_idx,
-                slots: slot_entities.clone(),
-                meshes: mesh_handles,
-                materials: acquired_materials,
+                slots: spawned.slot_entities.clone(),
+                meshes: spawned.mesh_handles,
+                materials: spawned.material_keys,
                 dragon_bones_key: db_key,
                 atlas_key,
                 last_root: None,
                 last_pose: None,
+                last_parent_visible: None,
+                parent: None,
             },
         );
         commands.entity(root).insert(DragonBonesInstance {
             armature: armature_idx,
-            slots: slot_entities,
+            slots: spawned.slot_entities.clone(),
         });
+        spawn_child_armatures(
+            &mut commands,
+            &mut runtime,
+            &mut meshes,
+            &mut materials,
+            &mut material_cache,
+            armature_idx,
+            &spawned.slot_entities,
+            &atlas.texture,
+            atlas_size,
+        );
     }
 }
 

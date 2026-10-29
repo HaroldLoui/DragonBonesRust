@@ -14,7 +14,8 @@ use crate::render::{
     update_surface_positions, update_unskinned_positions, update_weighted_positions,
 };
 use crate::runtime::{
-    DragonBonesInstance, DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig,
+    DragonBonesChildArmature, DragonBonesInstance, DragonBonesRuntime, DragonBonesSlot,
+    DragonBonesSyncConfig,
 };
 
 /// B2 transform/color/visibility sync.
@@ -35,6 +36,11 @@ use crate::runtime::{
 ///    map built once per armature per frame instead of a linear `find` per slot
 ///    (the previous MVP was O(slots²)).
 ///
+/// Child-armature displays are resolved first: a child armature's world matrix
+/// is the owning slot's world matrix (computed from core slot data, independent
+/// of the order in which Bevy exposes the entities), and its visibility is
+/// `parent armature visible && parent slot visible`.
+///
 /// The pose hash deliberately covers every input the slot pass reads (slot
 /// order, slot matrices, display frame, visibility, colors, blend mode, bone
 /// matrices for skinned meshes, interpolated deform vertices) instead of
@@ -44,8 +50,18 @@ use crate::runtime::{
 pub(crate) fn sync_dragonbones(
     config: Res<DragonBonesSyncConfig>,
     mut runtime: NonSendMut<DragonBonesRuntime>,
-    roots: Query<(&DragonBonesInstance, &GlobalTransform), Without<DragonBonesSlot>>,
+    mut roots: Query<
+        (
+            Entity,
+            &DragonBonesInstance,
+            &mut GlobalTransform,
+            &mut Visibility,
+            Option<&DragonBonesChildArmature>,
+        ),
+        Without<DragonBonesSlot>,
+    >,
     mut slots: Query<(
+        Entity,
         &DragonBonesSlot,
         &mut GlobalTransform,
         &mut Visibility,
@@ -57,56 +73,15 @@ pub(crate) fn sync_dragonbones(
     mut materials: ResMut<Assets<DragonBonesMaterial>>,
     mut material_cache: ResMut<DragonBonesMaterials>,
 ) {
-    let mut root_affines: HashMap<ArmatureIdx, Affine3A> = HashMap::new();
+    // 1) Slot order maps for every armature that has a root entity (needed for
+    //    child-armature resolution and for the slot pass), plus the top-level
+    //    affines and the parent links of child armatures.
     let mut slot_orders: HashMap<ArmatureIdx, HashMap<SlotIdx, usize>> = HashMap::new();
-    let mut dirty: HashSet<ArmatureIdx> = HashSet::new();
-    // Snapshot of the material keys each dirty armature already holds, so a
-    // runtime blend-mode change only takes a new cache reference when the
-    // armature did not acquire that `(image, blend)` pair yet.
-    let mut held_materials: HashMap<ArmatureIdx, HashSet<MaterialKey>> = HashMap::new();
-    // Newly acquired keys, committed to the armature binding after the slot pass.
-    let mut new_materials: HashMap<ArmatureIdx, HashSet<MaterialKey>> = HashMap::new();
-
-    for (instance, global) in &roots {
+    let mut top_affines: HashMap<ArmatureIdx, Affine3A> = HashMap::new();
+    // (child armature, child root entity, parent armature, parent slot entity)
+    let mut child_links: Vec<(ArmatureIdx, Entity, ArmatureIdx, Entity)> = Vec::new();
+    for (entity, instance, global, _visibility, child) in &mut roots {
         let armature_idx = instance.armature;
-        let root_affine = global.affine();
-        root_affines.insert(armature_idx, root_affine);
-
-        let clean = if config.skip_clean_armatures {
-            let pose = {
-                let Some(armature) = runtime
-                    .factory
-                    .armatures
-                    .get(armature_idx.index())
-                    .and_then(Option::as_ref)
-                else {
-                    continue;
-                };
-                pose_hash(armature)
-            };
-            let Some(binding) = runtime.bindings.get_mut(&armature_idx) else {
-                continue;
-            };
-            if binding.last_root == Some(root_affine) && binding.last_pose == Some(pose) {
-                true
-            } else {
-                binding.last_root = Some(root_affine);
-                binding.last_pose = Some(pose);
-                false
-            }
-        } else {
-            // Invalidate the cached pose so flipping the switch back on cannot
-            // skip a frame that the disabled path left out of date.
-            if let Some(binding) = runtime.bindings.get_mut(&armature_idx) {
-                binding.last_root = None;
-                binding.last_pose = None;
-            }
-            false
-        };
-        if clean {
-            continue;
-        }
-
         let Some(armature) = runtime
             .factory
             .armatures
@@ -115,8 +90,7 @@ pub(crate) fn sync_dragonbones(
         else {
             continue;
         };
-        // Core re-sorts `armature.slots` while playing zOrder/zIndex timelines,
-        // so the order map is rebuilt for every dirty armature every frame.
+        // Core re-sorts `armature.slots` while playing zOrder/zIndex timelines.
         slot_orders.insert(
             armature_idx,
             armature
@@ -126,13 +100,150 @@ pub(crate) fn sync_dragonbones(
                 .map(|(order, slot)| (slot.idx, order))
                 .collect(),
         );
-        if let Some(binding) = runtime.bindings.get(&armature_idx) {
-            held_materials.insert(armature_idx, binding.materials.clone());
+        match child {
+            Some(child) => {
+                child_links.push((armature_idx, entity, child.parent, child.parent_slot))
+            }
+            None => {
+                top_affines.insert(armature_idx, global.affine());
+            }
         }
+    }
+
+    // 2) Slot identity of the parent slots used by child armatures.
+    let mut parent_slot_info: HashMap<Entity, (ArmatureIdx, SlotIdx)> = HashMap::new();
+    if !child_links.is_empty() {
+        let wanted: HashSet<Entity> = child_links.iter().map(|(_, _, _, slot)| *slot).collect();
+        for (entity, slot_ref, _global, _visibility, _mesh, _material, _visual) in &mut slots {
+            if wanted.contains(&entity) {
+                parent_slot_info.insert(entity, (slot_ref.armature, slot_ref.slot));
+            }
+        }
+    }
+
+    // 3) Resolve child-armature world matrices and visibility recursively (the
+    //    nesting depth is bounded by the skeleton data).
+    let mut resolved: HashMap<ArmatureIdx, (Affine3A, bool)> = top_affines
+        .iter()
+        .map(|(armature, affine)| (*armature, (*affine, true)))
+        .collect();
+    let mut remaining = child_links;
+    while !remaining.is_empty() {
+        let mut progressed = false;
+        let mut next = Vec::with_capacity(remaining.len());
+        for (child_idx, child_root, parent_idx, parent_slot) in remaining {
+            let Some(&(parent_affine, parent_visible)) = resolved.get(&parent_idx) else {
+                next.push((child_idx, child_root, parent_idx, parent_slot));
+                continue;
+            };
+            let Some(&(slot_armature, slot_idx)) = parent_slot_info.get(&parent_slot) else {
+                continue;
+            };
+            let Some(order) = slot_orders
+                .get(&slot_armature)
+                .and_then(|orders| orders.get(&slot_idx))
+                .copied()
+            else {
+                continue;
+            };
+            let Some(armature) = runtime
+                .factory
+                .armatures
+                .get(slot_armature.index())
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let Some(slot) = armature.slots.get(order) else {
+                continue;
+            };
+            let mut slot_world =
+                parent_affine * matrix_to_affine3a(&slot.base.global_transform_matrix, 0.0);
+            slot_world.translation.z = parent_affine.translation.z + slot_z(order);
+            let parent_bone_visible = armature
+                .bones
+                .get(slot.parent.index())
+                .is_none_or(|bone| bone.visible);
+            let slot_visible = slot.visible && parent_bone_visible && slot.display.is_some();
+            resolved.insert(child_idx, (slot_world, parent_visible && slot_visible));
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+        remaining = next;
+    }
+
+    // 4) Write child-armature root transforms/visibility and decide dirty
+    //    armatures (pose hash + resolved affine + inherited visibility).
+    let mut root_affines: HashMap<ArmatureIdx, Affine3A> = HashMap::new();
+    let mut armature_visible: HashMap<ArmatureIdx, bool> = HashMap::new();
+    let mut dirty: HashSet<ArmatureIdx> = HashSet::new();
+    let mut held_materials: HashMap<ArmatureIdx, HashSet<MaterialKey>> = HashMap::new();
+    let mut new_materials: HashMap<ArmatureIdx, HashSet<MaterialKey>> = HashMap::new();
+    for (_entity, instance, mut global, mut visibility, child) in &mut roots {
+        let armature_idx = instance.armature;
+        let Some(&(affine, visible)) = resolved.get(&armature_idx) else {
+            continue;
+        };
+        root_affines.insert(armature_idx, affine);
+        armature_visible.insert(armature_idx, visible);
+        if child.is_some() {
+            write_global_transform(&mut global, affine);
+            let next_visibility = if visible {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next_visibility {
+                *visibility = next_visibility;
+            }
+        }
+
+        let pose = {
+            let Some(armature) = runtime
+                .factory
+                .armatures
+                .get(armature_idx.index())
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            pose_hash(armature)
+        };
+        let Some(binding) = runtime.bindings.get_mut(&armature_idx) else {
+            continue;
+        };
+        let clean = if config.skip_clean_armatures {
+            if binding.last_root == Some(affine)
+                && binding.last_pose == Some(pose)
+                && binding.last_parent_visible == Some(visible)
+            {
+                true
+            } else {
+                binding.last_root = Some(affine);
+                binding.last_pose = Some(pose);
+                binding.last_parent_visible = Some(visible);
+                false
+            }
+        } else {
+            // Invalidate the cached pose so flipping the switch back on cannot
+            // skip a frame that the disabled path left out of date.
+            binding.last_root = None;
+            binding.last_pose = None;
+            binding.last_parent_visible = None;
+            false
+        };
+        if clean {
+            continue;
+        }
+        held_materials.insert(armature_idx, binding.materials.clone());
         dirty.insert(armature_idx);
     }
 
-    for (slot_ref, mut global, mut visibility, mesh_handle, mut material, mut visual) in &mut slots
+    // 5) Per-slot pass for dirty armatures.
+    for (_entity, slot_ref, mut global, mut visibility, mesh_handle, mut material, mut visual) in
+        &mut slots
     {
         if !dirty.contains(&slot_ref.armature) {
             continue;
@@ -174,7 +285,11 @@ pub(crate) fn sync_dragonbones(
             .bones
             .get(slot.parent.index())
             .is_none_or(|bone| bone.visible);
-        let visible = slot.visible && parent_visible && slot.display.is_some();
+        let armature_visible = armature_visible
+            .get(&slot_ref.armature)
+            .copied()
+            .unwrap_or(true);
+        let visible = armature_visible && slot.visible && parent_visible && slot.display.is_some();
         let next_visibility = if visible {
             Visibility::Visible
         } else {

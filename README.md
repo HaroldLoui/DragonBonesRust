@@ -124,6 +124,7 @@ TransformSystems::Propagate
 - 运行时动画命令 API：`DragonBonesCommand` message 支持 play / play_config（fade、起始位置、速度、播放次数）/ stop / pause / resume / set_speed，命令在当帧 advance 之前生效
 - `rotated: true` 图集区域（内容宽高互换 + UV 旋转，对齐 Phaser/Cocos 参考适配器）
 - Surface mesh 逐顶点变形（父骨为 Surface 的 mesh display，按 Surface 分片仿射矩阵 warp）
+- child armature 子骨架 display（嵌套 root 实体、随父 slot 世界矩阵、可见性沿父链、despawn 递归回收）
 - Bevy UI 动画列表 + 键盘切换
 - 9 个素材中的主要 rig 目视验证
 
@@ -131,7 +132,7 @@ TransformSystems::Propagate
 
 - 动画状态机（layer / group / transition / priority）与运行中 seek
 - Overlay / Darken / Lighten 等需要读渲染目标的 blend mode（当前回退 Normal）
-- child armature、替换贴图
+- 替换贴图 / replace skin 换装
 - 合批 / GPU skinning 等性能优化
 
 ## 测试与参考数据

@@ -61,6 +61,12 @@ is the armature's world placement; each slot is spawned as a child with a
 - Surface mesh displays: when the slot's parent bone is a Surface, vertices are
   warped per vertex by the Surface matrix in armature space (matching the
   reference adapters), with FFD deform applied first.
+- Child-armature displays: each child armature gets a nested root entity under the
+  slot entity that displays it; its world matrix is that slot's world matrix,
+  visibility inherits through the parent chain, and it is released recursively
+  when the parent root is despawned (`DragonBonesChildArmature` marks the nested
+  root). Limitation: core builds child armatures with a null proxy, so their
+  events are not forwarded as Bevy messages yet.
 - Color multipliers + global alpha baked into per-vertex colors, with one shared
   `DragonBonesMaterial` per `(atlas page, blend mode)` (see below).
 - DragonBones blend modes: Normal / Add / Multiply / Screen through a custom
@@ -215,7 +221,7 @@ animation switching uses this API.
   playhead of a running animation without restarting it.
 - Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
   currently fall back to Normal.
-- Child-armature slot displays and replacement textures.
+- Replacement textures / replace-skin (换装).
 - Batching / armature-level dirty flags for *animated* armatures (the sync pass
   still runs every frame while a pose changes).
 

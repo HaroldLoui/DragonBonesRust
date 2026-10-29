@@ -701,7 +701,7 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 >
 > **2026-10-25 收口**：despawn → dispose 生命周期（core arena、skeleton/atlas 注册、mesh/material 资产回收）；按 atlas page 共享 `ColorMaterial` + per-slot 顶点色；sync 系统改为 O(slots) 的 `SlotIdx → order` 映射。对应实现见 `crates/dragonbones-bevy/src/{runtime,sync,render,material}.rs`，测试见 `crates/dragonbones-bevy/tests/lifecycle.rs`。
 >
-> **2026-10-29 收口**：armature 级脏标记（pose hash + root affine，`DragonBonesSyncConfig` 可关）；criterion benchmark 基线（core 25 个 + 适配层 11 个，含 rig 对比 profile）；自定义 `Material2d` 支持 Normal/Add/Multiply/Screen，按 `(atlas image, blend)` 共享材质（Overlay 等需读目标像素的模式仍回退 Normal）；直写 `GlobalTransform` 的 schedule 集成测试；动画事件转发为 Bevy `Message`（`DragonBonesEvent`）；CPU 蒙皮复用 scratch buffer + 原地写顶点；运行时动画命令 API（`DragonBonesCommand`：play/play_config/stop/pause/resume/set_speed）；`rotated: true` 图集区域（内容宽高互换 + UV 旋转）；Surface mesh 逐顶点变形（armature-space + 每顶点 Surface 矩阵）。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend,schedule,events,player,rotated_atlas,surface_mesh}.rs`。
+> **2026-10-29 收口**：armature 级脏标记（pose hash + root affine，`DragonBonesSyncConfig` 可关）；criterion benchmark 基线（core 25 个 + 适配层 11 个，含 rig 对比 profile）；自定义 `Material2d` 支持 Normal/Add/Multiply/Screen，按 `(atlas image, blend)` 共享材质（Overlay 等需读目标像素的模式仍回退 Normal）；直写 `GlobalTransform` 的 schedule 集成测试；动画事件转发为 Bevy `Message`（`DragonBonesEvent`）；CPU 蒙皮复用 scratch buffer + 原地写顶点；运行时动画命令 API（`DragonBonesCommand`：play/play_config/stop/pause/resume/set_speed）；`rotated: true` 图集区域（内容宽高互换 + UV 旋转）；Surface mesh 逐顶点变形（armature-space + 每顶点 Surface 矩阵）；child armature display（嵌套 root、父 slot 世界矩阵、可见性沿父链、子树递归回收）。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend,schedule,events,player,rotated_atlas,surface_mesh,child_armature}.rs`。
 
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
