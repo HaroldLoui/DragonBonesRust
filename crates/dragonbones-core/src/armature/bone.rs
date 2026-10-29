@@ -139,9 +139,9 @@ impl Default for Bone {
             // Rust 侧：bone_type 是 `_boneData.type` 的缓存 → 无数据时与 `_boneData = null`
             // 对应取默认 Bone（`BoneKind::Bone::type_()` 同值）。
             bone_type: BoneType::Bone,
-            transform_dirty: false,        // :98
-            children_transform_dirty: false, // :99
-            offset_mode: OffsetMode::Additive, // :95
+            transform_dirty: false,               // :98
+            children_transform_dirty: false,      // :99
+            offset_mode: OffsetMode::Additive,    // :95
             animation_pose: Transform::default(), // :96 `.identity()`
             // ★ :100 `_localDirty = true`（与 :98/:99 相反的反直觉默认：
             //   update 423 只有 localDirty 才真算矩阵，而它在每次 update 尾部 :440 重新武装）
@@ -238,10 +238,7 @@ impl Bone {
                 // 一并收进 SurfaceState::init（surface.rs）。
                 let host = self.resolve_surface_host(existing_bones); // TS:469-475
                 self.runtime = BoneRuntime::Surface(SurfaceState::init(
-                    *segment_x,
-                    *segment_y,
-                    geometry,
-                    host,
+                    *segment_x, *segment_y, geometry, host,
                 ));
             }
         }
@@ -641,8 +638,7 @@ impl Bone {
                     self.global.scale_x *= host_scale_x;
                     self.global.scale_y *= host_scale_y;
                     // :187 ★ 就地把 global.x/y 变成世界坐标（delta=false，含 tx/ty）
-                    let (x, y) =
-                        parent_matrix.transform_point(self.global.x, self.global.y, false);
+                    let (x, y) = parent_matrix.transform_point(self.global.x, self.global.y, false);
                     self.global.x = x;
                     self.global.y = y;
                     // :188 ★ 用已被改写的 global 再生成矩阵
@@ -709,10 +705,8 @@ impl Bone {
                     // :240-244 ★ 手工乘父矩阵（不写回矩阵的 tx/ty）
                     let x = self.global.x;
                     let y = self.global.y;
-                    self.global.x =
-                        parent_matrix.a * x + parent_matrix.c * y + parent_matrix.tx;
-                    self.global.y =
-                        parent_matrix.b * x + parent_matrix.d * y + parent_matrix.ty;
+                    self.global.x = parent_matrix.a * x + parent_matrix.c * y + parent_matrix.tx;
+                    self.global.y = parent_matrix.b * x + parent_matrix.d * y + parent_matrix.ty;
                 } else {
                     // :246-253 不继承平移 → 只做 flip 反号
                     if flip_x {
@@ -737,9 +731,7 @@ impl Bone {
                     }
 
                     // :266 判定 2：★ 父矩阵行列式 det<0（反射），不是 global 的
-                    if parent_matrix.a * parent_matrix.d - parent_matrix.b * parent_matrix.c
-                        < 0.0
-                    {
+                    if parent_matrix.a * parent_matrix.d - parent_matrix.b * parent_matrix.c < 0.0 {
                         rotation -= self.global.rotation * 2.0; // :267 用当前（未被 :278 覆写）的 rotation
 
                         if flip_x != flip_y || self.inherit_reflection {

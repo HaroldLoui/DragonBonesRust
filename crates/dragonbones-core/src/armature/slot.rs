@@ -422,7 +422,7 @@ impl Default for Slot {
             display_index: -1,                          // :308
             animation_display_index: -1,                // :309
             z_order: 0,                                 // :310
-            z_index: 0.0,                                 // :311
+            z_index: 0.0,                               // :311
             cached_frame_index: -1,                     // :312
             pivot_x: 0.0,                               // :313
             pivot_y: 0.0,                               // :314
@@ -1522,7 +1522,9 @@ impl Slot {
         if count > 0 {
             if count == 1 || count == 2 {
                 if let Some(point) = point_opt(&mut point_a) {
-                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    let (x, y) = self
+                        .global_transform_matrix
+                        .transform_point(point.x, point.y, false);
                     point.x = x;
                     point.y = y;
                     if let Some(other) = point_opt(&mut point_b) {
@@ -1530,31 +1532,41 @@ impl Slot {
                         other.y = point.y;
                     }
                 } else if let Some(point) = point_opt(&mut point_b) {
-                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    let (x, y) = self
+                        .global_transform_matrix
+                        .transform_point(point.x, point.y, false);
                     point.x = x;
                     point.y = y;
                 }
             } else {
                 if let Some(point) = point_opt(&mut point_a) {
-                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    let (x, y) = self
+                        .global_transform_matrix
+                        .transform_point(point.x, point.y, false);
                     point.x = x;
                     point.y = y;
                 }
                 if let Some(point) = point_opt(&mut point_b) {
-                    let (x, y) = self.global_transform_matrix.transform_point(point.x, point.y, false);
+                    let (x, y) = self
+                        .global_transform_matrix
+                        .transform_point(point.x, point.y, false);
                     point.x = x;
                     point.y = y;
                 }
             }
 
             if let Some(normal) = point_opt(&mut normals) {
-                let (x, y) = self
-                    .global_transform_matrix
-                    .transform_point(normal.x.cos(), normal.x.sin(), true);
+                let (x, y) = self.global_transform_matrix.transform_point(
+                    normal.x.cos(),
+                    normal.x.sin(),
+                    true,
+                );
                 normal.x = y.atan2(x);
-                let (x, y) = self
-                    .global_transform_matrix
-                    .transform_point(normal.y.cos(), normal.y.sin(), true);
+                let (x, y) = self.global_transform_matrix.transform_point(
+                    normal.y.cos(),
+                    normal.y.sin(),
+                    true,
+                );
                 normal.y = y.atan2(x);
             }
         }

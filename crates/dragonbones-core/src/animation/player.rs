@@ -193,9 +193,7 @@ impl Animation {
         if is_override {
             self.animations_override = Some(animations);
         } else {
-            let map = self
-                .animations_override
-                .get_or_insert_with(IndexMap::new);
+            let map = self.animations_override.get_or_insert_with(IndexMap::new);
             for (name, animation) in animations {
                 map.insert(name, animation);
             }
@@ -227,7 +225,6 @@ impl Animation {
         self.states.get_mut(id)
     }
 
-    #[must_use]
     pub fn states(&self) -> impl DoubleEndedIterator<Item = (StateId, &AnimationState)> {
         self.play_order
             .iter()

@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::ir_snapshot::{asset_root, tex_stem};
+use dragonbones_core::animation::world_clock::{AnimatableHandle, ClockError, ClockId};
 use dragonbones_core::armature::{
     Armature, ArmatureIdx, ArmatureProxy, DbEventListener, DisplayHandle, ListenerId,
     NullArmatureProxy,
 };
-use dragonbones_core::animation::world_clock::{AnimatableHandle, ClockError, ClockId};
 use dragonbones_core::event::{EventDispatcher, EventObject};
 use dragonbones_core::factory::BaseFactory;
 use dragonbones_core::geom::transform::Transform;
@@ -73,10 +73,7 @@ impl EventDispatcher for CountingProxy {
     }
 }
 
-fn add_empty_armature(
-    factory: &mut BaseFactory,
-    advances: Arc<AtomicUsize>,
-) -> ArmatureIdx {
+fn add_empty_armature(factory: &mut BaseFactory, advances: Arc<AtomicUsize>) -> ArmatureIdx {
     let idx = ArmatureIdx(factory.armatures.len() as u32);
     let name = format!("clock_test_{}", idx.0);
     let mut data = DragonBonesData::default();
@@ -132,11 +129,10 @@ fn nested_clock_scales_member_time_and_contains_follows_parent_chain() {
     let root = factory.root_clock();
     let child = factory.create_clock(5.0);
 
-    factory.attach_clock(root, child).expect("attach child clock");
     factory
-        .clock_mut(child)
-        .expect("child clock")
-        .time_scale = 2.0;
+        .attach_clock(root, child)
+        .expect("attach child clock");
+    factory.clock_mut(child).expect("child clock").time_scale = 2.0;
     factory
         .attach_armature(child, armature)
         .expect("attach Armature to child clock");
@@ -221,7 +217,9 @@ fn clear_clock_removes_all_direct_armature_back_references() {
     let root = factory.root_clock();
 
     factory.attach_armature(root, first).expect("attach first");
-    factory.attach_armature(root, second).expect("attach second");
+    factory
+        .attach_armature(root, second)
+        .expect("attach second");
     factory.clear_clock(root).expect("clear root members");
 
     assert_eq!(factory.armature(first).clock(), None);
@@ -258,13 +256,10 @@ fn global_advance_zero_dispatches_events_without_advancing_members() {
 
     let log = Arc::new(Mutex::new(Vec::<EventObject>::new()));
     let sink = Arc::clone(&log);
-    factory
-        .armature_mut(armature)
-        .proxy
-        .add_db_event_listener(
-            EventObject::FRAME_EVENT,
-            Box::new(move |event| sink.lock().unwrap().push(event.clone())),
-        );
+    factory.armature_mut(armature).proxy.add_db_event_listener(
+        EventObject::FRAME_EVENT,
+        Box::new(move |event| sink.lock().unwrap().push(event.clone())),
+    );
 
     for name in ["a", "b"] {
         factory.buffer_event(EventObject {
@@ -307,7 +302,6 @@ fn attach_rejects_clock_cycles_without_changing_existing_relation() {
     assert!(factory.clock_contains(root, AnimatableHandle::Clock(child)));
     assert!(!factory.clock_contains(child, AnimatableHandle::Clock(root)));
 }
-
 
 const DRAGON_KEY: &str = "Dragon_ske";
 
@@ -372,10 +366,7 @@ fn member_receives_scaled_signed_dt_for_fractional_and_negative_time_scale() {
             .is_some(),
         "Dragon.walk 应存在"
     );
-    factory
-        .clock_mut(root)
-        .expect("root clock")
-        .time_scale = 0.5;
+    factory.clock_mut(root).expect("root clock").time_scale = 0.5;
 
     let mut now = 100.0;
     // build 收尾 `advance_one(0.0)` 也会经过 proxy.db_update，先记录基线。
@@ -409,10 +400,7 @@ fn member_receives_scaled_signed_dt_for_fractional_and_negative_time_scale() {
 
     // 负缩放：WorldClock 仍按 `time -= passedTime` 增加累计时间，成员收到 -0.05；
     // Animation 层取正（F4.7），故 state 时间继续正向推进 0.05。
-    factory
-        .clock_mut(root)
-        .expect("root clock")
-        .time_scale = -0.5;
+    factory.clock_mut(root).expect("root clock").time_scale = -0.5;
     for frame in 0..2 {
         factory.advance_time_with(0.1, now);
         now += 0.1;
@@ -452,13 +440,10 @@ fn events_dispatch_once_in_order_without_replaying_previous_frames() {
 
     let log = Arc::new(Mutex::new(Vec::<EventObject>::new()));
     let sink = Arc::clone(&log);
-    factory
-        .armature_mut(armature)
-        .proxy
-        .add_db_event_listener(
-            EventObject::FRAME_EVENT,
-            Box::new(move |event| sink.lock().unwrap().push(event.clone())),
-        );
+    factory.armature_mut(armature).proxy.add_db_event_listener(
+        EventObject::FRAME_EVENT,
+        Box::new(move |event| sink.lock().unwrap().push(event.clone())),
+    );
 
     for name in ["first", "second"] {
         factory.buffer_event(EventObject {
@@ -482,11 +467,7 @@ fn events_dispatch_once_in_order_without_replaying_previous_frames() {
 
     // 第二帧无事件：上一帧已派发的事件不能被重放。
     factory.advance_time_with(0.1, 100.1);
-    assert_eq!(
-        log.lock().unwrap().len(),
-        2,
-        "无事件帧不得重放上一帧事件"
-    );
+    assert_eq!(log.lock().unwrap().len(), 2, "无事件帧不得重放上一帧事件");
 }
 
 const CHILD_A: &str = "ClockChildA";
@@ -583,9 +564,7 @@ fn slot_display_switch_detaches_old_child_and_new_child_inherits_parent_clock() 
             .find(|slot| {
                 slot.display_frames
                     .get(usize::try_from(initial_index).unwrap_or(usize::MAX))
-                    .is_some_and(|frame| {
-                        matches!(frame.display, Some(DisplayHandle::Armature(_)))
-                    })
+                    .is_some_and(|frame| matches!(frame.display, Some(DisplayHandle::Armature(_))))
             })
             .unwrap_or_else(|| panic!("找不到注入双 child 的槽"));
         let index = |name: &str| {
@@ -675,27 +654,17 @@ fn clear_then_reattach_member_advances_again() {
     let armature = add_empty_armature(&mut factory, Arc::clone(&count));
     let root = factory.root_clock();
 
-    factory
-        .attach_armature(root, armature)
-        .expect("首次挂接");
+    factory.attach_armature(root, armature).expect("首次挂接");
     factory.clear_clock(root).expect("clear root");
     assert_eq!(factory.armature(armature).clock(), None);
     factory.advance_time_with(0.1, 100.0);
-    assert_eq!(
-        advances(&count),
-        0,
-        "clear 后成员不应再被推进"
-    );
+    assert_eq!(advances(&count), 0, "clear 后成员不应再被推进");
 
     factory
         .attach_armature(root, armature)
         .expect("clear 后重新挂接");
     factory.advance_time_with(0.1, 100.1);
-    assert_eq!(
-        advances(&count),
-        1,
-        "重新挂接后成员应再次参与推进"
-    );
+    assert_eq!(advances(&count), 1, "重新挂接后成员应再次参与推进");
 }
 
 /// 任务 1 矩阵「嵌套 clock/contains」+ 公开入口 `advance_clock(id, dt)`：
@@ -734,16 +703,8 @@ fn advance_clock_matches_nested_root_member_and_rejects_invalid_id() {
         (direct_time - 0.25).abs() <= 1e-12,
         "advance_clock 直接推进的 clock 应从 0.0 推进到 0.25，实际 {direct_time}"
     );
-    assert_eq!(
-        advances(&nested_count),
-        1,
-        "嵌套成员应被推进一次"
-    );
-    assert_eq!(
-        advances(&direct_count),
-        1,
-        "advance_clock 成员应被推进一次"
-    );
+    assert_eq!(advances(&nested_count), 1, "嵌套成员应被推进一次");
+    assert_eq!(advances(&direct_count), 1, "advance_clock 成员应被推进一次");
 
     let error = factory
         .advance_clock(ClockId(u32::MAX), 0.1)

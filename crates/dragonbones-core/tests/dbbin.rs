@@ -27,13 +27,20 @@ fn load_pair(dir: &str, stem: &str) -> (BaseFactory, BaseFactory, String) {
     let ske = read_json(&root.join(format!("{stem}.json")));
     let tex = read_json(&root.join(format!("{}.json", tex_stem(stem))));
     let bytes = std::fs::read(root.join(format!("{stem}.dbbin"))).expect("read dbbin");
-    let armature = ske["armature"][0]["name"].as_str().expect("armature").to_owned();
+    let armature = ske["armature"][0]["name"]
+        .as_str()
+        .expect("armature")
+        .to_owned();
 
     let mut json = BaseFactory::new();
     assert!(json.parse_dragon_bones_data(&ske, stem).is_some());
     assert!(json.parse_texture_atlas_data(&tex, stem));
     let mut binary = BaseFactory::new();
-    assert!(binary.parse_dragon_bones_data_binary(&bytes, stem).is_some());
+    assert!(
+        binary
+            .parse_dragon_bones_data_binary(&bytes, stem)
+            .is_some()
+    );
     assert!(binary.parse_texture_atlas_data(&tex, stem));
     (json, binary, armature)
 }
@@ -119,13 +126,23 @@ fn dbbin_build_and_advance_match_json_pose() {
                 let dt = 1.0 / 24.0;
                 json.advance_time(dt);
                 binary.advance_time(dt);
-                compare_pose(&format!("{dir}/{anim} frame {frame}"), &json, json_idx, &binary, binary_idx);
+                compare_pose(
+                    &format!("{dir}/{anim} frame {frame}"),
+                    &json,
+                    json_idx,
+                    &binary,
+                    binary_idx,
+                );
             }
         }
     }
 }
 
-fn build_json(factory: &mut BaseFactory, armature: &str, stem: &str) -> dragonbones_core::armature::ArmatureIdx {
+fn build_json(
+    factory: &mut BaseFactory,
+    armature: &str,
+    stem: &str,
+) -> dragonbones_core::armature::ArmatureIdx {
     let idx = factory
         .build_armature(armature, stem, "", stem, Box::new(NullArmatureProxy::new()))
         .expect("build armature");
@@ -151,7 +168,18 @@ fn compare_pose(
             let g = &bone.global;
             let m = &bone.global_transform_matrix;
             [
-                g.x, g.y, g.rotation, g.scale_x, g.scale_y, g.skew, m.a, m.b, m.c, m.d, m.tx, m.ty,
+                g.x,
+                g.y,
+                g.rotation,
+                g.scale_x,
+                g.scale_y,
+                g.skew,
+                m.a,
+                m.b,
+                m.c,
+                m.d,
+                m.tx,
+                m.ty,
                 bone.global_alpha,
             ]
         };
@@ -183,5 +211,9 @@ fn dbbin_header_rejects_invalid_input() {
     );
     let mut truncated = b"DBDT".to_vec();
     truncated.extend_from_slice(&[200, 0, 0, 0]);
-    assert!(parser.parse_binary_dragon_bones_data(&truncated, 1.0).is_none());
+    assert!(
+        parser
+            .parse_binary_dragon_bones_data(&truncated, 1.0)
+            .is_none()
+    );
 }

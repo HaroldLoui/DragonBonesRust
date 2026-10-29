@@ -97,7 +97,9 @@ fn decode_i16(payload: &[u8], offset: usize, len: usize) -> Option<Vec<i32>> {
     }
     let data = range(payload, offset, len)?;
     Some(
-        data.chunks_exact(2)
+        data.as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as i32)
             .collect(),
     )
@@ -109,7 +111,9 @@ fn decode_u16(payload: &[u8], offset: usize, len: usize) -> Option<Vec<i32>> {
     }
     let data = range(payload, offset, len)?;
     Some(
-        data.chunks_exact(2)
+        data.as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]) as i32)
             .collect(),
     )
@@ -121,10 +125,10 @@ fn decode_f32(payload: &[u8], offset: usize, len: usize) -> Option<Vec<f64>> {
     }
     let data = range(payload, offset, len)?;
     Some(
-        data.chunks_exact(4)
-            .map(|chunk| {
-                f64::from(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            })
+        data.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| f64::from(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])))
             .collect(),
     )
 }

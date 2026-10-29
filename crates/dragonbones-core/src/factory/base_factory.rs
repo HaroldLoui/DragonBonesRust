@@ -1022,13 +1022,15 @@ impl BaseFactory {
             }
         }
         slot.replace_display_data(display_data.clone(), display_index);
-        let handle = display_data.as_ref().and_then(|display| match display.kind {
-            DisplayKind::Image { .. } => Some(slot.raw_display),
-            DisplayKind::Mesh { .. } => Some(slot.mesh_display),
-            DisplayKind::Armature { .. }
-            | DisplayKind::BoundingBox { .. }
-            | DisplayKind::Path { .. } => None,
-        });
+        let handle = display_data
+            .as_ref()
+            .and_then(|display| match display.kind {
+                DisplayKind::Image { .. } => Some(slot.raw_display),
+                DisplayKind::Mesh { .. } => Some(slot.mesh_display),
+                DisplayKind::Armature { .. }
+                | DisplayKind::BoundingBox { .. }
+                | DisplayKind::Path { .. } => None,
+            });
         slot.replace_display(handle, display_index);
     }
 
@@ -1192,7 +1194,10 @@ impl BaseFactory {
                 .filter_map(|slot| {
                     let child = slot.child_armature?;
                     let display_index = usize::try_from(slot.display_index.max(0)).ok()?;
-                    let display = skin.get_displays(&slot.slot_name)?.get(display_index)?.as_ref()?;
+                    let display = skin
+                        .get_displays(&slot.slot_name)?
+                        .get(display_index)?
+                        .as_ref()?;
                     let DisplayKind::Armature { .. } = &display.kind else {
                         return None;
                     };
@@ -1661,7 +1666,10 @@ impl BaseFactory {
         // 阶段 6：同 data/armature 之前设置的 cacheFrameRate 由新 build 继承（D-6.2）。
         let inherited_rate = self
             .cache_rates
-            .get(&(data_package.data.name.clone(), armature.armature_name.clone()))
+            .get(&(
+                data_package.data.name.clone(),
+                armature.armature_name.clone(),
+            ))
             .copied();
         if let Some(rate) = inherited_rate {
             armature.set_cache_frame_rate(rate);

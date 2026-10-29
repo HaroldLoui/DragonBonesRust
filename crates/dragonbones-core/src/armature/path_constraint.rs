@@ -180,10 +180,7 @@ impl PathConstraint {
             parent.update_by_constraint(ancestors, flip_x, flip_y);
             parent.global_transform_matrix
         } else {
-            let Some(pos) = path_parent_idx
-                .index()
-                .checked_sub(root.idx.index() + 1)
-            else {
+            let Some(pos) = path_parent_idx.index().checked_sub(root.idx.index() + 1) else {
                 return;
             };
             if pos >= right.len() {
@@ -355,7 +352,11 @@ impl PathConstraint {
         geometry: &GeometryData,
         matrix: crate::geom::Matrix,
     ) {
-        let Some(data) = geometry.root.as_ref().or_else(|| slots[slot_pos].data.root.as_ref()) else {
+        let Some(data) = geometry
+            .root
+            .as_ref()
+            .or_else(|| slots[slot_pos].data.root.as_ref())
+        else {
             return;
         };
         let int_array = &data.ir.int_array;
@@ -648,13 +649,7 @@ impl PathConstraint {
     }
 }
 
-fn update_chain_bone(
-    right: &mut [Bone],
-    root: &mut Bone,
-    pos: usize,
-    flip_x: bool,
-    flip_y: bool,
-) {
+fn update_chain_bone(right: &mut [Bone], root: &mut Bone, pos: usize, flip_x: bool, flip_y: bool) {
     let Some(parent_idx) = right.get(pos).and_then(|bone| bone.parent) else {
         return;
     };
@@ -682,13 +677,11 @@ struct PathInfo {
     curve_lengths: Vec<f64>,
 }
 
-fn slot_raw_display(slot: &Slot) -> Option<crate::model::DisplayData> {    let index = slot
+fn slot_raw_display(slot: &Slot) -> Option<crate::model::DisplayData> {
+    let index = slot
         .display_frame
         .or_else(|| (!slot.display_frames.is_empty()).then_some(0))?;
-    slot.display_frames
-        .get(index)?
-        .raw_display_data
-        .clone()
+    slot.display_frames.get(index)?.raw_display_data.clone()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -766,7 +759,8 @@ mod tests {
         // 15 个点（30 个 float），与 `_computeBezierCurve` 的顶点布局一致。
         for index in 0..15 {
             path.path_global_vertices.push(index as f64 * 10.0);
-            path.path_global_vertices.push((index as f64 * 0.7).sin() * 20.0);
+            path.path_global_vertices
+                .push((index as f64 * 0.7).sin() * 20.0);
         }
         let info = PathInfo {
             closed: false,
@@ -775,8 +769,15 @@ mod tests {
         };
         path.compute_bezier_curve(&info, 3, true, true, false);
         for value in &path.positions[..9] {
-            assert!(value.is_finite(), "percent positions must be finite: {value}");
+            assert!(
+                value.is_finite(),
+                "percent positions must be finite: {value}"
+            );
         }
-        assert!(path.positions[..9].iter().any(|value| value.abs() > f64::EPSILON));
+        assert!(
+            path.positions[..9]
+                .iter()
+                .any(|value| value.abs() > f64::EPSILON)
+        );
     }
 }

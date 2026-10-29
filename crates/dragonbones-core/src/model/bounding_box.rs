@@ -74,7 +74,11 @@ impl BoundingBoxData {
                 }
                 false
             }
-            BoundingBoxKind::Polygon { x: min_x, y: min_y, vertices } => {
+            BoundingBoxKind::Polygon {
+                x: min_x,
+                y: min_y,
+                vertices,
+            } => {
                 if x < *min_x || x > self.width || y < *min_y || y > self.height {
                     return false;
                 }

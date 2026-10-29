@@ -1131,10 +1131,7 @@ mod tests {
             ..AnimationData::default()
         };
         // 只有 "covered" 有骨骼时间轴；"uncovered" 与 slot "slot" 都无覆盖。
-        animation.add_bone_timeline(
-            "covered",
-            timeline_data(TimelineType::BoneTranslate),
-        );
+        animation.add_bone_timeline("covered", timeline_data(TimelineType::BoneTranslate));
         let mut armature = ArmatureData {
             frame_rate: 24.0,
             ..ArmatureData::default()
@@ -1163,12 +1160,8 @@ mod tests {
         );
         state.action_timeline = Some(action);
 
-        let mut fixture = CtxFixture::new(
-            data.armatures
-                .get(ARMATURE)
-                .expect("armature data")
-                .clone(),
-        );
+        let mut fixture =
+            CtxFixture::new(data.armatures.get(ARMATURE).expect("armature data").clone());
         fixture.bones.push(Bone {
             idx: BoneIdx(0),
             bone_name: "covered".to_owned(),
@@ -1196,8 +1189,7 @@ mod tests {
             .bone_timelines
             .iter()
             .find(|timeline| {
-                timeline.is_pose
-                    && timeline.target == TimelineTarget::Bone(BoneIdx(1))
+                timeline.is_pose && timeline.target == TimelineTarget::Bone(BoneIdx(1))
             })
             .unwrap_or_else(|| {
                 panic!("resetToPose=true 时未覆盖骨 `uncovered` 应获得 pose BoneAll fallback")
@@ -1224,7 +1216,8 @@ mod tests {
             update::update_groups(&mut state, context, &mut blend_states, None, true);
         });
         assert_eq!(
-            fixture.bones[1].animation_pose, Transform::default(),
+            fixture.bones[1].animation_pose,
+            Transform::default(),
             "未覆盖骨 `uncovered` 的 animation_pose 应被 resetToPose 写回数据姿态（identity）"
         );
 

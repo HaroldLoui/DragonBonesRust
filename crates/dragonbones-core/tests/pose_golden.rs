@@ -240,15 +240,14 @@ impl PoseDiag {
             .iter()
             .filter(|s| s.contains(": 槽 `"))
             .count();
-        let geo_fail = self.failures.iter().filter(|s| s.contains("geometry")).count();
-        let meta_fail = self
+        let geo_fail = self
             .failures
             .iter()
-            .filter(|s| s.contains("meta."))
+            .filter(|s| s.contains("geometry"))
             .count();
+        let meta_fail = self.failures.iter().filter(|s| s.contains("meta.")).count();
         let total = self.failures.len();
-        let other = total
-            .saturating_sub(bone_fail + slot_fail + geo_fail + meta_fail);
+        let other = total.saturating_sub(bone_fail + slot_fail + geo_fail + meta_fail);
 
         let mut msg = format!(
             "{}: 静姿态差分失败：共 {total} 条（已检查数值 {} 项）；\

@@ -93,7 +93,10 @@ fn bounding_box_hit_tests_match_js_golden() {
             assert_eq!(got, want, "{slot_name}.containsPoint({x},{y})");
         }
 
-        for result in expected["segmentResults"].as_array().expect("segmentResults") {
+        for result in expected["segmentResults"]
+            .as_array()
+            .expect("segmentResults")
+        {
             let segment = result["segment"].as_array().expect("segment");
             let vals: Vec<f64> = segment.iter().map(|v| v.as_f64().unwrap()).collect();
             let want_count = result["count"].as_i64().unwrap() as i32;

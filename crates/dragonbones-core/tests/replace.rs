@@ -155,8 +155,18 @@ fn replace_animation_recurses_into_child_armature() {
         .find(|slot| slot.slot_name == "child_slot")
         .and_then(|slot| slot.child_armature)
         .expect("child armature");
-    assert!(factory.armature(child).animation.has_animation("child_wave"));
+    assert!(
+        factory
+            .armature(child)
+            .animation
+            .has_animation("child_wave")
+    );
     assert!(factory.replace_animation(armature, "features", "alt_source", true));
     assert!(factory.armature(child).animation.has_animation("alt_wave"));
-    assert!(!factory.armature(child).animation.has_animation("child_wave"));
+    assert!(
+        !factory
+            .armature(child)
+            .animation
+            .has_animation("child_wave")
+    );
 }

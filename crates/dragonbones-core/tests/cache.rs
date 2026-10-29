@@ -18,7 +18,13 @@ fn dragon_walk_cache_rate_matches_js() {
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));
     let armature = factory
-        .build_armature("Dragon", "Dragon", "", "Dragon", Box::new(NullArmatureProxy::new()))
+        .build_armature(
+            "Dragon",
+            "Dragon",
+            "",
+            "Dragon",
+            Box::new(NullArmatureProxy::new()),
+        )
         .expect("build");
     factory
         .attach_armature(factory.root_clock(), armature)
@@ -31,14 +37,27 @@ fn dragon_walk_cache_rate_matches_js() {
         .goto_and_play_by_time("walk", 0.0, -1)
         .expect("play");
 
-    for (frame_index, expected) in golden["frames"].as_array().expect("frames").iter().enumerate() {
+    for (frame_index, expected) in golden["frames"]
+        .as_array()
+        .expect("frames")
+        .iter()
+        .enumerate()
+    {
         let arm = factory.armature(armature);
         for (name, want) in expected["bones"].as_object().expect("bones") {
-            let idx = arm.get_bone(name).unwrap_or_else(|| panic!("missing bone {name}"));
-            let bone = arm.get_bones().iter().find(|bone| bone.idx == idx).expect("bone");
+            let idx = arm
+                .get_bone(name)
+                .unwrap_or_else(|| panic!("missing bone {name}"));
+            let bone = arm
+                .get_bones()
+                .iter()
+                .find(|bone| bone.idx == idx)
+                .expect("bone");
             let g = &bone.global;
             let m = &bone.global_transform_matrix;
-            let got = [g.x, g.y, g.rotation, g.scale_x, g.scale_y, g.skew, m.a, m.b, m.c, m.d, m.tx, m.ty];
+            let got = [
+                g.x, g.y, g.rotation, g.scale_x, g.scale_y, g.skew, m.a, m.b, m.c, m.d, m.tx, m.ty,
+            ];
             for (index, value) in want.as_array().expect("vector").iter().enumerate() {
                 let Some(want) = value.as_f64() else { continue };
                 let got = got[index];
@@ -61,11 +80,23 @@ fn cache_rate_is_inherited_by_later_build() {
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));
     let first = factory
-        .build_armature("Dragon", "Dragon", "", "Dragon", Box::new(NullArmatureProxy::new()))
+        .build_armature(
+            "Dragon",
+            "Dragon",
+            "",
+            "Dragon",
+            Box::new(NullArmatureProxy::new()),
+        )
         .expect("first build");
     factory.set_armature_cache_frame_rate(first, 24.0);
     let second = factory
-        .build_armature("Dragon", "Dragon", "", "Dragon", Box::new(NullArmatureProxy::new()))
+        .build_armature(
+            "Dragon",
+            "Dragon",
+            "",
+            "Dragon",
+            Box::new(NullArmatureProxy::new()),
+        )
         .expect("second build");
     assert_eq!(factory.armature(second).cache_frame_rate(), 24.0);
     assert!(!factory.armature(second).frame_cache.animations.is_empty());

@@ -110,16 +110,16 @@ impl Armature {
             idx,
             data,
             armature_name,
-            inherit_animation: true,     // _onClear Armature.ts:155
-            user_data: None,             // :156
-            lock_update: false,          // :158
-            slots_dirty: true,           // :159
-            z_order_dirty: false,        // :160
-            z_index_dirty: false,        // :161
-            alpha_dirty: true,           // :162
-            flip_x: false,               // :163
-            flip_y: false,               // :164
-            cache_frame_index: -1,       // :165
+            inherit_animation: true, // _onClear Armature.ts:155
+            user_data: None,         // :156
+            lock_update: false,      // :158
+            slots_dirty: true,       // :159
+            z_order_dirty: false,    // :160
+            z_index_dirty: false,    // :161
+            alpha_dirty: true,       // :162
+            flip_x: false,           // :163
+            flip_y: false,           // :164
+            cache_frame_index: -1,   // :165
             runtime_cache_frame_rate: 0.0,
             frame_cache: FrameCache::default(),
             alpha: 1.0,                  // :166

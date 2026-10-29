@@ -299,11 +299,7 @@ impl ObjectDataParser {
         self.parse_dragon_bones_data_impl(&header, scale)
     }
 
-    fn parse_dragon_bones_data_impl(
-        &mut self,
-        raw: &Value,
-        scale: f64,
-    ) -> Option<DragonBonesData> {
+    fn parse_dragon_bones_data_impl(&mut self, raw: &Value, scale: f64) -> Option<DragonBonesData> {
         if !is_supported_version(raw) {
             return None;
         }
@@ -1078,13 +1074,10 @@ impl ObjectDataParser {
                 };
             }
             DisplayType::BoundingBox => {
-                if let Some(bounding_box) = self.parse_bounding_box(raw) {
-                    display.kind = DisplayKind::BoundingBox {
-                        bounding_box: Some(Box::new(bounding_box)),
-                    };
-                } else {
-                    return None;
-                }
+                let bounding_box = self.parse_bounding_box(raw)?;
+                display.kind = DisplayKind::BoundingBox {
+                    bounding_box: Some(Box::new(bounding_box)),
+                };
             }
             DisplayType::Path => {
                 let mut geometry = GeometryData::default();
@@ -1279,9 +1272,7 @@ impl ObjectDataParser {
                 let exists = match (key, self.armature.as_ref()) {
                     (BONE, Some(armature)) => armature.get_bone(target_name).is_some(),
                     (SLOT, Some(armature)) => armature.get_slot(target_name).is_some(),
-                    (CONSTRAINT, Some(armature)) => {
-                        armature.constraints.contains_key(target_name)
-                    }
+                    (CONSTRAINT, Some(armature)) => armature.constraints.contains_key(target_name),
                     _ => false,
                 };
                 if !exists {
@@ -1327,8 +1318,7 @@ impl ObjectDataParser {
                 let timeline_name = get_string(raw_timeline, NAME, "");
                 let x = get_number(raw_timeline, X, 0.0);
                 let y = get_number(raw_timeline, Y, 0.0);
-                let Some(timeline) =
-                    self.parse_binary_timeline(timeline_type, offset as i32, x, y)
+                let Some(timeline) = self.parse_binary_timeline(timeline_type, offset as i32, x, y)
                 else {
                     continue;
                 };
@@ -1339,12 +1329,16 @@ impl ObjectDataParser {
                     | TimelineType::BoneRotate
                     | TimelineType::BoneScale
                     | TimelineType::Surface
-                    | TimelineType::BoneAlpha => animation.add_bone_timeline(&timeline_name, timeline),
+                    | TimelineType::BoneAlpha => {
+                        animation.add_bone_timeline(&timeline_name, timeline)
+                    }
                     TimelineType::SlotDisplay
                     | TimelineType::SlotColor
                     | TimelineType::SlotDeform
                     | TimelineType::SlotZIndex
-                    | TimelineType::SlotAlpha => animation.add_slot_timeline(&timeline_name, timeline),
+                    | TimelineType::SlotAlpha => {
+                        animation.add_slot_timeline(&timeline_name, timeline)
+                    }
                     TimelineType::IKConstraint => {
                         animation.add_constraint_timeline(&timeline_name, timeline)
                     }
@@ -1380,16 +1374,15 @@ impl ObjectDataParser {
         if key_frame_count > 1 {
             let total = usize::try_from(frame_count + 1).ok()?;
             frame_indices_offset = i32::try_from(self.frame_indices.len()).ok()?;
-            self.frame_indices.resize(self.frame_indices.len() + total, 0);
+            self.frame_indices
+                .resize(self.frame_indices.len() + total, 0);
             let mut key_index = 0usize;
             let mut frame_start = 0i32;
             let mut count = 0i32;
             let key_count = usize::try_from(key_frame_count).ok()?;
             for frame in 0..total {
                 if frame_start + count <= frame as i32 && key_index < key_count {
-                    let entry = offset_index
-                        + binary_offset::timeline::FRAME_OFFSET
-                        + key_index;
+                    let entry = offset_index + binary_offset::timeline::FRAME_OFFSET + key_index;
                     let relative = *self.timeline_array.get(entry)?;
                     frame_start = *self
                         .frame_array

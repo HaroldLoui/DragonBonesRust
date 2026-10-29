@@ -25,7 +25,10 @@ fn json_data_binary_matches_js_modify_array_bytes() {
         let data = factory
             .parse_dragon_bones_data(&raw, stem)
             .unwrap_or_else(|| panic!("parse {stem}"));
-        let got = data.binary.as_ref().unwrap_or_else(|| panic!("{stem}: binary"));
+        let got = data
+            .binary
+            .as_ref()
+            .unwrap_or_else(|| panic!("{stem}: binary"));
         let want = std::fs::read(golden_root.join(format!("{stem}.bin")))
             .unwrap_or_else(|error| panic!("read {stem}.bin: {error}"));
         assert_eq!(
@@ -43,5 +46,8 @@ fn json_data_binary_matches_js_modify_array_bytes() {
         }
         checked += 1;
     }
-    assert!(checked >= 8, "expected at least 8 skeletons, checked {checked}");
+    assert!(
+        checked >= 8,
+        "expected at least 8 skeletons, checked {checked}"
+    );
 }
