@@ -52,6 +52,10 @@ is the armature's world placement; each slot is spawned as a child with a
 - Armature construction through `BaseFactory`, attached to the root clock.
 - Direct `GlobalTransform` sync with `set_if_neq`.
 - Image slots (atlas region + trim frame + pivot).
+- Rotated atlas regions (`rotated: true`): the displayed content size swaps the
+  stored region's width/height (matching TS `Slot.ts:422-424`) and UVs rotate
+  with the region (`u' = 1 - v, v' = u`, matching the Phaser/Cocos adapters); the
+  same mapping is used for mesh and skinned-mesh UVs.
 - Non-skinned mesh slots, including FFD/deform vertex updates.
 - Weighted/skinned mesh slots rebuilt in armature space every frame.
 - Color multipliers + global alpha baked into per-vertex colors, with one shared
@@ -208,7 +212,6 @@ animation switching uses this API.
   playhead of a running animation without restarting it.
 - Shader-based blend modes (Overlay / Darken / Lighten / HardLight / …); they
   currently fall back to Normal.
-- Rotated atlas regions (`rotated: true`); no current asset uses them.
 - Surface mesh vertex deformation for mesh displays (Surface image slots work
   through the core's surface matrix).
 - Child-armature slot displays and replacement textures.

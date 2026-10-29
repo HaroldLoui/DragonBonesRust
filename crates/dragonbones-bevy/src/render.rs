@@ -317,24 +317,28 @@ fn empty_mesh() -> Mesh {
 }
 
 fn build_image_mesh(slot: &Slot, texture: &TextureData, atlas_size: UVec2) -> Mesh {
-    let region = texture.region;
     let frame = texture.frame;
-    // Core's pivot already includes the trimmed frame offset. Local vertices
-    // are the content rectangle (region), shifted so the pivot is the origin.
+    // Core's pivot already includes the trimmed frame offset. Local vertices are
+    // the content rectangle, shifted so the pivot is the origin. A rotated atlas
+    // region stores the content rotated 90 degrees, so the content size is the
+    // swapped region size (TS `Slot.ts:422-424` only does this without a trim
+    // frame).
+    let (content_width, content_height) = image_content_size(texture);
     let content_x = frame.map_or(0.0, |frame| -frame.x);
     let content_y = frame.map_or(0.0, |frame| -frame.y);
     let x0 = (content_x - slot.pivot_x) as f32;
     let y0 = (content_y - slot.pivot_y) as f32;
-    let x1 = x0 + region.width as f32;
-    let y1 = y0 + region.height as f32;
+    let x1 = x0 + content_width;
+    let y1 = y0 + content_height;
 
-    let (u0, v0, u1, v1) = uv_rect(texture, atlas_size);
     let positions = vec![[x0, y0, 0.0], [x1, y0, 0.0], [x1, y1, 0.0], [x0, y1, 0.0]];
-    let uvs = if texture.rotated {
-        vec![[u0, v1], [u1, v1], [u1, v0], [u0, v0]]
-    } else {
-        vec![[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
-    };
+    // Local quad corners: top-left, top-right, bottom-right, bottom-left.
+    let uvs = vec![
+        atlas_uv(texture, atlas_size, 0.0, 0.0),
+        atlas_uv(texture, atlas_size, 1.0, 0.0),
+        atlas_uv(texture, atlas_size, 1.0, 1.0),
+        atlas_uv(texture, atlas_size, 0.0, 1.0),
+    ];
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -378,12 +382,11 @@ fn build_unskinned_mesh(
     }
 
     let uv_offset = float_offset + vertex_count * 2;
-    let (u_base, v_base, u_scale, v_scale) = uv_transform(texture, atlas_size);
     let mut uvs = Vec::with_capacity(vertex_count);
     for i in 0..vertex_count {
         let u = floats.get(uv_offset + i * 2).copied().unwrap_or(0.0);
         let v = floats.get(uv_offset + i * 2 + 1).copied().unwrap_or(0.0);
-        uvs.push([(u_base + u * u_scale) as f32, (v_base + v * v_scale) as f32]);
+        uvs.push(atlas_uv(texture, atlas_size, u, v));
     }
 
     let index_start = geo + binary_offset::geometry::VERTEX_INDICES;
@@ -482,12 +485,11 @@ fn decode_weighted_mesh(
 
     // UVs follow the bind vertices, not the weight float block.
     let uv_offset = float_offset + vertex_count * 2;
-    let (u_base, v_base, u_scale, v_scale) = uv_transform(texture, atlas_size);
     let mut uvs = Vec::with_capacity(vertex_count);
     for i in 0..vertex_count {
         let u = floats.get(uv_offset + i * 2).copied().unwrap_or(0.0);
         let v = floats.get(uv_offset + i * 2 + 1).copied().unwrap_or(0.0);
-        uvs.push([(u_base + u * u_scale) as f32, (v_base + v * v_scale) as f32]);
+        uvs.push(atlas_uv(texture, atlas_size, u, v));
     }
 
     let index_start = geo + binary_offset::geometry::VERTEX_INDICES;
@@ -510,25 +512,36 @@ fn decode_weighted_mesh(
     }
 }
 
-fn uv_rect(texture: &TextureData, atlas_size: UVec2) -> (f32, f32, f32, f32) {
-    let width = atlas_size.x.max(1) as f32;
-    let height = atlas_size.y.max(1) as f32;
-    let x0 = texture.region.x as f32 / width;
-    let y0 = texture.region.y as f32 / height;
-    let x1 = (texture.region.x + texture.region.width) as f32 / width;
-    let y1 = (texture.region.y + texture.region.height) as f32 / height;
-    (x0, y0, x1, y1)
+/// Display size of an atlas region in content space.
+///
+/// Mirrors TS `Slot.ts:422-424`: a region stored rotated 90 degrees in the atlas
+/// has its width/height swapped, but only when there is no trim frame.
+fn image_content_size(texture: &TextureData) -> (f32, f32) {
+    if texture.rotated && texture.frame.is_none() {
+        (texture.region.height as f32, texture.region.width as f32)
+    } else {
+        (texture.region.width as f32, texture.region.height as f32)
+    }
 }
 
-fn uv_transform(texture: &TextureData, atlas_size: UVec2) -> (f64, f64, f64, f64) {
+/// Maps a normalized content-space UV onto the atlas page.
+///
+/// The non-rotated case is the plain sub-rect mapping. For a rotated region the
+/// content is stored rotated 90 degrees, so the atlas coordinates rotate with it
+/// (`u' = 1 - v`, `v' = u`) — the same formula as the Phaser 3
+/// (`PhaserSlot.ts:174-182`) and Cocos 1.x adapters.
+fn atlas_uv(texture: &TextureData, atlas_size: UVec2, u: f64, v: f64) -> [f32; 2] {
     let width = atlas_size.x.max(1) as f64;
     let height = atlas_size.y.max(1) as f64;
-    (
-        texture.region.x / width,
-        texture.region.y / height,
-        texture.region.width / width,
-        texture.region.height / height,
-    )
+    let (u, v) = if texture.rotated {
+        (1.0 - v, u)
+    } else {
+        (u, v)
+    };
+    [
+        ((texture.region.x + u * texture.region.width) / width) as f32,
+        ((texture.region.y + v * texture.region.height) / height) as f32,
+    ]
 }
 
 fn fix_i16_offset(value: i32) -> usize {
@@ -623,5 +636,85 @@ mod tests {
         assert!(!weighted.vertices.is_empty());
         assert!(!weighted.indices.is_empty());
         assert!(mesh.count_vertices() > 0);
+    }
+
+    fn synthetic_texture(rotated: bool) -> TextureData {
+        use dragonbones_core::geom::Rectangle;
+        // Stored region 16 x 8 at (0, 0) on a 32 x 32 page: the content of a
+        // rotated region is 8 wide x 16 high.
+        TextureData {
+            region: Rectangle::new(0.0, 0.0, 16.0, 8.0),
+            rotated,
+            ..TextureData::default()
+        }
+    }
+
+    fn image_mesh(texture: &TextureData) -> Mesh {
+        let slot = Slot::default(); // pivot 0,0
+        build_image_mesh(&slot, texture, UVec2::new(32, 32))
+    }
+
+    fn positions(mesh: &Mesh) -> Vec<[f32; 3]> {
+        match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(values)) => values.clone(),
+            other => panic!("unexpected position attribute: {other:?}"),
+        }
+    }
+
+    fn uvs(mesh: &Mesh) -> Vec<[f32; 2]> {
+        match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(values)) => values.clone(),
+            other => panic!("unexpected uv attribute: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_rotated_image_quad_uses_region_size_and_plain_uvs() {
+        let mesh = image_mesh(&synthetic_texture(false));
+        assert_eq!(
+            positions(&mesh),
+            vec![
+                [0.0, 0.0, 0.0],
+                [16.0, 0.0, 0.0],
+                [16.0, 8.0, 0.0],
+                [0.0, 8.0, 0.0],
+            ]
+        );
+        // top-left, top-right, bottom-right, bottom-left
+        assert_eq!(
+            uvs(&mesh),
+            vec![[0.0, 0.0], [0.5, 0.0], [0.5, 0.25], [0.0, 0.25],]
+        );
+    }
+
+    #[test]
+    fn rotated_image_quad_swaps_content_size_and_rotates_uvs() {
+        let mesh = image_mesh(&synthetic_texture(true));
+        // The stored region is 16 x 8, so the displayed content is 8 x 16.
+        assert_eq!(
+            positions(&mesh),
+            vec![
+                [0.0, 0.0, 0.0],
+                [8.0, 0.0, 0.0],
+                [8.0, 16.0, 0.0],
+                [0.0, 16.0, 0.0],
+            ]
+        );
+        // u' = 1 - v, v' = u on the stored region: TL -> stored top-right,
+        // TR -> bottom-right, BR -> bottom-left, BL -> top-left.
+        assert_eq!(
+            uvs(&mesh),
+            vec![[0.5, 0.0], [0.5, 0.25], [0.0, 0.25], [0.0, 0.0],]
+        );
+    }
+
+    #[test]
+    fn atlas_uv_rotates_mesh_uvs() {
+        let texture = synthetic_texture(true);
+        let uv = atlas_uv(&texture, UVec2::new(32, 32), 0.2, 0.6);
+        // u' = 1 - 0.6 = 0.4 -> 0.4 * 16 / 32 = 0.2
+        // v' = 0.2       -> 0.2 * 8 / 32 = 0.05
+        assert!((uv[0] - 0.2).abs() < 1e-6, "{uv:?}");
+        assert!((uv[1] - 0.05).abs() < 1e-6, "{uv:?}");
     }
 }
