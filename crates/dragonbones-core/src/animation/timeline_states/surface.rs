@@ -14,9 +14,11 @@ pub(crate) fn blend(
     let TimelineTarget::Bone(target) = timeline.target else {
         return;
     };
-    let Some(bone) = context.bones.iter_mut().find(|bone| bone.idx == target) else {
+    // 同 bone.rs：`BoneIdx` = `armature.bones` 下标（创建序，未排序）。
+    let Some(bone) = context.bones.get_mut(target.index()) else {
         return;
     };
+    debug_assert_eq!(bone.idx, target);
     let BoneRuntime::Surface(surface) = &mut bone.runtime else {
         return;
     };

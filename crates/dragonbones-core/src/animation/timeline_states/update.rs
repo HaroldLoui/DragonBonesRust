@@ -157,7 +157,7 @@ fn reset_bone_target(timeline: &TimelineInstance, context: &mut AnimationUpdateC
     let TimelineTarget::Bone(bone_idx) = timeline.target else {
         return;
     };
-    let Some(bone) = context.bones.iter_mut().find(|bone| bone.idx == bone_idx) else {
+    let Some(bone) = context.bones.get_mut(bone_idx.index()) else {
         return;
     };
     bone.animation_pose = crate::geom::Transform::default();

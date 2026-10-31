@@ -707,6 +707,8 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 > **2026-10-31 技术债收口（core P2，对照 DragonBonesJS）**：PathConstraint 加权分支（`Constraint.ts:314-347`，含 geometryBones 加权混合与 null 骨浮点错位照抄）从缺失补为已实现；`cachedFrameRate` 二次设置按 `Armature.ts:768-779`/`ArmatureData.ts:269-278` 修正（`>0` 早退且不赋值，外层已进入才递归 child armature），getter/帧表保持一致；`texture_atlas_scale` 从 build 级单值改为按 display frame 登记命中图集 scale（`Slot.ts:412`，外部 replace 回退旧值）；确认缺骨约束在官方同样崩溃，保留 panic 并补测试/注释；`replace_*` 索引归一化抽 helper（行为不变）并补负索引/越界/defaultSkin 测试；`Armature::intersects_segment` 补 A/B 选择不对称测试。core 测试 230 → 245，golden/ir/pose 数值零漂移。
 
+> **2026-10-31 core 热路径（P2 续）**：timeline 的 bone 目标查找由线性 `find` 改为下标直取（`BoneIdx` = 创建序 = `armature.bones` 下标不变量，`debug_assert` 锁定），golden/ir/pose 零漂移；Rooster（63 骨）`advance_time` 6.90→6.31 µs、`advance_one` 6.78→6.38 µs（Dragon/Plant 在噪声内）。slot 查找保留线性（zOrder 重排使下标≠SlotIdx，当前槽数 ≤18 收益不足）；`cached_frame_indices` 共享化按 D-6.3 记录为已知取舍（官方表可变共享、Rust 克隆且仅 animation_dirty 时挂载）。
+
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
 > **前置**：先完成 §5 的预研问题 Q1–Q3，再动手。

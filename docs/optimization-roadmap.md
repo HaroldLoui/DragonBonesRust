@@ -213,15 +213,17 @@ cargo bench -p dragonbones-bevy    # 16 个：baseline 2 + static A/B × {1,10,1
 
 | benchmark | median |
 |---|---|
-| `advance/Dragon/factory_advance_time`（1/60 s） | 3.314 µs |
-| `advance/PlantAnimate/factory_advance_time` | 4.047 µs |
-| `advance/Rooster_Ani/factory_advance_time` | 6.933 µs |
-| `advance/Dragon/factory_advance_one` | 3.233 µs |
-| `advance/Rooster_Ani/factory_advance_one` | 6.868 µs |
+| `advance/Dragon/factory_advance_time`（1/60 s） | 3.327 µs（10-29: 3.314） |
+| `advance/PlantAnimate/factory_advance_time` | 4.099 µs（4.047） |
+| `advance/Rooster_Ani/factory_advance_time` | **6.312 µs**（6.933，−8.6%） |
+| `advance/Dragon/factory_advance_one` | 3.320 µs（3.233） |
+| `advance/Rooster_Ani/factory_advance_one` | **6.376 µs**（6.868，−5.9%） |
 | `assemble/*/factory_parse_build_armature`（ske→atlas→build） | 227.7 µs / 797.5 µs / 1.136 ms（Dragon / Plant / Rooster） |
 | `parse/*/serde_json+object_data_parser`（完整解析） | 343.9 µs / 1.078 ms / 1.897 ms（Dragon / Plant / Rooster） |
 | `parse/*/object_data_parser`（Value 已解析） | 192.1 µs / 724.4 µs / 1.010 ms |
 | `parse/assets/*` 吞吐 | Dragon 约 50 MiB/s、龙 71.3 MiB/s、Rooster 约 61.7 MiB/s、PlantAnimate 32.0 MiB/s |
+
+**2026-10-31 复测**（同机静默）：bone 目标查找由 `bones.iter().find(|b| b.idx == target)` 改为下标直取（`BoneIdx` 是创建序 = `armature.bones` 下标，未排序），Rooster（63 骨）的 advance 由 6.90/6.78 µs 降到 6.31/6.38 µs，Dragon/Plant 在噪声内（golden 全绿，无数值变化）。slot 目标查找保持线性：槽会按 zOrder 重排，下标 ≠ `SlotIdx`，需要每帧重建位置表；当前 rig 槽数 ≤18，收益不足以抵消复杂度。`cached_frame_indices` 共享化（审计建议 `Arc`）未做：官方该表是共享**可变**缓存（Bone.ts:393 / Slot.ts:712 回填），Rust 按骨架克隆以避免生命周期与并发问题，且只在 `animation_dirty` 时挂载，不是每帧分配，故记录为已知取舍（D-6.3）。
 
 **读数**：动画推进是 3–7 µs/帧量级，解析/装配是百微秒到毫秒量级。对“加载后一直播”的游戏用法，瓶颈明确在适配层（sync/材质/蒙皮），解析只在场景切换时付一次；若要缩短加载，优先走 dbbin/IR（见 2.1）。
 

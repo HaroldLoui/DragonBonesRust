@@ -15,9 +15,11 @@ pub(crate) fn blend_transform(
     let TimelineTarget::Bone(target) = timeline.target else {
         return;
     };
-    let Some(bone) = context.bones.iter_mut().find(|bone| bone.idx == target) else {
+    // `BoneIdx` 是创建序，`armature.bones` 按创建序存放（未排序）→ 下标即身份。
+    let Some(bone) = context.bones.get_mut(target.index()) else {
         return;
     };
+    debug_assert_eq!(bone.idx, target);
     let pose = &mut bone.animation_pose;
     match timeline.timeline_type {
         TimelineType::BoneAll => {
@@ -101,9 +103,10 @@ pub(crate) fn blend_auxiliary(
             let TimelineTarget::Bone(target) = timeline.target else {
                 return;
             };
-            let Some(bone) = context.bones.iter_mut().find(|bone| bone.idx == target) else {
+            let Some(bone) = context.bones.get_mut(target.index()) else {
                 return;
             };
+            debug_assert_eq!(bone.idx, target);
             let value = pose_or_result(timeline, 1.0, 0);
             if blend_dirty > 1 {
                 bone.base.alpha += value * blend_weight;
