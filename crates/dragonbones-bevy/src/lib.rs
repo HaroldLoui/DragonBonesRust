@@ -39,9 +39,9 @@ pub use player::{
 };
 pub use render::{DragonBonesSlotVisual, SlotRenderKind};
 pub use runtime::{
-    DragonBonesArmature, DragonBonesChildArmature, DragonBonesInstance, DragonBonesPlaybackState,
-    DragonBonesPlugin, DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig,
-    DragonBonesSystems,
+    DragonBonesArmature, DragonBonesArmaturePhase, DragonBonesArmatureState,
+    DragonBonesChildArmature, DragonBonesInstance, DragonBonesPlaybackState, DragonBonesPlugin,
+    DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig, DragonBonesSystems,
 };
 
 pub mod prelude {

@@ -138,6 +138,17 @@ impl DragonBonesRuntime {
         *self.atlas_refs.entry(atlas_key.to_owned()).or_insert(0) += 1;
     }
 
+    /// Removes registrations made for a build that failed before any armature
+    /// bound them, without touching refcounts owned by live armatures.
+    fn drop_unretained_registration(&mut self, dragon_bones_key: &str, atlas_key: &str) {
+        if self.data_refs.get(dragon_bones_key).copied().unwrap_or(0) == 0 {
+            let _ = self.factory.data_map.shift_remove(dragon_bones_key);
+        }
+        if self.atlas_refs.get(atlas_key).copied().unwrap_or(0) == 0 {
+            let _ = self.factory.atlas_map.shift_remove(atlas_key);
+        }
+    }
+
     fn release_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         if let Some(count) = self.data_refs.get_mut(dragon_bones_key) {
             *count = count.saturating_sub(1);
@@ -168,6 +179,72 @@ pub struct DragonBonesArmature {
     /// Animation to play when the armature is built. `None` plays the data's
     /// default animation, if any.
     pub animation: Option<String>,
+}
+
+/// Build state of a [`DragonBonesArmature`] request.
+///
+/// The request is a one-shot build descriptor: the adapter builds the armature
+/// when both assets are loaded and then treats the component as immutable.
+/// Changing fields afterwards is ignored (warned once per distinct request); use
+/// [`crate::DragonBonesCommand`] to switch animations at runtime.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct DragonBonesArmatureState {
+    pub phase: DragonBonesArmaturePhase,
+    /// Fingerprint of the request fields the state was last synced with.
+    pub request_hash: u64,
+}
+
+/// Phase of a [`DragonBonesArmature`] request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DragonBonesArmaturePhase {
+    /// The skeleton/atlas assets are still loading.
+    WaitingForAssets,
+    /// The armature was built and is driven by the adapter.
+    Ready,
+    /// Building failed (e.g. the armature name does not exist in the skeleton).
+    Failed {
+        /// Human-readable reason.
+        message: String,
+    },
+}
+
+fn request_hash(request: &DragonBonesArmature) -> u64 {
+    const SEED: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = SEED;
+    let mut mix = |value: u64| {
+        hash = (hash ^ value).wrapping_mul(PRIME);
+    };
+    for byte in request.armature_name.as_bytes() {
+        mix(u64::from(*byte));
+    }
+    match &request.animation {
+        Some(animation) => {
+            mix(1);
+            for byte in animation.as_bytes() {
+                mix(u64::from(*byte));
+            }
+        }
+        None => mix(0),
+    }
+    mix_asset_id(&mut mix, request.skeleton.id());
+    mix_asset_id(&mut mix, request.atlas.id());
+    hash
+}
+
+fn mix_asset_id<A: bevy::asset::Asset>(mix: &mut impl FnMut(u64), id: bevy::asset::AssetId<A>) {
+    match id.untyped() {
+        bevy::asset::UntypedAssetId::Index { index, .. } => {
+            mix(0);
+            mix(index.to_bits());
+        }
+        bevy::asset::UntypedAssetId::Uuid { uuid, .. } => {
+            mix(1);
+            let bits = uuid.as_u128();
+            mix(bits as u64);
+            mix((bits >> 64) as u64);
+        }
+    }
 }
 
 /// Runtime binding between an armature root entity and the core arena.
@@ -550,7 +627,53 @@ fn spawn_child_armatures(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+fn set_state(
+    commands: &mut Commands,
+    root: Entity,
+    state: Option<Mut<DragonBonesArmatureState>>,
+    phase: DragonBonesArmaturePhase,
+    request_hash: u64,
+) {
+    match state {
+        Some(mut state) => {
+            if state.phase != phase {
+                state.phase = phase;
+            }
+            state.request_hash = request_hash;
+        }
+        None => {
+            commands.entity(root).insert(DragonBonesArmatureState {
+                phase,
+                request_hash,
+            });
+        }
+    }
+}
+
+fn warn_waiting(
+    commands: &mut Commands,
+    root: Entity,
+    state: Option<Mut<DragonBonesArmatureState>>,
+    armature_name: &str,
+    missing: &str,
+    request_hash: u64,
+) {
+    let already_waiting = state
+        .as_ref()
+        .is_some_and(|state| state.phase == DragonBonesArmaturePhase::WaitingForAssets);
+    if !already_waiting {
+        warn!("DragonBones: waiting for the {missing} asset of armature `{armature_name}`");
+    }
+    set_state(
+        commands,
+        root,
+        state,
+        DragonBonesArmaturePhase::WaitingForAssets,
+        request_hash,
+    );
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn setup_armatures(
     mut commands: Commands,
     mut runtime: NonSendMut<DragonBonesRuntime>,
@@ -560,16 +683,61 @@ fn setup_armatures(
     mut materials: ResMut<Assets<DragonBonesMaterial>>,
     mut material_cache: ResMut<DragonBonesMaterials>,
     event_queue: Res<DragonBonesEventQueue>,
-    query: Query<(Entity, &DragonBonesArmature, Option<&DragonBonesInstance>)>,
+    mut query: Query<(
+        Entity,
+        Ref<DragonBonesArmature>,
+        Option<&DragonBonesInstance>,
+        Option<&mut DragonBonesArmatureState>,
+    )>,
 ) {
-    for (root, request, instance) in &query {
+    for (root, request_ref, instance, mut state) in &mut query {
+        let request: &DragonBonesArmature = &request_ref;
+        let hash = request_hash(request);
         if instance.is_some() {
+            // The request is a one-shot build descriptor; ignore later field
+            // changes but warn once per distinct request.
+            match state.as_mut() {
+                Some(state) => {
+                    if state.request_hash != hash {
+                        warn!(
+                            "DragonBones: changes to DragonBonesArmature `{}` after it was built are ignored (use DragonBonesCommand)",
+                            request.armature_name
+                        );
+                        state.request_hash = hash;
+                    }
+                    if state.phase != DragonBonesArmaturePhase::Ready {
+                        state.phase = DragonBonesArmaturePhase::Ready;
+                    }
+                }
+                None => {
+                    commands.entity(root).insert(DragonBonesArmatureState {
+                        phase: DragonBonesArmaturePhase::Ready,
+                        request_hash: hash,
+                    });
+                }
+            }
             continue;
         }
         let Some(skeleton) = skeletons.get(&request.skeleton) else {
+            warn_waiting(
+                &mut commands,
+                root,
+                state,
+                &request.armature_name,
+                "skeleton",
+                hash,
+            );
             continue;
         };
         let Some(atlas) = atlases.get(&request.atlas) else {
+            warn_waiting(
+                &mut commands,
+                root,
+                state,
+                &request.armature_name,
+                "atlas",
+                hash,
+            );
             continue;
         };
 
@@ -599,9 +767,18 @@ fn setup_armatures(
             &atlas_key,
             Box::new(BevyArmatureProxy::new(event_queue.clone())),
         ) else {
-            warn!(
-                "DragonBones: failed to build armature `{}` from {:?}",
+            let message = format!(
+                "armature `{}` not found in skeleton {:?}",
                 request.armature_name, request.skeleton
+            );
+            warn!("DragonBones: {message}");
+            runtime.drop_unretained_registration(&db_key, &atlas_key);
+            set_state(
+                &mut commands,
+                root,
+                state,
+                DragonBonesArmaturePhase::Failed { message },
+                hash,
             );
             continue;
         };
@@ -668,6 +845,10 @@ fn setup_armatures(
                 slots: spawned.slot_entities.clone(),
             },
             DragonBonesPlaybackState::default(),
+            DragonBonesArmatureState {
+                phase: DragonBonesArmaturePhase::Ready,
+                request_hash: hash,
+            },
         ));
         spawn_child_armatures(
             &mut commands,

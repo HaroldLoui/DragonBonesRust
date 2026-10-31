@@ -87,6 +87,11 @@ is the armature's world placement; each slot is spawned as a child with a
   render-target reads fall back to Normal.
 - Slot draw order via Bevy's transparent-phase z sort.
 - Visibility from slot/bone visibility and display presence.
+- One-shot build requests: `DragonBonesArmature` is built when both assets are
+  loaded; `DragonBonesArmatureState` reports `WaitingForAssets` / `Ready` /
+  `Failed`, a failed build rolls its factory registrations back, and field
+  changes after the build are ignored (warned once — switch animations with
+  `DragonBonesCommand`).
 - Despawn → dispose lifecycle: despawning the armature root releases the core
   armature (through the reference implementation's deferred `dispose` buffer),
   the skeleton/atlas registrations and the mesh/material assets.
