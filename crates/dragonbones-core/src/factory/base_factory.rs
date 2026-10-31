@@ -604,18 +604,21 @@ impl BaseFactory {
     ///
     /// 两段式：① 指定名字下的**所有** atlas 逐个 `getTexture`（:85-92，同名多 atlas）；
     /// ② `factory.autoSearch` 为 true 时遍历**全表**且只看 `autoSearch === true` 的
-    /// atlas（:94-105）。返回克隆（D-3.3 值语义——`Slot::replace_texture_data` 收值）。
+    /// atlas（:94-105）。返回克隆 + **命中图集的 scale**（TS 返回的 `TextureData`
+    /// 带 `parent: TextureAtlasData` 对象引用，调用方随帧读 `parent.scale`，
+    /// Slot.ts:412；Rust D-1.1 只有图集名 → 同点把 scale 一并带出，经
+    /// `Slot::replace_texture_data_with_atlas_scale` 按帧登记）。
     /// miss 返回 `None` 是合法结果（TS:210 会把 null 写进 frame.textureData）。
     fn _get_texture_data(
         &self,
         texture_atlas_name: &str,
         texture_name: &str,
-    ) -> Option<TextureData> {
+    ) -> Option<(TextureData, f64)> {
         // ① :85-92
         if let Some(texture_atlas_list) = self.atlas_map.get(texture_atlas_name) {
             for texture_atlas_data in texture_atlas_list {
                 if let Some(texture_data) = texture_atlas_data.get_texture(texture_name) {
-                    return Some(texture_data.clone());
+                    return Some((texture_data.clone(), texture_atlas_data.scale));
                 }
             }
         }
@@ -627,7 +630,7 @@ impl BaseFactory {
                     if texture_atlas_data.auto_search
                         && let Some(texture_data) = texture_atlas_data.get_texture(texture_name)
                     {
-                        return Some(texture_data.clone());
+                        return Some((texture_data.clone(), texture_atlas_data.scale));
                     }
                 }
             }
@@ -636,20 +639,14 @@ impl BaseFactory {
         None // :107
     }
 
-    /// [`Slot::new`] 的 `texture_atlas_scale` 入参：TS 按当前纹理所属图集的对象引用取
-    /// `_textureData.parent.scale`（逐纹理，Slot.ts:412，喂给 pivot 缩放
-    /// `_pivotX/Y`），Rust `Slot` 只有单一缓存值（`slot.rs` 字段文档既定：
-    /// “一次 build 只用一个图集”）→ 按贴图解析的同序
-    /// （atlasName → dataName，与 `_build_slots` 的 texture 通道一致）取首个命中图集的
-    /// scale；都未命中 → 1.0（`TextureAtlasData` 默认 scale）。
+    /// [`Slot::init`] 的 `texture_atlas_scale` 入参 = **回退值**。
     ///
-    /// **pivot scale 场景（不改行为，同款标注见 `slot.rs::texture_atlas_scale` 字段
-    /// 文档的三场景 + 阶段 6 修法）**：`first()` 取的是“同名列表首个”，而实际贴图可能
-    /// 来自别的 atlas——① `_getTextureData` ② 段（autoSearch 全表扫，:94-105）命中
-    /// 别的 data 的 atlas；② 同名多 atlas 下命中第 2+ 个不同 scale 的 atlas；
-    /// ③ 解析失败空壳（:406 无条件入 map，scale=1.0）占列表首位。三处都会让本函数
-    /// 返回的 scale ≠ `_textureData.parent.scale`，pivot 随之取错——阶段 6 随
-    /// `replace_texture_data` 按帧记 scale 收口。
+    /// TS 逐贴图取 `_textureData.parent.scale`（Slot.ts:412，喂给 pivot 缩放
+    /// `_pivotX/Y`）；Rust 的逐帧准确值已由 [`Self::_get_texture_data`] 返回的命中
+    /// 图集 scale 经 `Slot::replace_texture_data_with_atlas_scale` 写进
+    /// `DisplayFrame::texture_atlas_scale`（`_updateDisplayData` 优先读它）。
+    /// 本函数只在“帧级未登记”的外部 replace 路径兜底：按 build 通道同序
+    /// （atlasName → dataName）取首个命中图集 scale；都未命中 → 1.0。
     fn texture_atlas_scale(&self, texture_atlas_name: &str, data_name: &str) -> f64 {
         for key in [texture_atlas_name, data_name] {
             if let Some(texture_atlas_list) = self.atlas_map.get(key)
@@ -988,14 +985,61 @@ impl BaseFactory {
             .expect("armature arena slot empty (never built or disposed)")
     }
 
-    /// 阶段 6：`Armature.cacheFrameRate` setter（D-6.2）。
+    /// 阶段 6：`Armature.cacheFrameRate` setter（Armature.ts:768-779，D-6.2）。
+    ///
+    /// TS 逐行：外层 `if (data.cacheFrameRate !== value)` → `data.cacheFrames(value)`
+    /// （`>0` 早退且不赋值，ArmatureData.ts:269-278）→ 遍历 `slots`，对每个
+    /// `childArmature` **递归**写同一个 `value`（:773-777）。
+    ///
+    /// Rust 映射（data 不可变 D-3.3 → 运行时 rate 落 `Armature` 字段 + 本工厂表）：
+    /// - 本地：`Armature::set_cache_frame_rate` 返回外层分支是否进入；
+    /// - 递归：`slot.child_armature` → [`ArmatureIdx`]，入 arena 逐个下发
+    ///   （去重防环；TS 对象引用成环会无限递归，数据树正常情况下无环）；
+    /// - 继承表 `cache_rates`：记录**本次调用后的实际 rate**（而非请求值）——
+    ///   `cacheFrames` 的 `>0` 早退不赋值 `ArmatureData.cacheFrameRate`，因此之后
+    ///   新 build 的同类骨架应继承旧值（与 TS data 层语义一致）。
     pub fn set_armature_cache_frame_rate(&mut self, idx: ArmatureIdx, rate: f64) {
+        let mut seen = Vec::new();
+        self.set_armature_cache_frame_rate_recursive(idx, rate, &mut seen);
+    }
+
+    fn set_armature_cache_frame_rate_recursive(
+        &mut self,
+        idx: ArmatureIdx,
+        rate: f64,
+        seen: &mut Vec<u32>,
+    ) {
+        if seen.contains(&idx.0) {
+            return; // 防环（防御；数据树本无环）
+        }
+        seen.push(idx.0);
+        if self.armatures.get(idx.index()).is_none_or(Option::is_none) {
+            return; // 空位（已 dispose）→ 无对应 TS 对象
+        }
+
+        let entered = self.armature_mut(idx).set_cache_frame_rate(rate); // :771
+        // D-6.2：表记录实际生效值（= TS `ArmatureData.cacheFrameRate` 调用后的值）。
         let key = {
             let armature = self.armature(idx);
             (armature.data.name.clone(), armature.armature_name.clone())
         };
-        self.cache_rates.insert(key, rate);
-        self.armature_mut(idx).set_cache_frame_rate(rate);
+        let effective = self.armature(idx).cache_frame_rate();
+        self.cache_rates.insert(key, effective);
+
+        if !entered {
+            return; // :769 外层相等 → 不递归 child（TS 整段在 if 内）
+        }
+
+        // :773-777 当前槽顺序遍历 `childArmature` 递归（槽顺序 = 运行时 slots 序）。
+        let children: Vec<ArmatureIdx> = self
+            .armature(idx)
+            .slots
+            .iter()
+            .filter_map(|slot| slot.child_armature)
+            .collect();
+        for child in children {
+            self.set_armature_cache_frame_rate_recursive(child, rate, seen);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1393,7 +1437,7 @@ impl BaseFactory {
                         // `frame.displayData` 恒 null → 实际优先级 = frame.textureData
                         //（通道2，本处写）→ rawDisplayData.texture（通道3，TS:264-266/274-276
                         // 由 `_getSlotDisplay` 回填进 data 层、与 rawDisplayData 同一对象）。
-                        let texture_data = if !data_package.texture_atlas_name.is_empty() {
+                        let resolved = if !data_package.texture_atlas_name.is_empty() {
                             self._get_texture_data(
                                 &data_package.texture_atlas_name,
                                 &display_data.path,
@@ -1401,8 +1445,8 @@ impl BaseFactory {
                         } else {
                             None // :208 atlasName 为空 → 完全不写（保持 null）
                         };
-                        let texture_data = match texture_data {
-                            Some(texture_data) => Some(texture_data), // 通道2 命中 → 优先
+                        let resolved = match resolved {
+                            Some(resolved) => Some(resolved), // 通道2 命中 → 优先
                             None => match &display_data.kind {
                                 // 通道3：TS 在 `_getSlotDisplay` 264-266（Image）/274-276
                                 // （Mesh）把 `_getTextureData(dataName, path)` 写进 data 层
@@ -1416,8 +1460,22 @@ impl BaseFactory {
                                 _ => None,
                             },
                         };
-                        // TS:210 `slot.replaceTextureData(textureData, i)`（miss 也会写 null）
-                        armature.slots[slot_idx.index()].replace_texture_data(texture_data, index);
+                        // TS:210 `slot.replaceTextureData(textureData, i)`（miss 也会写 null）。
+                        // Rust 追加“命中图集 scale”随帧登记（TS `_textureData.parent.scale`，
+                        // Slot.ts:412；见 `_get_texture_data` 文档）。
+                        match resolved {
+                            Some((texture_data, atlas_scale)) => {
+                                armature.slots[slot_idx.index()]
+                                    .replace_texture_data_with_atlas_scale(
+                                        Some(texture_data),
+                                        atlas_scale,
+                                        index,
+                                    );
+                            }
+                            None => {
+                                armature.slots[slot_idx.index()].replace_texture_data(None, index)
+                            }
+                        }
 
                         // TS:213-214
                         let display =

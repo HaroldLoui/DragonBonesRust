@@ -705,6 +705,8 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 > **2026-10-31 技术债收口（P1）**：适配层——sync 只为 dirty/带 child armature 的 armature 构建 slot 顺序表（修复 child armature 支持带来的静态同步回归），顶层 `Visibility` 参与脏检查、可见槽写 `Inherited`、隐藏槽写 `Hidden`（root Hidden 可隐藏整棵子树，sync 排在 `VisibilityPropagate` 之前），child armature 仅当前 display 可见，材质引用计数改为直接在 binding 上更新（同帧多槽切换同一 blend 只 acquire 一次），脏检查改为内容指纹（display frame 的 region/geometry/pivot/child，不含字符串）使 `replace_texture_data`/`replace_skin` 当帧刷新；core——parser 数据派生下标改 checked（坏输入返回 None 而非 panic）、清理 4 处“已实现却写未实现”的陈旧 TODO、移除 PlantAnimate `compressed` 重复素材与 27 个逐字节重复的黄金数据（8 素材 / 31 动画）。文档同步修正素材数、benchmark 数量（适配层 16 个）与 Bevy 版本。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend,child_armature}.rs` 与 core 测试。
 
+> **2026-10-31 技术债收口（core P2，对照 DragonBonesJS）**：PathConstraint 加权分支（`Constraint.ts:314-347`，含 geometryBones 加权混合与 null 骨浮点错位照抄）从缺失补为已实现；`cachedFrameRate` 二次设置按 `Armature.ts:768-779`/`ArmatureData.ts:269-278` 修正（`>0` 早退且不赋值，外层已进入才递归 child armature），getter/帧表保持一致；`texture_atlas_scale` 从 build 级单值改为按 display frame 登记命中图集 scale（`Slot.ts:412`，外部 replace 回退旧值）；确认缺骨约束在官方同样崩溃，保留 panic 并补测试/注释；`replace_*` 索引归一化抽 helper（行为不变）并补负索引/越界/defaultSkin 测试；`Armature::intersects_segment` 补 A/B 选择不对称测试。core 测试 230 → 245，golden/ir/pose 数值零漂移。
+
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
 > **前置**：先完成 §5 的预研问题 Q1–Q3，再动手。

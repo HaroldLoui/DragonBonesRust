@@ -128,6 +128,17 @@ impl Constraint {
     ///   `_buildBones` 按其创建 → 正常必命中）。
     /// - `root` 下标越界：同上，`sortedBones` ⊆ 骨表。
     ///
+    /// **TS 对照（官方同样崩溃，故 Rust 保留 panic）**：`getBone` 未命中返回 null，
+    /// `as any` 断言不改变运行时值——
+    /// - 缺 `root`：`this._root._hasConstraint = true`（Constraint.ts:203）直接对
+    ///   null 写属性 → `TypeError`，**init 阶段**崩溃；
+    /// - 缺 `target`：init 不崩（:192 只赋 null），首次 `update()` 的
+    ///   `this._target.global`（:94/:110）→ `TypeError`。
+    ///
+    /// Rust 无 null 语义（`BoneIdx`），两处在 init 内统一 `panic`（缺 target 的
+    /// 崩溃点比 TS 提前到 init，属“同样的坏数据必然崩溃、时机更早”的结构性偏差，
+    /// 不改成 warn——TS 不静默）。回归测试见本模块 `tests`。
+    ///
     /// `bone`（链骨）解析失败按 TS `getBone → null` 语义降级为单骨 IK（`None`）+ warn。
     pub fn init(&mut self, data: &ConstraintData, bones: &mut [Bone], slots: &mut [Slot]) {
         if !self.name.is_empty() {
@@ -368,7 +379,10 @@ fn ik_target_pos(target: BoneIdx, root_idx: BoneIdx, root: &Bone, left: &[Bone])
 ///   宿主 < root → `left`。
 /// - `parent < root` → parent 与宿主都在 `left` → 复用 bone.rs 单切片解析。
 /// - `root < parent < chain`（本库素材不可达，防御实现）→ 宿主按三分区拆分。
-fn resolve_parent_host<'a>(
+///
+/// `pub(crate)` 追加消费方：`path_constraint.rs` 的加权路径几何骨
+/// `updateByConstraint`（Constraint.ts:334，见其 `update_geometry_bone`）。
+pub(crate) fn resolve_parent_host<'a>(
     root_idx: BoneIdx,
     root: &'a mut Bone,
     left: &'a mut [Bone],
@@ -535,4 +549,75 @@ fn compute_b(
         + normalize_radian(radian_b - d_r - raw_radian) * weight;
     let global = bone.global; // :182 先拷贝
     global.to_matrix(&mut bone.global_transform_matrix);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::armature::Bone;
+    use crate::model::ConstraintKind;
+
+    fn ik_data(target: &str, root: &str, bone: Option<&str>) -> ConstraintData {
+        ConstraintData {
+            name: "ik".into(),
+            target: target.into(),
+            root: root.into(),
+            bone: bone.map(str::to_string),
+            kind: ConstraintKind::IK {
+                scale_enabled: false,
+                bend_positive: false,
+                weight: 1.0,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn bone(name: &str) -> Bone {
+        Bone {
+            bone_name: name.into(),
+            ..Bone::default()
+        }
+    }
+
+    /// 缺 `target`：TS `getBone` → null，init 只赋 null，首次 `update()` 的
+    /// `_target.global`（Constraint.ts:94/:110）抛 `TypeError`。Rust 无 null →
+    /// 在 init 的按名解析处 panic（同一坏数据必崩，时机更早；不静默）。
+    #[test]
+    #[should_panic(expected = "target bone")]
+    fn init_panics_on_missing_target_bone_like_ts_null_deref() {
+        let mut bones = vec![bone("root")];
+        let mut slots = Vec::new();
+        let mut constraint = Constraint::default();
+        constraint.init(&ik_data("missing", "root", None), &mut bones, &mut slots);
+    }
+
+    /// 缺 `root`：TS `this._root._hasConstraint = true`（Constraint.ts:203）对 null
+    /// 写属性 → `TypeError`（init 阶段）。Rust 同在 init panic。
+    #[test]
+    #[should_panic(expected = "root bone")]
+    fn init_panics_on_missing_root_bone_like_ts_null_deref() {
+        let mut bones = vec![bone("root")];
+        let mut slots = Vec::new();
+        let mut constraint = Constraint::default();
+        constraint.init(&ik_data("root", "missing", None), &mut bones, &mut slots);
+    }
+
+    /// 缺 `bone`（链骨）：TS `getBone(...) === null` → `_bone = null` → 单骨
+    /// `_computeA`（Constraint.ts:194/213-215）。Rust 降级 `None` + warn，不 panic。
+    #[test]
+    fn missing_chain_bone_degrades_to_single_bone_ik() {
+        let mut bones = vec![bone("root"), bone("target")];
+        let mut slots = Vec::new();
+        let mut constraint = Constraint::default();
+        constraint.init(
+            &ik_data("target", "root", Some("missing_chain")),
+            &mut bones,
+            &mut slots,
+        );
+        assert_eq!(constraint.bone, None);
+        assert!(
+            bones[0].has_constraint,
+            "root 应被标记 has_constraint（:203）"
+        );
+    }
 }

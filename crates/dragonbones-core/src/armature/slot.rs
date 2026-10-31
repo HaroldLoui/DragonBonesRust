@@ -145,6 +145,15 @@ pub struct DisplayFrame {
     pub display: Option<DisplayHandle>,
     /// 对齐 `deformVertices`（Slot.ts:36，readonly number[]；`_onClear` `.length = 0`）。
     pub deform_vertices: Vec<f64>,
+    /// 该帧贴图所属**图集的缩放**（TS `_textureData.parent.scale` 的值缓存）。
+    ///
+    /// TS 的 `TextureData.parent` 是 `TextureAtlasData` **对象引用**，`_updateDisplayData`
+    /// 逐贴图读 `parent.scale`（Slot.ts:412）；Rust D-1.1 把 parent 压成图集名，
+    /// Slot 不持有图集表 → 由解析贴图的一方（工厂 build 的 `_getTextureData` 同点）
+    /// 随帧登记该值（`replace_texture_data_with_atlas_scale`）。
+    /// `None` = 未登记（直接调用 [`Slot::replace_texture_data`] 的外部路径）→
+    /// 回退 build 级 [`Slot::texture_atlas_scale`]（旧单值近似，行为不变）。
+    pub texture_atlas_scale: Option<f64>,
 }
 
 impl DisplayFrame {
@@ -374,23 +383,20 @@ pub struct Slot {
     /// 骨架名（→ `data.armatures[name]`；与 `slot_name` 一起构成缓存字段方案，
     /// `on_clear` 清空以对齐 TS `_slotData = null` / `_armature = null`）。
     pub armature_name: String,
-    /// 图集缩放（Rust 侧缓存）：TS 每次 `_updateDisplayData` 逐贴图取
+    /// 图集缩放**回退值**（Rust 侧缓存）：TS 每次 `_updateDisplayData` 逐贴图取
     /// `_textureData.parent.scale * armatureData.scale`（Slot.ts:412，**随当前贴图
-    /// 所属图集**），Rust `TextureData.parent` 是图集名（D-1.1）→ 工厂在
-    /// [`Slot::init`] 下传一个 build 级标量（`BaseFactory::texture_atlas_scale`
-    /// 取 atlasName/dataName 首命中图集）。
-    /// **不改行为**（阶段 3 单图集 build 足够，工厂侧同款标注见
-    /// `base_factory.rs::texture_atlas_scale`）。已知会取错的三个场景：
+    /// 所属图集**）。Rust 图集不在 core 所有权内（D-1.1 只有图集名），故：
+    /// - 工厂 build 在 `_getTextureData` 同点把命中图集 scale 经
+    ///   [`Slot::replace_texture_data_with_atlas_scale`] 写进
+    ///   [`DisplayFrame::texture_atlas_scale`]（**逐帧准确值**，`_updateDisplayData`
+    ///   优先读它）；
+    /// - 本字段只在帧级无登记时兜底（外部直接调 `replace_texture_data` 的路径，
+    ///   保持旧的 build 级近似行为），由 [`Slot::init`] 从工厂下传。
+    ///
+    /// 已知兜底会取错的三个场景（仅影响不经工厂 build 的外部 replace 路径）：
     /// ① `_getTextureData` ② 段（`factory.autoSearch` 全表扫，BaseFactory.ts:94-105）
-    ///    命中**别的 data** 的 atlas——build 查表仍取 atlasName/dataName 首命中；
-    /// ② 同名多 atlas（`atlas_map[key]` 是 Vec，笔记 A.2-4）——查表取 `first()`，
-    ///    而实际贴图可能命中列表里第 2+ 个不同 scale 的 atlas；
-    /// ③ `parse_texture_atlas_data` 解析失败仍无条件入 map 的空壳（BaseFactory.ts:406，
-    ///    scale 停留默认 1.0）占列表首位 → `first()` 取空壳而非真实图集。
-    /// TODO P1-5（阶段 6）修法：`DisplayFrame` 随 [`Slot::replace_texture_data`]
-    /// 记下该帧实际图集 scale（`texture_atlas_scale` 帧内字段），
-    /// `_updateDisplayData` 改按**当前帧**读（对齐 Slot.ts:412 逐贴图语义）；
-    /// 运行时 replaceSkin 换图集同样在 `replace_texture_data` 同步。
+    ///    命中**别的 data** 的 atlas；② 同名多 atlas（`atlas_map[key]` 是 Vec）；
+    /// ③ 解析失败空壳（BaseFactory.ts:406，scale 停留默认 1.0）。
     pub texture_atlas_scale: f64,
     /// 渲染适配器（TS 的 14 个 abstract 由引擎子类实现 → Rust trait 对象，D-3.4）。
     pub adapter: Box<dyn SlotRenderAdapter>,
@@ -456,8 +462,9 @@ impl Slot {
     ///   `idx`（→ `base.armature` / `idx`）、`data`+`armature_name`（→ D-3.3 缓存）、
     ///   `bones`/`slots`（→ parent 按名解析 Slot.ts:656 / `idx` 计数）、
     ///   defaultSkin（`replace_raw_display_data` 回填 Slot.ts:826-831）。
-    /// - `texture_atlas_scale`：见字段文档（TS 经 `_textureData.parent.scale`
-    ///   对象引用取图集缩放，Rust 图集不在 core 所有权内 → 工厂下传）。
+    /// - `texture_atlas_scale`：**回退值**，见字段文档（TS 经
+    ///   `_textureData.parent.scale` 对象引用逐贴图取；Rust 图集不在 core 所有权内 →
+    ///   build 期工厂按帧登记到 `DisplayFrame.texture_atlas_scale`，此处只是兜底）。
     /// - `raw_display` / `mesh_display` / `adapter`：显示对象占位 + 渲染契约。
     ///
     /// **不 push**：TS:665 `armature._addSlot(this)` 由调用方（任务 7）在本方法
@@ -856,8 +863,15 @@ impl Slot {
                 && let Some(texture_data) = self.texture_data.as_ref()
             {
                 // :410 纯贴图才有 pivot
-                // :412 图集缩放 × 骨架缩放（图集缩放为 Rust 侧缓存，见字段文档）
-                let scale = self.texture_atlas_scale * self.armature_data().scale;
+                // :412 图集缩放 × 骨架缩放。图集缩放按**当前帧贴图**解析：
+                // 帧级登记（工厂 build 命中的图集）优先；未登记回退 build 级标量
+                // （直接 `replace_texture_data` 的外部路径，旧单值近似不变）。
+                let atlas_scale = self
+                    .display_frame
+                    .and_then(|index| self.display_frames.get(index))
+                    .and_then(|frame| frame.texture_atlas_scale)
+                    .unwrap_or(self.texture_atlas_scale);
+                let scale = atlas_scale * self.armature_data().scale;
                 // :411 displayData 是 Image 用 displayData，否则用 rawDisplayData（TS 直接 as）
                 let image_display_data: &DisplayData = if let Some(display_data) = &display_data
                     && display_data.type_() == DisplayType::Image
@@ -1103,40 +1117,43 @@ impl Slot {
                         }
                     }
 
+                    // :551-555 子骨架 rate 继承：TS `this._childArmature.cacheFrameRate =
+                    // cacheFrameRate`（:554）走 Armature setter，**会继续递归
+                    // childArmature**（Armature.ts:773-777）→ arena 递归辅助。
+                    // 条件同 TS：child 自身 rate 为 0 且父 rate 非 0（:551-553）。
+                    let inherit_rate = world.armature(child_idx).is_some_and(|child| {
+                        child.inherit_animation
+                            && child.cache_frame_rate() == 0.0
+                            && ctx.cache_frame_rate != 0.0
+                    });
+                    if inherit_rate {
+                        world.set_cache_frame_rate_recursive(child_idx, ctx.cache_frame_rate); // :554
+                    }
+
                     if let Some(child) = world.armature_mut(child_idx)
                         && child.inherit_animation
+                        && has_display_frame
                     {
-                        // :550
-                        if child.cache_frame_rate() == 0.0 {
-                            // :551 Set child armature cache frameRate.
-                            let cache_frame_rate = ctx.cache_frame_rate; // :552
-                            if cache_frame_rate != 0.0 {
-                                child.set_cache_frame_rate(cache_frame_rate); // :554
+                        // :559 Child armature action.
+                        if !actions.is_empty() {
+                            // :566
+                            for action in &actions {
+                                // :567
+                                let mut event_object = EventObject::default();
+                                EventObject::action_data_to_instance(
+                                    action,
+                                    &mut event_object,
+                                    ctx.armature,
+                                    ctx.bones,
+                                    &[], // 槽循环内 slots 解析结果随后被 :570 覆写
+                                ); // :569
+                                event_object.slot = Some(self.idx); // :570 `eventObject.slot = this`
+                                event_object.slot_name = Some(self.slot_name.clone()); // D-4.20：索引给核心逻辑、名字给事件消费者
+                                ctx.actions.insert(0, event_object); // :571 `_bufferAction(_, false)` 头插
                             }
-                        }
-
-                        if has_display_frame {
-                            // :559 Child armature action.
-                            if !actions.is_empty() {
-                                // :566
-                                for action in &actions {
-                                    // :567
-                                    let mut event_object = EventObject::default();
-                                    EventObject::action_data_to_instance(
-                                        action,
-                                        &mut event_object,
-                                        ctx.armature,
-                                        ctx.bones,
-                                        &[], // 槽循环内 slots 解析结果随后被 :570 覆写
-                                    ); // :569
-                                    event_object.slot = Some(self.idx); // :570 `eventObject.slot = this`
-                                    event_object.slot_name = Some(self.slot_name.clone()); // D-4.20：索引给核心逻辑、名字给事件消费者
-                                    ctx.actions.insert(0, event_object); // :571 `_bufferAction(_, false)` 头插
-                                }
-                            } else {
-                                // :575 TS `play()`（Animation.ts:506 默认 playTimes = -1）
-                                child.animation.play(None, -1);
-                            }
+                        } else {
+                            // :575 TS `play()`（Animation.ts:506 默认 playTimes = -1）
+                            child.animation.play(None, -1);
                         }
                     }
                 } else {
@@ -1261,27 +1278,42 @@ impl Slot {
         self.adapter.update_visible();
     }
 
+    /// `replace*(value, index = -1)` 系列的公共索引归一（Slot.ts:814-819 /
+    /// 844-849 / 864-869 / 884-889 四处逐字同构）。
+    ///
+    /// - `index < 0` → 当前 `displayIndex`；当前也 `< 0` → 0；
+    /// - 非负且 `>= displayFrames.length` → 静默放弃（返回 `None`，调用方直接 return）。
+    ///
+    /// 注意负索引分支 TS **不做**越界检查（`displayIndex` 来自合法帧或 0）——
+    /// 返回下标可能越界，调用方沿用 `expect`（与 TS `displayFrames[index]` 崩溃同点）。
+    fn resolve_replace_index(&self, index: i32) -> Option<usize> {
+        if index < 0 {
+            Some(if self.display_index < 0 {
+                0
+            } else {
+                self.display_index as usize
+            })
+        } else if (index as usize) >= self.display_frames.len() {
+            None
+        } else {
+            Some(index as usize)
+        }
+    }
+
     /// 对齐 `replaceRawDisplayData(displayData, index = -1)`（Slot.ts:813-839）。
     ///
     /// 注意 `:825-833` 的怪癖：传 `None`（TS null）时从 **defaultSkin** 回填
     /// `rawDisplayData`（`defaultSkin.getDisplays(slotData.name)[index]`）。
     pub fn replace_raw_display_data(&mut self, display_data: Option<DisplayData>, index: i32) {
         // :814-819 负索引 → 当前 displayIndex（再负则 0）；非负越界 → 静默 return
-        let mut index = index;
-        if index < 0 {
-            index = if self.display_index < 0 {
-                0
-            } else {
-                self.display_index
-            };
-        } else if (index as usize) >= self.display_frames.len() {
+        let Some(index) = self.resolve_replace_index(index) else {
             return;
-        }
+        };
 
         // :821-822 只有变化才动
         let changed = self
             .display_frames
-            .get(index as usize)
+            .get(index)
             .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:821）")
             .raw_display_data
             != display_data;
@@ -1299,7 +1331,7 @@ impl Slot {
                 .and_then(|skin_name| armature_data.get_skin(skin_name)); // :826-827
             if let Some(default_raw_display_datas) = default_skin
                 .and_then(|skin| skin.get_displays(&self.slot_name)) // :828
-                .and_then(|displays| displays.get(index as usize))
+                .and_then(|displays| displays.get(index))
             // :829 `index < length`
             {
                 display_data = default_raw_display_datas.clone(); // :830
@@ -1309,12 +1341,12 @@ impl Slot {
         // :823-824
         let display_frame = self
             .display_frames
-            .get_mut(index as usize)
+            .get_mut(index)
             .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:821）");
         display_frame.deform_vertices.clear(); // :823 形变缓冲失效
         display_frame.raw_display_data = display_data; // :824
 
-        if index == self.display_index {
+        if index as i32 == self.display_index {
             // :835 只影响当前显示索引时才置脏
             self.display_data_dirty = true; // :836
         }
@@ -1323,27 +1355,20 @@ impl Slot {
     /// 对齐 `replaceDisplayData(displayData, index = -1)`（Slot.ts:843-859）。
     pub fn replace_display_data(&mut self, display_data: Option<DisplayData>, index: i32) {
         // :844-849
-        let mut index = index;
-        if index < 0 {
-            index = if self.display_index < 0 {
-                0
-            } else {
-                self.display_index
-            };
-        } else if (index as usize) >= self.display_frames.len() {
+        let Some(index) = self.resolve_replace_index(index) else {
             return;
-        }
+        };
 
         // :851-852 双重判重
         let display_frame = self
             .display_frames
-            .get_mut(index as usize)
+            .get_mut(index)
             .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:851）");
         if display_frame.display_data != display_data
             && display_frame.raw_display_data != display_data
         {
             display_frame.display_data = display_data; // :853
-            if index == self.display_index {
+            if index as i32 == self.display_index {
                 // :855
                 self.display_data_dirty = true; // :856（只置 displayData 脏）
             }
@@ -1351,27 +1376,60 @@ impl Slot {
     }
 
     /// 对齐 `replaceTextureData(textureData, index = -1)`（Slot.ts:863-879）。
+    ///
+    /// 外部显式覆盖路径：调用方不提供图集归属 → 贴图变化时清掉该帧的
+    /// [`DisplayFrame::texture_atlas_scale`]（回退 build 级标量，旧行为不变）。
+    /// 工厂 build 路径走 [`Self::replace_texture_data_with_atlas_scale`]。
     pub fn replace_texture_data(&mut self, texture_data: Option<TextureData>, index: i32) {
         // :864-869
-        let mut index = index;
-        if index < 0 {
-            index = if self.display_index < 0 {
-                0
-            } else {
-                self.display_index
-            };
-        } else if (index as usize) >= self.display_frames.len() {
+        let Some(index) = self.resolve_replace_index(index) else {
             return;
-        }
+        };
 
-        // :871-872
+        // :871-872（TS 只比较 textureData；scale 是 Rust 侧派生值，贴图未变则不动）
         let display_frame = self
             .display_frames
-            .get_mut(index as usize)
+            .get_mut(index)
             .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:871）");
         if display_frame.texture_data != texture_data {
             display_frame.texture_data = texture_data; // :873
-            if index == self.display_index {
+            display_frame.texture_atlas_scale = None; // 外部路径无图集归属
+            if index as i32 == self.display_index {
+                // :875
+                self.display_data_dirty = true; // :876 只置 displayData 脏（不置 displayDirty）
+            }
+        }
+    }
+
+    /// [`Self::replace_texture_data`] 的图集感知变体：同时登记该帧贴图所属图集
+    /// 的 scale（`_getTextureData` 的命中图集，TS `_textureData.parent.scale`,
+    /// Slot.ts:412）。`atlas_scale` 只在 `texture_data` 非空时生效。
+    ///
+    /// 判重同时比较贴图与图集 scale：TS 的 `TextureData.parent` 是对象引用，
+    /// 同名图集（值相等、scale 不同）在 TS 身份比较下算变化。
+    pub fn replace_texture_data_with_atlas_scale(
+        &mut self,
+        texture_data: Option<TextureData>,
+        atlas_scale: f64,
+        index: i32,
+    ) {
+        // :864-869
+        let Some(index) = self.resolve_replace_index(index) else {
+            return;
+        };
+
+        let atlas_scale = texture_data.as_ref().map(|_| atlas_scale);
+        // :871-872
+        let display_frame = self
+            .display_frames
+            .get_mut(index)
+            .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:871）");
+        if display_frame.texture_data != texture_data
+            || display_frame.texture_atlas_scale != atlas_scale
+        {
+            display_frame.texture_data = texture_data; // :873
+            display_frame.texture_atlas_scale = atlas_scale;
+            if index as i32 == self.display_index {
                 // :875
                 self.display_data_dirty = true; // :876 只置 displayData 脏（不置 displayDirty）
             }
@@ -1383,22 +1441,15 @@ impl Slot {
     /// `value: Option<DisplayHandle>`：`None` = TS null；`Armature(idx)` = 子骨架。
     pub fn replace_display(&mut self, value: Option<DisplayHandle>, index: i32) {
         // :884-889
-        let mut index = index;
-        if index < 0 {
-            index = if self.display_index < 0 {
-                0
-            } else {
-                self.display_index
-            };
-        } else if (index as usize) >= self.display_frames.len() {
+        let Some(index) = self.resolve_replace_index(index) else {
             return;
-        }
+        };
 
         // :891-894（先结束 display_frames 的可变借用，再做全 self 访问）
         let (changed, prev_display) = {
             let display_frame = self
                 .display_frames
-                .get_mut(index as usize)
+                .get_mut(index)
                 .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:891）");
             let changed = display_frame.display != value; // :892
             let prev_display = display_frame.display; // :893
@@ -1437,7 +1488,7 @@ impl Slot {
             self.adapter.init_display(value, true); // :915 isRetain = true
         }
 
-        if index == self.display_index {
+        if index as i32 == self.display_index {
             // :918
             self.display_dirty = true; // :919 置 displayDirty，不是 displayDataDirty
         }

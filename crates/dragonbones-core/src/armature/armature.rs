@@ -175,9 +175,45 @@ impl Armature {
         self.runtime_cache_frame_rate
     }
 
-    /// 阶段 6：setter；按官方 `cacheFrames` 初始化 per-Armature 表（D-6.1/D-6.2）。
-    pub fn set_cache_frame_rate(&mut self, value: f64) {
-        self.runtime_cache_frame_rate = value.max(0.0);
+    /// 对齐 `Armature.cacheFrameRate` setter（Armature.ts:768-779）+
+    /// `ArmatureData.cacheFrames`（ArmatureData.ts:269-278）的本地语义。
+    ///
+    /// TS 两层语义（逐行）：
+    /// ```text
+    /// set cacheFrameRate(value) {                       // Armature.ts:768
+    ///     if (data.cacheFrameRate !== value) {          // :769 外层：不等才进入
+    ///         data.cacheFrames(value);                  // :771
+    ///         for (slot of slots) slot.childArmature?.cacheFrameRate = value;  // :773-777
+    ///     }
+    /// }
+    /// cacheFrames(rate) {                               // ArmatureData.ts:269
+    ///     if (this.cacheFrameRate > 0) return;          // :270-272 已缓存：**不赋值**
+    ///     this.cacheFrameRate = rate;                   // :274
+    ///     for (k in animations) animations[k].cacheFrames(this.cacheFrameRate);
+    /// }
+    /// ```
+    /// 关键修正（D-6.2）：Rust 原实现先写 `runtime_cache_frame_rate` 再
+    /// `initialize`（后者在“已初始化”时早退）→ 第二次设置后 getter 报新值而
+    /// 帧表仍是旧值。现在只在 `cacheFrames` 真正赋值成功时才写字段：
+    /// `runtime_cache_frame_rate > 0` 时整段早退（getter/表保持旧值一致）。
+    ///
+    /// 返回值 = TS:769 外层分支是否进入（`data.cacheFrameRate !== value`）。
+    /// 调用方（[`crate::factory::BaseFactory::set_armature_cache_frame_rate`]、
+    /// Slot 子骨架继承）据此决定是否继续递归 child armature（Armature.ts:773-777）。
+    /// 本方法本身**不递归**：child 关系在 arena（`ArmatureIdx`）里，递归由调用方完成。
+    ///
+    /// `value.max(0.0)`：Rust 既有 clamp（TS 允许负值且 `AnimationData.cacheFrames`
+    /// 会 `max(..., 1)`；负 rate 在 Rust 侧无消费语义，保留 clamp 以免引入
+    /// `runtime_cache_frame_rate < 0` 的新状态，见 D-6.2）。
+    pub fn set_cache_frame_rate(&mut self, value: f64) -> bool {
+        let value = value.max(0.0);
+        if self.runtime_cache_frame_rate == value {
+            return false; // :769 外层相等 → 不赋值、不递归
+        }
+        if self.runtime_cache_frame_rate > 0.0 {
+            return true; // :270-272 `cacheFrameRate > 0` 早退（不赋值）→ 外层已进入
+        }
+        self.runtime_cache_frame_rate = value; // :274
         if value > 0.0 {
             let armature_data = self
                 .data
@@ -187,6 +223,7 @@ impl Armature {
             self.frame_cache.initialize(armature_data, value);
             self.animation.mark_animation_dirty();
         }
+        true
     }
 
     /// 对齐 `Armature.getBone(name)`（Armature.ts:589，线性遍历按名找）。

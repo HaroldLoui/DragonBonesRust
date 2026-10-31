@@ -178,6 +178,49 @@ impl<'a> RuntimeCtx<'a> {
     pub(crate) fn buffer_event(&mut self, event: EventObject) {
         self.pending_events.push_back(event);
     }
+
+    /// Slot 子骨架继承路径的 `Armature.cacheFrameRate = value`（Slot.ts:551-555）。
+    ///
+    /// TS 的 Armature setter 会继续向 childArmature 递归（Armature.ts:773-777），
+    /// 运行时 arena 版在此完成（去重防环）。语义与
+    /// [`Armature::set_cache_frame_rate`] 同：外层相等/已缓存（`>0`）时不再向下；
+    /// 本方法不写 Factory 的 rate 继承表（那是 build 期语义，见 `BaseFactory`）。
+    pub(crate) fn set_cache_frame_rate_recursive(&mut self, id: ArmatureIdx, rate: f64) {
+        self.set_cache_frame_rate_recursive_inner(id, rate, &mut Vec::new());
+    }
+
+    fn set_cache_frame_rate_recursive_inner(
+        &mut self,
+        id: ArmatureIdx,
+        rate: f64,
+        seen: &mut Vec<u32>,
+    ) {
+        if seen.contains(&id.0) {
+            return; // 防环（TS 对象成环会无限递归；数据树本无环）
+        }
+        seen.push(id.0);
+        let Some(entered) = self
+            .armature_mut(id)
+            .map(|armature| armature.set_cache_frame_rate(rate))
+        else {
+            return;
+        };
+        if !entered {
+            return; // Armature.ts:769 外层相等 → 不递归 child
+        }
+        let Some(children) = self.armature(id).map(|armature| {
+            armature
+                .slots
+                .iter()
+                .filter_map(|slot| slot.child_armature)
+                .collect::<Vec<_>>()
+        }) else {
+            return;
+        };
+        for child in children {
+            self.set_cache_frame_rate_recursive_inner(child, rate, seen);
+        }
+    }
 }
 
 #[cfg(test)]
