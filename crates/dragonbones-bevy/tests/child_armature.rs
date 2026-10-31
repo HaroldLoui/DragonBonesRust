@@ -447,3 +447,59 @@ fn only_the_currently_selected_armature_display_is_visible() {
         "the previously selected child armature is hidden, not frozen in place"
     );
 }
+
+#[test]
+fn despawning_the_child_root_alone_releases_its_subtree_and_keeps_the_parent() {
+    let (mut app, parent_root) = app_with_child_rig();
+    let parent_instance = app
+        .world()
+        .get::<DragonBonesInstance>(parent_root)
+        .expect("parent instance");
+    let parent_slots = parent_instance.slots.clone();
+    let (child_root, _parent_slot, _child_armature) = child_armature_root(&mut app);
+
+    let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+    assert_eq!(meshes_before, 2, "parent slot + child slot");
+
+    app.world_mut().entity_mut(child_root).despawn();
+    app.update();
+
+    assert!(
+        app.world().get_entity(child_root).is_err(),
+        "child root is gone"
+    );
+    assert!(
+        app.world()
+            .get::<DragonBonesInstance>(parent_root)
+            .is_some(),
+        "the parent armature keeps running"
+    );
+    for slot in &parent_slots {
+        assert!(
+            app.world().get_entity(*slot).is_ok(),
+            "parent slots are untouched"
+        );
+    }
+    assert_eq!(
+        app.world().resource::<Assets<Mesh>>().len(),
+        1,
+        "the child armature's meshes are released"
+    );
+    {
+        let runtime = app
+            .world()
+            .get_non_send::<DragonBonesRuntime>()
+            .expect("runtime resource");
+        assert_eq!(
+            runtime.bound_armature_count(),
+            1,
+            "only the parent binding remains registered"
+        );
+    }
+
+    // The core child armature stays alive (the parent slot still displays it),
+    // and despawning the parent still cleans everything up.
+    app.world_mut().entity_mut(parent_root).despawn();
+    app.update();
+    assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+}

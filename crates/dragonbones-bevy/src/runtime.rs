@@ -130,6 +130,13 @@ impl DragonBonesRuntime {
         (&self.factory, &mut self.bindings)
     }
 
+    /// Number of armatures (including child-armature displays) currently tracked
+    /// by the adapter. Mostly useful for diagnostics and tests.
+    #[must_use]
+    pub fn bound_armature_count(&self) -> usize {
+        self.bindings.len()
+    }
+
     fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         *self
             .data_refs
@@ -365,15 +372,20 @@ fn cleanup_armatures(
         else {
             continue;
         };
-        // Child-armature roots are adapter-internal (children of a parent slot):
-        // when they are torn down, the top-level cleanup below releases the whole
-        // subtree. Despawning a child root on its own is not supported.
-        if runtime
+        // A child-armature root removed on its own is not part of the public
+        // lifecycle, but it must not leak: release its subtree's GPU assets and
+        // factory registrations, keep the core armature alive (the parent slot's
+        // display still references it and core disposes it with the parent), and
+        // warn because the adapter cannot respawn it until the parent is rebuilt.
+        let dispose_root = runtime
             .bindings
             .get(&root_armature)
-            .is_some_and(|binding| binding.parent.is_some())
-        {
-            continue;
+            .is_none_or(|binding| binding.parent.is_none());
+        if !dispose_root {
+            warn!(
+                "DragonBones: child armature root {:?} was removed directly; releasing its subtree, but it will not be respawned until the parent armature is rebuilt",
+                entity
+            );
         }
 
         // Collect the armature and every child-armature binding below it.
@@ -420,7 +432,9 @@ fn cleanup_armatures(
             }
         }
 
-        runtime.factory.dispose_armature(root_armature);
+        if dispose_root {
+            runtime.factory.dispose_armature(root_armature);
+        }
     }
 }
 

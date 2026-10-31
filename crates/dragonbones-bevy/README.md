@@ -69,9 +69,11 @@ is the armature's world placement; each slot is spawned as a child with a
   visibility inherits through the parent chain, and it is released recursively
   when the parent root is despawned (`DragonBonesChildArmature` marks the nested
   root). Only the slot's *current* armature display is visible; switching the
-  display index hides the previously selected child armature. Limitation: core
-  builds child armatures with a null proxy, so their events are not forwarded as
-  Bevy messages yet.
+  display index hides the previously selected child armature. A child root
+  despawned on its own releases its subtree's GPU assets (with a warning) but is
+  not respawned until the parent is rebuilt; core still owns the child armature
+  and disposes it with the parent. Limitation: core builds child armatures with a
+  null proxy, so their events are not forwarded as Bevy messages yet.
 - Visibility is hierarchical: visible slots are written as `Visibility::Inherited`,
   hidden ones as `Visibility::Hidden`, and the root's own `Visibility` is part of
   the dirty check — so `root.insert(Visibility::Hidden)` hides an armature like any
