@@ -290,11 +290,10 @@ impl Plugin for DragonBonesPlugin {
         // Slot visibility is written as inherited/hidden, so the adapter relies
         // on Bevy's hierarchy propagation; the mesh asset collection is also
         // registered here so headless/adapter-only apps can spawn slots.
-        // Slot meshes and the atlas page image are part of the adapter's output,
-        // so the asset types are registered here too (asset-only/headless apps do
-        // not necessarily add the render plugins that normally do this).
+        // Slot meshes are part of the adapter's output, so the asset type is
+        // registered here too (asset-only/headless apps do not necessarily add
+        // the render plugins that normally do this).
         app.init_asset::<Mesh>()
-            .init_asset::<Image>()
             .init_asset::<SkeletonAsset>()
             .init_asset::<AtlasAsset>()
             .add_plugins(Material2dPlugin::<DragonBonesMaterial>::default())
