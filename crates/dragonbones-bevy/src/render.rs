@@ -167,6 +167,10 @@ pub struct DragonBonesSlotVisual {
     /// Blend mode currently applied by the slot's material.
     pub blend: DragonBonesBlend,
     pub last_display_frame: Option<usize>,
+    /// Fingerprint of the display/frame content the mesh was built from; the
+    /// sync pass rebuilds the mesh when the content changes without a frame
+    /// index change (runtime `replace_*` calls).
+    pub content_hash: u64,
     /// Last color baked into the mesh's `ATTRIBUTE_COLOR`; the slot only rewrites
     /// vertex colors when this changes.
     pub color: Color,
@@ -226,6 +230,7 @@ pub(crate) fn spawn_slot(
                 atlas_image: atlas_image.clone(),
                 blend,
                 last_display_frame: slot.display_frame,
+                content_hash: crate::hash::slot_visual_hash(slot),
                 color: slot_color(slot),
                 weighted,
                 unskinned,

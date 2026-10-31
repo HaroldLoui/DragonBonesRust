@@ -65,8 +65,18 @@ is the armature's world placement; each slot is spawned as a child with a
   slot entity that displays it; its world matrix is that slot's world matrix,
   visibility inherits through the parent chain, and it is released recursively
   when the parent root is despawned (`DragonBonesChildArmature` marks the nested
-  root). Limitation: core builds child armatures with a null proxy, so their
-  events are not forwarded as Bevy messages yet.
+  root). Only the slot's *current* armature display is visible; switching the
+  display index hides the previously selected child armature. Limitation: core
+  builds child armatures with a null proxy, so their events are not forwarded as
+  Bevy messages yet.
+- Visibility is hierarchical: visible slots are written as `Visibility::Inherited`,
+  hidden ones as `Visibility::Hidden`, and the root's own `Visibility` is part of
+  the dirty check — so `root.insert(Visibility::Hidden)` hides an armature like any
+  other Bevy entity. The sync system is ordered before
+  `VisibilitySystems::VisibilityPropagate`.
+- Runtime `replace_texture_data` / `replace_skin` calls are picked up in the same
+  frame: the dirty check hashes display-frame content (region, geometry identity,
+  pivot, child armature), not just the display index.
 - Color multipliers + global alpha baked into per-vertex colors, with one shared
   `DragonBonesMaterial` per `(atlas page, blend mode)` (see below).
 - DragonBones blend modes: Normal / Add / Multiply / Screen through a custom
@@ -139,16 +149,15 @@ Notes:
 ## Armature-level dirty check
 
 Every frame the sync system hashes the armature pose (FNV-1a over slot order,
-slot matrices, display frames, visibility, colors, interpolated deform vertices
-and all bone matrices) and compares it plus the root affine with the values
-stored in the `ArmatureBinding`. Unchanged armatures skip the per-slot pass
-entirely. This is what makes idle characters cheap:
-
-| static sync, `PostUpdate` only | dirty check off | dirty check on |
-|---|---|---|
-| 1 armature | 2.156 µs | 1.220 µs |
-| 10 armatures | 11.51 µs | 5.196 µs |
-| 100 armatures | 118.2 µs | 46.45 µs |
+slot matrices, display frames and their *content* — region/geometry/pivot —,
+visibility, colors, interpolated deform vertices and all bone matrices) and
+compares it plus the root affine with the values stored in the
+`ArmatureBinding`. Unchanged armatures skip the per-slot pass entirely; that is
+what makes idle characters cheap. The numbers live in `docs/optimization-roadmap.md`
+§3.2 (single source of truth): the normalized static-100-with-dirty-check cost
+after the 2026-10-31 P1 fixes is ≈88 µs, versus ≈78.6 µs before child-armature
+support (the added content fingerprint costs ≈10–12% and makes runtime
+`replace_*` calls refresh in the same frame).
 
 A hash is used instead of a hand-maintained dirty flag so that *every* mutation
 source (animation advance, play/seek, replace APIs, moving the root) invalidates

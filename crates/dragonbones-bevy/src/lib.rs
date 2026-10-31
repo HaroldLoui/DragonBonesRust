@@ -21,6 +21,7 @@
 mod asset;
 mod blend;
 mod events;
+mod hash;
 mod material;
 mod math;
 mod player;

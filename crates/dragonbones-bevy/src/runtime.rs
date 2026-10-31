@@ -55,9 +55,10 @@ pub(crate) struct ArmatureBinding {
     pub(crate) last_pose: Option<u64>,
     /// Parent armature when this binding belongs to a child-armature display.
     pub(crate) parent: Option<ArmatureIdx>,
-    /// Last effective visibility inherited from the parent slot, so a parent
-    /// slot hiding/showing forces the child armature's slots to resync.
-    pub(crate) last_parent_visible: Option<bool>,
+    /// Effective visibility written by the last sync: toggling the root's
+    /// `Visibility` has to resync the slots so concrete inherited/hidden values
+    /// stay in sync with the pose.
+    pub(crate) last_visible: Option<bool>,
 }
 
 /// Marks the root entity spawned for a child-armature display.
@@ -98,6 +99,15 @@ impl Default for DragonBonesSyncConfig {
 }
 
 impl DragonBonesRuntime {
+    /// Splits the runtime into the core factory and the adapter bindings so the
+    /// sync system can hold an immutable factory borrow and a mutable bindings
+    /// borrow at the same time.
+    pub(crate) fn split_mut(
+        &mut self,
+    ) -> (&BaseFactory, &mut HashMap<ArmatureIdx, ArmatureBinding>) {
+        (&self.factory, &mut self.bindings)
+    }
+
     fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         *self
             .data_refs
@@ -171,7 +181,11 @@ impl Plugin for DragonBonesPlugin {
         // available when the first pipeline is specialized.
         material::register(app);
 
-        app.init_asset::<SkeletonAsset>()
+        // Slot visibility is written as inherited/hidden, so the adapter relies
+        // on Bevy's hierarchy propagation; the mesh asset collection is also
+        // registered here so headless/adapter-only apps can spawn slots.
+        app.init_asset::<Mesh>()
+            .init_asset::<SkeletonAsset>()
             .init_asset::<AtlasAsset>()
             .add_plugins(Material2dPlugin::<DragonBonesMaterial>::default())
             .register_asset_loader(SkeletonAssetLoader)
@@ -195,6 +209,7 @@ impl Plugin for DragonBonesPlugin {
                 PostUpdate,
                 DragonBonesSystems::SyncTransforms
                     .after(TransformSystems::Propagate)
+                    .before(VisibilitySystems::VisibilityPropagate)
                     .before(VisibilitySystems::CalculateBounds)
                     .before(VisibilitySystems::UpdateFrusta)
                     .before(VisibilitySystems::CheckVisibility),
@@ -493,8 +508,8 @@ fn spawn_child_armatures(
                 atlas_key,
                 last_root: None,
                 last_pose: None,
-                last_parent_visible: None,
                 parent: Some(parent_armature),
+                last_visible: None,
             },
         );
         commands.entity(child_root).insert(DragonBonesInstance {
@@ -617,8 +632,8 @@ fn setup_armatures(
                 atlas_key,
                 last_root: None,
                 last_pose: None,
-                last_parent_visible: None,
                 parent: None,
+                last_visible: None,
             },
         );
         commands.entity(root).insert(DragonBonesInstance {

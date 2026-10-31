@@ -331,3 +331,57 @@ fn runtime_blend_mode_change_swaps_material_and_cleanup_releases_all() {
         "cleanup releases every (image, blend) key the armature acquired"
     );
 }
+
+#[test]
+fn two_slots_switching_to_the_same_new_blend_in_one_frame_share_one_reference() {
+    let mut app = test_app();
+    let (skeleton, atlas) = install_assets(&mut app, "Dragon_ske.json", "Dragon_tex.json");
+    let root = spawn_armature(&mut app, &skeleton, &atlas);
+    app.update();
+
+    let (armature, slots) = instance(&app, root);
+    assert_eq!(
+        app.world().resource::<Assets<DragonBonesMaterial>>().len(),
+        1,
+        "plain Dragon starts with one normal-blend material"
+    );
+    let changed: Vec<SlotIdx> = slots
+        .iter()
+        .take(2)
+        .map(|entity| {
+            app.world()
+                .get::<DragonBonesSlot>(*entity)
+                .expect("slot")
+                .slot
+        })
+        .collect();
+    {
+        let mut runtime = app
+            .world_mut()
+            .get_non_send_mut::<DragonBonesRuntime>()
+            .expect("runtime");
+        let core_armature = runtime.factory.armatures[armature.index()]
+            .as_mut()
+            .expect("live armature");
+        for slot in core_armature.slots.iter_mut() {
+            if changed.contains(&slot.idx) {
+                slot.blend_mode = BlendMode::Add;
+            }
+        }
+    }
+
+    app.update();
+    assert_eq!(
+        app.world().resource::<Assets<DragonBonesMaterial>>().len(),
+        2,
+        "both slots share one additive material"
+    );
+
+    app.world_mut().entity_mut(root).despawn();
+    app.update();
+    assert_eq!(
+        app.world().resource::<Assets<DragonBonesMaterial>>().len(),
+        0,
+        "the armature only acquired the additive material once and cleanup released it"
+    );
+}

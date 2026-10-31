@@ -239,6 +239,16 @@ cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armat
 | animated Rooster 1 / 10 armature | 36.0 µs / 140.2 µs（11.6 µs/armature） |
 | advance-only Rooster 1 / 10 | 6.36 µs / 62.8 µs（6.27 µs/armature） |
 
+**2026-10-31 修复后复测（P1 技术债修复）**：本次机器比 10-29 慢，用同机 `advance-only Dragon 10`（27.0 µs vs 基线 14.5 µs，≈1.86×）与 core `advance_time`（5.6 µs vs 3.31 µs，≈1.69×）归一化，折算系数取 ≈1.75×：
+
+| 场景（归一化后） | 10-29 基线 | 修复前（本会话实测） | 修复后 |
+|---|---|---|---|
+| static 100 armature，脏标记开 | 78.6 µs | ≈116 µs | **≈88 µs** |
+| static 10 armature，脏标记开 | 33.0 µs | ≈38 µs | **≈28 µs** |
+| static 100 armature，脏标记关 | 162.6 µs | ≈223 µs | ≈221 µs（该路径本就逐槽同步） |
+
+修复点：`slot_orders` 只对 dirty armature（以及有 child armature 的父 armature）构建，无 child 的常见场景完全跳过子骨架解析；同时把 `held_materials` 快照 clone 与 `new_materials` 提交表删掉，改为直接读写 binding 的材质键集。剩余约 10–12% 开销来自新增的内容指纹（`hash.rs`，纯数值、无字符串），它换来 `replace_texture_data`/`replace_skin` 这类“不改 display 索引只改内容”的运行时替换能当帧刷新。
+
 **读数**：`animated` 减去 `advance` 得到适配层每 armature 的 sync 成本——Dragon（18 slot，图集 quad 为主）约 2.5 µs，Rooster（15 slot，含 weighted mesh）约 5.3 µs，**按 slot 折算蒙皮路径贵约 2.6 倍**，即 CPU 蒙皮/FFD 是动画场景下适配层的主要开销（见 §1.4 的 GPU skinning 决策）。core `advance_time` 在 Rooster（63 骨骼）上 6.3 µs/armature，已超过适配层 sync，属于 §2 的 core 动画推进本身。
 
 ### 3.3 待补的基线

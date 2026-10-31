@@ -13,7 +13,8 @@ use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::prelude::*;
 use dragonbones_bevy::{
     AtlasAsset, DragonBonesArmature, DragonBonesInstance, DragonBonesMaterial, DragonBonesPlugin,
-    DragonBonesRuntime, DragonBonesSyncConfig, SkeletonAsset,
+    DragonBonesRuntime, DragonBonesSlot, DragonBonesSlotVisual, DragonBonesSyncConfig,
+    SkeletonAsset, SlotRenderKind,
 };
 use dragonbones_core::armature::ArmatureIdx;
 use dragonbones_core::model::TextureAtlasData;
@@ -339,5 +340,153 @@ fn skip_clean_armatures_can_be_disabled() {
         slot_x(&app, slot),
         TAMPERED_X,
         "with the dirty check disabled every slot is written every sync"
+    );
+}
+
+#[test]
+fn hiding_the_root_hides_its_slots_and_restoring_shows_them_again() {
+    let mut app = test_app();
+    let (skeleton, atlas) = install_dragon_assets(&mut app);
+    let root = spawn_armature(&mut app, &skeleton, &atlas);
+    app.update();
+
+    let (_armature, slots) = instance(&app, root);
+    for slot in &slots {
+        assert!(
+            matches!(
+                *app.world()
+                    .get::<Visibility>(*slot)
+                    .expect("slot visibility"),
+                Visibility::Inherited
+            ),
+            "visible slots inherit visibility so ancestors can hide them"
+        );
+    }
+
+    app.world_mut().entity_mut(root).insert(Visibility::Hidden);
+    app.update();
+    for slot in &slots {
+        assert!(
+            matches!(
+                *app.world()
+                    .get::<Visibility>(*slot)
+                    .expect("slot visibility"),
+                Visibility::Hidden
+            ),
+            "hiding the armature root hides every slot"
+        );
+    }
+
+    app.world_mut()
+        .entity_mut(root)
+        .insert(Visibility::Inherited);
+    app.update();
+    for slot in &slots {
+        assert!(
+            matches!(
+                *app.world()
+                    .get::<Visibility>(*slot)
+                    .expect("slot visibility"),
+                Visibility::Inherited
+            ),
+            "showing the root again restores inherited visibility"
+        );
+    }
+}
+
+/// Reads the UV attribute of a slot's mesh.
+fn mesh_uvs(app: &App, slot: Entity) -> Vec<[f32; 2]> {
+    let handle = app
+        .world()
+        .get::<Mesh2d>(slot)
+        .expect("slot mesh")
+        .0
+        .clone();
+    let mesh = app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(&handle)
+        .expect("mesh asset");
+    match mesh
+        .attribute(Mesh::ATTRIBUTE_UV_0)
+        .expect("slot mesh has UVs")
+    {
+        bevy::mesh::VertexAttributeValues::Float32x2(values) => values.clone(),
+        _ => panic!("expected float32x2 UVs"),
+    }
+}
+
+#[test]
+fn replacing_slot_texture_data_rebuilds_the_mesh_in_the_same_frame() {
+    let mut app = test_app();
+    let (skeleton, atlas) = install_dragon_assets(&mut app);
+    let root = spawn_armature(&mut app, &skeleton, &atlas);
+    app.update();
+
+    let (armature, slots) = instance(&app, root);
+    // Pick a slot whose current display frame has an explicit texture region.
+    let (slot_entity, slot_idx, frame_index) = slots
+        .iter()
+        .find_map(|entity| {
+            // Image slots derive their UVs from the atlas region, so a region
+            // change must show up in the mesh; mesh slots bake geometry UVs.
+            if app.world().get::<DragonBonesSlotVisual>(*entity)?.kind != SlotRenderKind::Local {
+                return None;
+            }
+            let slot_idx = app.world().get::<DragonBonesSlot>(*entity)?.slot;
+            let mut runtime = app
+                .world_mut()
+                .get_non_send_mut::<DragonBonesRuntime>()
+                .expect("runtime");
+            let core_armature = runtime.factory.armatures[armature.index()]
+                .as_mut()
+                .expect("live armature");
+            let slot = core_armature
+                .slots
+                .iter()
+                .find(|slot| slot.idx == slot_idx)?;
+            let frame_index = slot.display_frame?;
+            slot.display_frames[frame_index]
+                .texture_data
+                .as_ref()
+                .filter(|texture| texture.region.width > 0.0)?;
+            Some((*entity, slot_idx, frame_index))
+        })
+        .expect("Dragon has a textured slot");
+
+    let uvs_before = mesh_uvs(&app, slot_entity);
+
+    // Simulate a runtime `replace_texture_data`: change the region without
+    // touching the slot's display index (as core's replace APIs do).
+    {
+        let mut runtime = app
+            .world_mut()
+            .get_non_send_mut::<DragonBonesRuntime>()
+            .expect("runtime");
+        let core_armature = runtime.factory.armatures[armature.index()]
+            .as_mut()
+            .expect("live armature");
+        let slot = core_armature
+            .slots
+            .iter_mut()
+            .find(|slot| slot.idx == slot_idx)
+            .expect("slot");
+        let mut texture = slot.display_frames[frame_index]
+            .texture_data
+            .clone()
+            .expect("texture data");
+        texture.region.x += 3.0;
+        texture.region.width = (texture.region.width - 2.0).max(1.0);
+        // Official replace path: write through `replace_texture_data`, which
+        // marks the display data dirty; core then re-resolves `slot.texture_data`.
+        slot.replace_texture_data(Some(texture), -1);
+    }
+
+    app.update();
+
+    let uvs_after = mesh_uvs(&app, slot_entity);
+    assert_ne!(
+        uvs_before, uvs_after,
+        "the adapter must notice display-frame content changes that keep the display index"
     );
 }
