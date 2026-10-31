@@ -10,8 +10,9 @@ use std::sync::Arc;
 use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::prelude::*;
 use dragonbones_bevy::{
-    AtlasAsset, DragonBonesArmature, DragonBonesCommand, DragonBonesInstance,
-    DragonBonesPlayConfig, DragonBonesPlugin, DragonBonesRuntime, SkeletonAsset,
+    AtlasAsset, DragonBonesArmature, DragonBonesCommand, DragonBonesCommandError,
+    DragonBonesInstance, DragonBonesPlayConfig, DragonBonesPlaybackState, DragonBonesPlugin,
+    DragonBonesRuntime, SkeletonAsset,
 };
 use dragonbones_core::model::TextureAtlasData;
 use dragonbones_core::parser::ObjectDataParser;
@@ -232,12 +233,111 @@ fn set_speed_and_play_config_reach_the_core_state() {
     );
 }
 
+fn command_errors(app: &App) -> Vec<DragonBonesCommandError> {
+    app.world()
+        .resource::<Messages<DragonBonesCommandError>>()
+        .iter_current_update_messages()
+        .cloned()
+        .collect()
+}
+
 #[test]
-fn command_for_a_non_armature_entity_is_ignored() {
+fn command_for_a_non_armature_entity_reports_an_error() {
     let mut app = test_app();
     let unrelated = app.world_mut().spawn_empty().id();
     app.world_mut()
         .write_message(DragonBonesCommand::play(unrelated, "walk"));
-    // Must not panic; the command is dropped with a warning.
     app.update();
+    let errors = command_errors(&app);
+    assert_eq!(errors.len(), 1, "errors: {errors:?}");
+    assert_eq!(errors[0].armature, unrelated);
+    assert!(errors[0].message.contains("DragonBonesInstance"));
+}
+
+#[test]
+fn unknown_animation_reports_an_error_instead_of_silently_continuing() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "stand");
+    app.update();
+    // `play` mirrors the reference fallback to the last state for unknown names,
+    // but `play_config` reports failure via `None`, which the adapter surfaces.
+    app.world_mut()
+        .write_message(DragonBonesCommand::play_config(
+            root,
+            DragonBonesPlayConfig::new("does_not_exist"),
+        ));
+    app.update();
+    let errors = command_errors(&app);
+    assert_eq!(errors.len(), 1, "errors: {errors:?}");
+    assert!(errors[0].message.contains("does_not_exist"));
+}
+
+#[test]
+fn play_inherits_the_armature_level_speed() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "stand");
+    app.update();
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_speed(root, 0.5));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::play(root, "walk"));
+    app.update();
+
+    let playback = *app
+        .world()
+        .get::<DragonBonesPlaybackState>(root)
+        .expect("playback state");
+    assert!((playback.time_scale - 0.5).abs() < 1e-9);
+    assert!(!playback.paused);
+    let walk = states(&app, root)
+        .into_iter()
+        .find(|(name, _, _)| name == "walk")
+        .expect("walk state");
+    assert!(
+        (walk.1 - 0.5).abs() < 1e-9,
+        "play must inherit the armature speed, got {walk:?}"
+    );
+}
+
+#[test]
+fn play_while_paused_starts_frozen_and_resume_restores_the_speed() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "stand");
+    app.update();
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_speed(root, 0.75));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::pause(root));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::play(root, "walk"));
+    app.update();
+
+    let playback = *app
+        .world()
+        .get::<DragonBonesPlaybackState>(root)
+        .expect("playback state");
+    assert!(playback.paused);
+    assert!((playback.time_scale - 0.75).abs() < 1e-9);
+    assert!(
+        states(&app, root).iter().all(|(_, scale, _)| *scale == 0.0),
+        "a clip started while paused stays frozen: {:?}",
+        states(&app, root)
+    );
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::resume(root));
+    app.update();
+    let walk = states(&app, root)
+        .into_iter()
+        .find(|(name, _, _)| name == "walk")
+        .expect("walk state");
+    assert!(
+        (walk.1 - 0.75).abs() < 1e-9,
+        "resume restores the remembered armature speed, got {walk:?}"
+    );
 }

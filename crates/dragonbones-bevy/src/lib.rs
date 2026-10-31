@@ -34,11 +34,14 @@ pub use blend::DragonBonesBlend;
 pub use events::DragonBonesEvent;
 pub use material::DragonBonesMaterial;
 pub use math::{matrix_to_affine3a, slot_z};
-pub use player::{DragonBonesAction, DragonBonesCommand, DragonBonesPlayConfig};
+pub use player::{
+    DragonBonesAction, DragonBonesCommand, DragonBonesCommandError, DragonBonesPlayConfig,
+};
 pub use render::{DragonBonesSlotVisual, SlotRenderKind};
 pub use runtime::{
-    DragonBonesArmature, DragonBonesChildArmature, DragonBonesInstance, DragonBonesPlugin,
-    DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig, DragonBonesSystems,
+    DragonBonesArmature, DragonBonesChildArmature, DragonBonesInstance, DragonBonesPlaybackState,
+    DragonBonesPlugin, DragonBonesRuntime, DragonBonesSlot, DragonBonesSyncConfig,
+    DragonBonesSystems,
 };
 
 pub mod prelude {

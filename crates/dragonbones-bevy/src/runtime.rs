@@ -61,6 +61,28 @@ pub(crate) struct ArmatureBinding {
     pub(crate) last_visible: Option<bool>,
 }
 
+/// Adapter-level playback state for one armature root.
+///
+/// Core animation states each carry their own `time_scale` (matching the
+/// reference runtime); this component remembers the *desired* armature speed and
+/// whether the armature is paused so a subsequent `Play` inherits them.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct DragonBonesPlaybackState {
+    /// Desired playback speed (`1.0` = authored speed).
+    pub time_scale: f64,
+    /// Whether commands should keep newly started animations frozen.
+    pub paused: bool,
+}
+
+impl Default for DragonBonesPlaybackState {
+    fn default() -> Self {
+        Self {
+            time_scale: 1.0,
+            paused: false,
+        }
+    }
+}
+
 /// Marks the root entity spawned for a child-armature display.
 ///
 /// Child armatures are built by core when a slot's display is an armature; the
@@ -195,6 +217,7 @@ impl Plugin for DragonBonesPlugin {
             .init_resource::<DragonBonesEventQueue>()
             .add_message::<DragonBonesEvent>()
             .add_message::<DragonBonesCommand>()
+            .add_message::<crate::player::DragonBonesCommandError>()
             .insert_non_send(DragonBonesRuntime::default())
             .configure_sets(
                 Update,
@@ -512,10 +535,13 @@ fn spawn_child_armatures(
                 last_visible: None,
             },
         );
-        commands.entity(child_root).insert(DragonBonesInstance {
-            armature: child_idx,
-            slots: spawned.slot_entities,
-        });
+        commands.entity(child_root).insert((
+            DragonBonesInstance {
+                armature: child_idx,
+                slots: spawned.slot_entities,
+            },
+            DragonBonesPlaybackState::default(),
+        ));
         pending.extend(
             grandchildren
                 .into_iter()
@@ -636,10 +662,13 @@ fn setup_armatures(
                 last_visible: None,
             },
         );
-        commands.entity(root).insert(DragonBonesInstance {
-            armature: armature_idx,
-            slots: spawned.slot_entities.clone(),
-        });
+        commands.entity(root).insert((
+            DragonBonesInstance {
+                armature: armature_idx,
+                slots: spawned.slot_entities.clone(),
+            },
+            DragonBonesPlaybackState::default(),
+        ));
         spawn_child_armatures(
             &mut commands,
             &mut runtime,

@@ -24,7 +24,7 @@ use dragonbones_core::animation::StateId;
 use dragonbones_core::armature::Armature;
 use dragonbones_core::model::AnimationConfig;
 
-use crate::runtime::{DragonBonesInstance, DragonBonesRuntime};
+use crate::runtime::{DragonBonesInstance, DragonBonesPlaybackState, DragonBonesRuntime};
 
 /// Configuration for starting an animation with fade/seek/speed options.
 ///
@@ -97,11 +97,13 @@ pub enum DragonBonesAction {
     PlayConfig(DragonBonesPlayConfig),
     /// Stop every animation on this armature.
     Stop,
-    /// Freeze the current animation states (`time_scale = 0`). Plays started
-    /// while paused are not affected.
+    /// Freeze the current animation states (`time_scale = 0`); the armature-level
+    /// playback state remembers the desired speed, and clips started while paused
+    /// stay frozen until [`Self::Resume`].
     Pause,
-    /// Resume at normal speed (`time_scale = 1.0`); use `SetSpeed` afterwards
-    /// for a different speed.
+    /// Unpause and restore the remembered armature speed (`1.0` unless changed by
+    /// [`Self::SetSpeed`] / [`Self::PlayConfig`]); use `SetSpeed` afterwards for a
+    /// different speed.
     Resume,
     /// Set the playback speed of every active animation state.
     SetSpeed(f64),
@@ -183,6 +185,19 @@ impl DragonBonesCommand {
     }
 }
 
+/// Reported when a [`DragonBonesCommand`] cannot be applied.
+///
+/// Commands are fire-and-forget messages, so failures (entity without an
+/// armature, armature already disposed, non-existent animation name) are
+/// reported through this message instead of being swallowed by `warn!`.
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub struct DragonBonesCommandError {
+    /// Entity the command targeted.
+    pub armature: Entity,
+    /// Human-readable reason.
+    pub message: String,
+}
+
 fn set_state_time_scale(armature: &mut Armature, time_scale: f64) {
     let states: Vec<StateId> = armature.animation.states().map(|(id, _)| id).collect();
     for id in states {
@@ -192,13 +207,38 @@ fn set_state_time_scale(armature: &mut Armature, time_scale: f64) {
     }
 }
 
-fn apply(armature: &mut Armature, action: &DragonBonesAction) {
+/// Applies one command and returns an error description on failure.
+///
+/// The adapter keeps an armature-level playback state ([`DragonBonesPlaybackState`])
+/// so `Play` inherits the speed set by `SetSpeed` and a paused armature keeps
+/// newly started animations frozen; both are adapter-level conveniences layered
+/// on top of core's per-animation-state time scale (core itself has no
+/// armature-level speed/pause concept, matching the reference runtime).
+fn apply(
+    armature: &mut Armature,
+    action: &DragonBonesAction,
+    playback: Option<&mut DragonBonesPlaybackState>,
+) -> Result<(), String> {
+    let (desired_speed, paused) = playback
+        .as_ref()
+        .map_or((1.0, false), |state| (state.time_scale, state.paused));
     match action {
         DragonBonesAction::Play {
             animation,
             play_times,
         } => {
-            armature.animation.play(animation.as_deref(), *play_times);
+            if armature
+                .animation
+                .play(animation.as_deref(), *play_times)
+                .is_none()
+            {
+                return Err(format!(
+                    "animation `{}` does not exist",
+                    animation.as_deref().unwrap_or("<default>")
+                ));
+            }
+            set_state_time_scale(armature, if paused { 0.0 } else { desired_speed });
+            Ok(())
         }
         DragonBonesAction::PlayConfig(config) => {
             let mut animation_config = AnimationConfig {
@@ -209,27 +249,67 @@ fn apply(armature: &mut Armature, action: &DragonBonesAction) {
                 position: config.position,
                 ..AnimationConfig::default()
             };
-            armature.animation.play_config(&mut animation_config);
+            if armature
+                .animation
+                .play_config(&mut animation_config)
+                .is_none()
+            {
+                return Err(format!("animation `{}` does not exist", config.animation));
+            }
+            if let Some(state) = playback {
+                state.time_scale = config.time_scale;
+            }
+            // A paused armature stays frozen even when a new clip starts.
+            set_state_time_scale(armature, if paused { 0.0 } else { config.time_scale });
+            Ok(())
         }
-        DragonBonesAction::Stop => armature.animation.stop(None),
-        DragonBonesAction::Pause => set_state_time_scale(armature, 0.0),
-        DragonBonesAction::Resume => set_state_time_scale(armature, 1.0),
-        DragonBonesAction::SetSpeed(speed) => set_state_time_scale(armature, *speed),
+        DragonBonesAction::Stop => {
+            armature.animation.stop(None);
+            Ok(())
+        }
+        DragonBonesAction::Pause => {
+            if let Some(state) = playback {
+                state.paused = true;
+            }
+            set_state_time_scale(armature, 0.0);
+            Ok(())
+        }
+        DragonBonesAction::Resume => {
+            let speed = match playback {
+                Some(state) => {
+                    state.paused = false;
+                    state.time_scale
+                }
+                None => 1.0,
+            };
+            set_state_time_scale(armature, speed);
+            Ok(())
+        }
+        DragonBonesAction::SetSpeed(speed) => {
+            if let Some(state) = playback {
+                state.time_scale = *speed;
+            }
+            // While paused the desired speed is remembered but the states stay
+            // frozen until `Resume`.
+            set_state_time_scale(armature, if paused { 0.0 } else { *speed });
+            Ok(())
+        }
     }
 }
 
 /// Applies queued [`DragonBonesCommand`] messages before the frame's advance.
 pub(crate) fn apply_dragonbones_commands(
     mut commands: MessageReader<DragonBonesCommand>,
-    instances: Query<&DragonBonesInstance>,
+    mut errors: MessageWriter<DragonBonesCommandError>,
+    mut instances: Query<(&DragonBonesInstance, Option<&mut DragonBonesPlaybackState>)>,
     mut runtime: NonSendMut<DragonBonesRuntime>,
 ) {
     for command in commands.read() {
-        let Ok(instance) = instances.get(command.armature) else {
-            warn!(
-                "DragonBones command ignored: entity {:?} has no DragonBonesInstance",
-                command.armature
-            );
+        let Ok((instance, mut playback)) = instances.get_mut(command.armature) else {
+            errors.write(DragonBonesCommandError {
+                armature: command.armature,
+                message: "entity has no DragonBonesInstance".to_owned(),
+            });
             continue;
         };
         let Some(armature) = runtime
@@ -238,12 +318,17 @@ pub(crate) fn apply_dragonbones_commands(
             .get_mut(instance.armature.index())
             .and_then(Option::as_mut)
         else {
-            warn!(
-                "DragonBones command ignored: armature {:?} is not built",
-                instance.armature
-            );
+            errors.write(DragonBonesCommandError {
+                armature: command.armature,
+                message: format!("armature {:?} is not built", instance.armature),
+            });
             continue;
         };
-        apply(armature, &command.action);
+        if let Err(message) = apply(armature, &command.action, playback.as_deref_mut()) {
+            errors.write(DragonBonesCommandError {
+                armature: command.armature,
+                message,
+            });
+        }
     }
 }

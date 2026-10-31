@@ -223,9 +223,14 @@ fn switch(mut commands: MessageWriter<DragonBonesCommand>, root: Entity) {
 ```
 
 Supported actions: `Play` / `PlayConfig` (fade-in, start position, play count,
-time scale) / `Stop` / `Pause` / `Resume` / `SetSpeed`. Pause and speed work by
-setting the time scale of every active `AnimationState`; the demo's keyboard
-animation switching uses this API.
+time scale) / `Stop` / `Pause` / `Resume` / `SetSpeed`. Core keeps the time scale
+on each `AnimationState` (matching the reference runtime); the adapter layers an
+armature-level `DragonBonesPlaybackState` on top so a `Play` inherits the speed
+set by `SetSpeed` and an armature paused with `Pause` keeps clips started while
+paused frozen. Failed commands (entity without an instance, disposed armature,
+unknown animation in `play_config`) are reported through the
+`DragonBonesCommandError` message. The demo's keyboard animation switching uses
+this API.
 
 ## Not yet implemented
 
