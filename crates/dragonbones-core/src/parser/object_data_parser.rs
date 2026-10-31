@@ -2823,7 +2823,9 @@ impl ObjectDataParser {
             .get(self.deform_offset as usize + binary_offset::geometry::VERTEX_COUNT)?;
 
         if self.deform_weight.is_some() {
-            // TODO（对齐 TS `_parseDeformFrame` 的 weight 分支）。
+            // 与官方一致：TS `_parseDeformFrame` 的 `weight !== null` 分支本身就是
+            // `// TODO`（ObjectDataParser.ts:1993），不写任何帧浮点值。此处保持
+            // no-op，由 `tests/deform_weight.rs` 锁定（D-6.17）；不要自创语义。
         } else {
             self.reserve_frame_float(vertex_count as usize * 2);
             let mut i = 0usize;

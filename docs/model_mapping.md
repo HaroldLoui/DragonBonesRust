@@ -666,10 +666,10 @@ ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文
 | D-6.14 | Slot pivot 缩放用 `_textureData.parent.scale`（逐贴图所属图集对象引用，`Slot.ts:412`） | `DisplayFrame::texture_atlas_scale` 按帧登记工厂命中图集 scale（`_get_texture_data` 返回），`_updateDisplayData` 优先读帧级值，未登记回退 build 级单值；外部 `replace_texture_data` 清帧级值 | 同名多 atlas/autoSearch 跨 data/空壳 atlas 三种场景不再取错 pivot；`tests/texture_atlas_scale.rs` 覆盖命中 scale=2 与 replace 回退 |
 | D-6.15 | 缺 root/target 骨的约束在官方同样崩溃（`Constraint.ts:203` null 写属性、`:94/:110` `_target.global` TypeError） | Rust `Constraint::init` 保持 panic（与 TS 崩溃点对齐）；缺 chain 骨的 IK 按 TS 静默降级单骨 | 新增 3 个单测锁定行为；不做“warn+跳过”的偏离实现 |
 | D-6.16 | Slot 无内容版本号概念，适配层靠逐帧比较 display frame 内容判断运行时替换 | `Slot::content_revision`（Rust 侧簿记，非 TS 字段）：`_updateDisplayData` 检测到 display/geometry/texture 变化时自增；Bevy 同步只 hash 该计数器 + 结构字段 | 语义/数值零影响（golden 全绿）；`replace_texture_data`/`replace_skin` 仍当帧刷新，热路径去掉逐槽内容哈希 |
-| D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
+| D-6.17 | 官方 `_parseDeformFrame` 的 `weight !== null`（带权重 mesh 的 FFD）分支为 `// TODO`，不写帧浮点数据（ObjectDataParser.ts:1993） | Rust 保持 no-op（不自创数值语义），仅保留 `frameStart===0` 的 5 个 frameInt 头部写入 | `tests/deform_weight.rs` 注入 Rooster 加权 mesh 的 ffd 时间轴，断言解析成功且 `frame_float_array` 与基线逐值相同 || D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
 | D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override + child armature 递归已实现（按目标 skin display.path） | `tests/replace.rs` 覆盖 map 与 child 递归 |
-| D-6.10 | 官方 dbbin 样本无 mesh；不能证明二进制 geometry/weight 与官方等价 | 已按 `BinaryDataParser._parseGeometry` 移植，但只有 source-review，无 JS 对拍 | 不是已发现差异，是未验证风险；接入 mesh dbbin 前需补样本/合成测试 |
+| D-6.10 | 官方 dbbin 样本无 mesh；不能证明二进制 geometry/weight 与官方等价 | 已按 `BinaryDataParser._parseGeometry` 移植；现有对拍只覆盖 header/数组/时间轴（`tests/dbbin.rs`，2 个官方样本的 JSON↔dbbin 等价），mesh geometry/weight 仍只有 source-review 与合成单测 | **外部阻塞**：submodule 内所有 dbbin 样本（mecha×2、dragon_boy）均无 mesh，也没有导出器可生成 mesh dbbin；接入 mesh dbbin 前需补官方样本或导出器，届时用 `tools/irdump.mjs` 灌 in golden 对拍 |
 | D-6.11 | `Armature.replacedTexture` 属渲染对象 | 不实现，阶段 7 Bevy 适配层承担 | P1-5 的渲染部分 |
 
 ### 4.1 阶段 2 必读：IR 量化事实（实测，修正 requirements D1）

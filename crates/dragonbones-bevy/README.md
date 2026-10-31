@@ -249,6 +249,14 @@ this API.
 - Batching / armature-level dirty flags for *animated* armatures (the sync pass
   still runs every frame while a pose changes).
 
+## Test coverage limits
+
+Headless tests exercise the ECS-facing paths (lifecycle, transforms, visibility
+propagation, asset loading, commands, sync). GPU-side correctness — pipeline
+compilation, the custom `Material2d`/WESL shader, blend states and draw order — is
+guarded by smoke-running the demo on a real machine; a headless CI machine without
+a GPU cannot compile those pipelines.
+
 ## Demo
 
 `crates/dragonbones-demo` loads one rig selected by a command-line argument:

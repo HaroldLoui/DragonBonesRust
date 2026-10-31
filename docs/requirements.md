@@ -709,6 +709,8 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 > **2026-10-31 core 热路径（P2 续）**：timeline 的 bone 目标查找由线性 `find` 改为下标直取（`BoneIdx` = 创建序 = `armature.bones` 下标不变量，`debug_assert` 锁定），golden/ir/pose 零漂移；Rooster（63 骨）`advance_time` 6.90→6.31 µs、`advance_one` 6.78→6.38 µs（Dragon/Plant 在噪声内）。slot 查找保留线性（zOrder 重排使下标≠SlotIdx，当前槽数 ≤18 收益不足）；`cached_frame_indices` 共享化按 D-6.3 记录为已知取舍（官方表可变共享、Rust 克隆且仅 animation_dirty 时挂载）。
 
+> **2026-10-31 core 测试缺口（P2 收尾）**：① `_parseDeformFrame` 的 weight 分支——核对官方 TS 该分支本身就是 `// TODO`（`ObjectDataParser.ts:1993`，不写任何帧数据），Rust 保持同样的 no-op 语义并在代码注释中写明；新增 `tests/deform_weight.rs`（向 Rooster 加权 mesh 注入 ffd 时间轴，断言解析成功且 `frame_float_array` 与基线逐值相同）。② dbbin mesh 对拍——submodule 内全部官方 dbbin 样本（mecha×2、dragon_boy）均不含 mesh，且仓库没有 dbbin 导出器，无法生成可信 mesh 样本；现有 `tests/dbbin.rs` 仅覆盖 header/数组/时间轴等价。该缺口为**外部阻塞**，已写入 model_mapping D-6.10（需官方 mesh dbbin 样本或导出器后再补 golden）。
+
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
 > **前置**：先完成 §5 的预研问题 Q1–Q3，再动手。
