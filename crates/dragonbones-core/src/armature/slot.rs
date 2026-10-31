@@ -656,8 +656,8 @@ impl Slot {
         if cache_frame_index >= 0
             && let Some(indices) = self.cached_frame_indices.as_mut()
         {
-            // —— P1-4（阶段 6）缓存帧表分支：阶段 3 `_cachedFrameIndices` 恒 None →
-            // 整段不可达；结构照抄以便阶段 6 直接接 ——
+            // —— P1-4（阶段 6）缓存帧表分支：`cache_frame_rate > 0` 时由 `Animation`
+            // 挂载 `cached_frame_indices`，本段已可达 ——
             let cached_frame_index = indices[cache_frame_index as usize]; // :741 本槽在该缓存帧上的槽位号
             if cached_frame_index >= 0 && self.cached_frame_index == cached_frame_index {
                 // :742 Same cache.

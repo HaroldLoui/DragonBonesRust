@@ -300,8 +300,8 @@ impl Bone {
 
         // ---------- ① 分支选择（Bone.ts:366-415 / Surface.ts:482-531 逐字相同）----------
         if cache_frame_index >= 0 && self.cached_frame_indices.is_some() {
-            // —— P1-4（阶段 6）缓存帧表分支：阶段 3 `_cachedFrameIndices` 恒 None →
-            // 整段不可达；结构照抄以便阶段 6 直接接（同 slot.rs ⑩）——
+            // —— P1-4（阶段 6）缓存帧表分支：`cache_frame_rate > 0` 时由 `Animation`
+            // 挂载 `cached_frame_indices`（同 slot.rs ⑩），本段已可达 ——
             // TS:366 `cacheFrameIndex >= 0 && _cachedFrameIndices !== null`
             //
             // ★ :367 读成**局部拷贝**后立刻结束借用（改写前是 `let … = self.cached_

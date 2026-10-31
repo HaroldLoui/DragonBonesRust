@@ -126,7 +126,7 @@ TransformSystems::Propagate
 - Surface mesh 逐顶点变形（父骨为 Surface 的 mesh display，按 Surface 分片仿射矩阵 warp）
 - child armature 子骨架 display（嵌套 root 实体、随父 slot 世界矩阵、可见性沿父链、despawn 递归回收）
 - Bevy UI 动画列表 + 键盘切换
-- 9 个素材中的主要 rig 目视验证
+- 8 个素材中的主要 rig 目视验证（6 个有 demo 入口）
 
 待做（后续打磨）：
 

@@ -34,13 +34,12 @@ use dragonbones_core::factory::BaseFactory;
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// 黄金清单（`testdata/pose/<name>.json`，9 个素材，硬编码，仿 `golden_inventory` 风格）。
+/// 黄金清单（`testdata/pose/<name>.json`，8 个素材，硬编码，仿 `golden_inventory` 风格）。
 const POSE_NAMES: &[&str] = &[
     "龙",
     "Dragon",
     "Dragon_Blend",
     "PlantAnimate",
-    "PlantAnimate_compressed",
     "Rooster_Ani",
     "Rooster_Blend",
     "Rooster_P1",
@@ -547,7 +546,7 @@ fn check_pose(name: &str) {
     diag.finish();
 }
 
-// ---- 9 个素材各一个 #[test]（清单硬编码，仿 golden_inventory 风格）----
+// ---- 8 个素材各一个 #[test]（清单硬编码，仿 golden_inventory 风格）----
 
 /// 素材 1：`龙`（ske = `龙_ske.json`，60 骨 29 槽，含 5 个 mesh 槽）。
 #[test]
@@ -573,32 +572,26 @@ fn pose_golden_plant_animate() {
     check_pose(POSE_NAMES[3]);
 }
 
-/// 素材 5：`PlantAnimate_compressed`（压缩 JSON 版本，key = `PlantAnimate_ske`）。
+/// 素材 5：`Rooster_Ani`（63 骨 15 槽，8 个 mesh 槽）。
 #[test]
-fn pose_golden_plant_animate_compressed() {
+fn pose_golden_rooster_ani() {
     check_pose(POSE_NAMES[4]);
 }
 
-/// 素材 6：`Rooster_Ani`（63 骨 15 槽，8 个 mesh 槽）。
+/// 素材 6：`Rooster_Blend`。
 #[test]
-fn pose_golden_rooster_ani() {
+fn pose_golden_rooster_blend() {
     check_pose(POSE_NAMES[5]);
 }
 
-/// 素材 7：`Rooster_Blend`。
+/// 素材 7：`Rooster_P1`。
 #[test]
-fn pose_golden_rooster_blend() {
+fn pose_golden_rooster_p1() {
     check_pose(POSE_NAMES[6]);
 }
 
-/// 素材 8：`Rooster_P1`。
-#[test]
-fn pose_golden_rooster_p1() {
-    check_pose(POSE_NAMES[7]);
-}
-
-/// 素材 9：`Surface_P1_4`（4 骨 2 槽，Surface 曲面骨通路，验收清单 4）。
+/// 素材 8：`Surface_P1_4`（4 骨 2 槽，Surface 曲面骨通路，验收清单 4）。
 #[test]
 fn pose_golden_surface_p1_4() {
-    check_pose(POSE_NAMES[8]);
+    check_pose(POSE_NAMES[7]);
 }

@@ -105,8 +105,10 @@ pub struct Animation {
     inherit_time_scale: f64,
     /// 多状态回收置位（`Animation.ts:239`）；消费点为单状态路径的
     /// `cachedFrameIndices` 挂载（`Animation.ts:204-228`）。
-    /// TODO P1-4：阶段 6 接入 `bone/slot._cachedFrameIndices` 时消费并清除；
-    /// 当前仅写，`cache_frame_rate == 0` 时官方也永不消费（`:207`）。
+    /// P1-4 已接：`cache_frame_rate > 0` 时 `advance_time_with_context` 把帧表挂到
+    /// `bone.cached_frame_indices` / `slot.cached_frame_indices`，由 `armature/bone.rs`
+    /// 与 `armature/slot.rs` 的缓存帧分支消费；`cache_frame_rate == 0` 时官方也永不
+    /// 消费（`:207`）。
     animations_override: Option<IndexMap<String, AnimationData>>,
     animation_dirty: bool,
     cache_frame_invalidated: bool,

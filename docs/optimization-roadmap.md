@@ -10,7 +10,7 @@
 - **产品上最大的缺口**：动画状态机/事件、blend mode、换装/child armature、编辑与调试体验。
 
 > **实现状态（2026-10-29）**：P0 与首批 P1 项已落地——
-> - **§3 benchmark 基线 + CPU profile**：core 25 个 + 适配层 11 个 criterion benchmark（含 rig 对比与 baseline，见 §3 实测数字）；rig 对比定位到动画场景的适配层开销主要在 CPU 蒙皮/FFD（§1.4、§3.2）；
+> - **§3 benchmark 基线 + CPU profile**：core 25 个 + 适配层 16 个 criterion benchmark（含 rig 对比与 baseline，见 §3 实测数字）；rig 对比定位到动画场景的适配层开销主要在 CPU 蒙皮/FFD（§1.4、§3.2）；
 > - 1.1 slot 索引缓存（`sync.rs` 每 armature 每帧一次 `SlotIdx → order` 映射，去掉每 slot 线性查找）；
 > - 1.2 armature 级脏标记（pose hash + root affine 比较，静态角色跳过全量 slot sync，见 §1.2）；
 > - 1.3 的 ① 共享材质 + 顶点色（一个 atlas page 一个材质，per-slot 颜色写 `ATTRIBUTE_COLOR`），以及 ②④ 自定义 `Material2d`：按 `(atlas image, blend mode)` 共享材质，Normal / Add / Multiply / Screen 走固定管线混合状态；
@@ -204,7 +204,7 @@ B2 路径不使用 `SlotRenderAdapter` 回调，但 core 仍为每个 `Slot` 保
 
 ```text
 cargo bench -p dragonbones-core    # 25 个：parse 17 / assemble 3 / advance 5
-cargo bench -p dragonbones-bevy    # 9 个：sync 静态 A/B × {1,10,100} armature + 动画 × {1,10,100}
+cargo bench -p dragonbones-bevy    # 16 个：baseline 2 + static A/B × {1,10,100}（6）+ advance-only × {Dragon,Rooster} × {1,10}（4）+ animated × {Dragon,Rooster} × {1,10}（4）
 ```
 
 > ⚠️ 只在**机器静默**时记录基线：并发 rustc 负载会让 criterion 数字通胀 1.2–1.9× 并产生 severe outliers。criterion 会在 `target/criterion/` 留 baseline，被污染的 run 会让后续 comparison 误报 regression。

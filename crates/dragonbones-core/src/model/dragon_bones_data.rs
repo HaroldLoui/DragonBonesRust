@@ -103,8 +103,9 @@ pub struct DragonBonesData {
     pub armatures: IndexMap<String, ArmatureData>,
     /// P1-4（`setCacheFrame`）写入点，阶段 1 只留字段。
     pub cached_frames: Vec<f64>,
-    /// JS 在 JSON 路径收尾也会构建 `binary`（`_modifyArray` 的 ArrayBuffer，实测非 null）；
-    /// Rust 暂不复刻，阶段 2 / P1-10 再定是否保留。
+    /// JS 在 JSON 路径收尾也会构建 `binary`（`_modifyArray` 的 ArrayBuffer，实测非 null）。
+    /// P1-10 已实现：JSON 路径收尾由 [`DragonBonesData::pack_binary`] 按 `_modifyArray`
+    /// 布局生成（无 `DBDT` header）；dbbin 路径直接保存文件 payload（含 header）。
     pub binary: Option<Vec<u8>>,
 }
 

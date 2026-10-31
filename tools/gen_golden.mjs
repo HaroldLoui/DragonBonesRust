@@ -12,16 +12,17 @@ const OUT = path.join(ROOT, "testdata", "golden");
 const FRAME_COUNT = process.argv[2] || "120";
 
 const skes = fs.readdirSync(ASSETS)
-  .filter(f => f.endsWith("_ske.json") || f.endsWith("_ske_compressed.json"));
+  .filter(f => f.endsWith("_ske.json"));
 
 let ok = 0, fail = 0;
 for (const ske of skes) {
-  const tex = ske.replace(/_ske(_compressed)?[.]json$/, "_tex.json");   // F7
+  const tex = ske.replace(/_ske[.]json$/, "_tex.json");   // F7
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;                               // F7: 从数据读
   const anims = data.armature[0].animation.map(a => a.name);
-  // 目录名: Dragon_ske → Dragon, PlantAnimate_ske → PlantAnimate_compressed
-  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
+  // 目录名: Dragon_ske → Dragon（PlantAnimate 的 compressed 变体已在 1142e46
+  // 合并进 PlantAnimate_ske.json，不再有独立素材）
+  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "");
   for (const anim of anims) {
     const out = path.join(OUT, stem, `${anim}.json`);
     const r = spawnSync(process.execPath, [

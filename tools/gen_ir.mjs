@@ -11,14 +11,14 @@ const ASSETS = path.join(ROOT, "assets");
 const OUT = path.join(ROOT, "testdata", "ir");
 
 const skes = fs.readdirSync(ASSETS)
-  .filter(f => f.endsWith("_ske.json") || f.endsWith("_ske_compressed.json"));
+  .filter(f => f.endsWith("_ske.json"));
 
 let ok = 0, fail = 0;
 for (const ske of skes) {
-  const tex = ske.replace(/_ske(_compressed)?[.]json$/, "_tex.json");
+  const tex = ske.replace(/_ske[.]json$/, "_tex.json");
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;
-  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
+  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "");
   const out = path.join(OUT, `${stem}.json`);
   const r = spawnSync(process.execPath, [
     path.join(HERE, "irdump.mjs"),

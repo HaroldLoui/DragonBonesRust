@@ -35,7 +35,7 @@ const SHOOT_FRAME_EVENTS: &[(u64, &str)] = &[
     (119, "ShootSound"),
 ];
 
-/// 所有 37 个文件的 frame 0 事件序列恒为 fadeIn → fadeInComplete → start
+/// 所有 31 个文件的 frame 0 事件序列恒为 fadeIn → fadeInComplete → start
 #[test]
 fn frame0_event_sequence_is_uniform() {
     for path in &all_golden_files() {
@@ -88,7 +88,7 @@ fn lifecycle_events_only_on_frame_zero() {
     }
 }
 
-/// frameEvent 精确时序：仅 PlantAnimate / PlantAnimate_compressed 的 Death 与 Shoot，序列逐条相等
+/// frameEvent 精确时序：仅 PlantAnimate 的 Death 与 Shoot，序列逐条相等
 #[test]
 fn frame_event_sequences_are_exact() {
     /// (目录, 动画, 期望的 (帧号, 事件名) 序列)
@@ -96,11 +96,9 @@ fn frame_event_sequences_are_exact() {
     let expected: &[FrameEventCase] = &[
         ("PlantAnimate", "Death", DEATH_FRAME_EVENTS),
         ("PlantAnimate", "Shoot", SHOOT_FRAME_EVENTS),
-        ("PlantAnimate_compressed", "Death", DEATH_FRAME_EVENTS),
-        ("PlantAnimate_compressed", "Shoot", SHOOT_FRAME_EVENTS),
     ];
 
-    // 先收集所有实际 frameEvent，确认"只"出现在这 4 个文件
+    // 先收集所有实际 frameEvent，确认"只"出现在这 2 个文件
     let mut files_with_frame_events: Vec<String> = Vec::new();
     for path in &all_golden_files() {
         let v = read_value(path);

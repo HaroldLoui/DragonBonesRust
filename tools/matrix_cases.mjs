@@ -7,12 +7,6 @@ export const ASSETS = [
   { name: "Dragon_Blend", file: "Dragon_Blend_ske.json", pair: ["walk", "jump"], rep: "walk" },
   { name: "PlantAnimate", file: "PlantAnimate_ske.json", pair: ["Shoot", "Idle"], rep: "Shoot" },
   {
-    name: "PlantAnimate_compressed",
-    file: "PlantAnimate_ske.json",
-    pair: ["Shoot", "Idle"],
-    rep: "Shoot",
-  },
-  {
     name: "Rooster_Ani",
     file: "Rooster_Ani_ske.json",
     pair: ["rooster_run_anim", "rooster_idle_anim"],

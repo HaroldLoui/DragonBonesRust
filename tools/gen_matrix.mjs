@@ -15,7 +15,7 @@ const ASSET_DIR = path.join(ROOT, "assets");
 const OUT = path.join(ROOT, "testdata", "matrix");
 
 function texPathFor(skeFile) {
-  return path.join(ASSET_DIR, skeFile.replace(/_ske(_compressed)?[.]json$/, "_tex.json"));
+  return path.join(ASSET_DIR, skeFile.replace(/_ske[.]json$/, "_tex.json"));
 }
 
 function readAsset(asset) {

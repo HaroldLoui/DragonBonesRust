@@ -26,11 +26,9 @@ pub fn read_json(path: &Path) -> Value {
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse {} failed: {e}", path.display()))
 }
 
-/// `X_ske.json` / `X_ske_compressed.json` → `X_tex.json`（先匹配 compressed）。
+/// `X_ske.json` → `X_tex.json`。
 pub fn tex_stem(ske_stem: &str) -> String {
-    ske_stem
-        .replace("_ske_compressed", "_tex")
-        .replace("_ske", "_tex")
+    ske_stem.replace("_ske", "_tex")
 }
 
 /// 解析单个素材：返回 (骨架数据, 图集)。

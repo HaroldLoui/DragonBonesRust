@@ -20,11 +20,11 @@ const EVENT_TYPES: [&str; 9] = [
 const BONE_VEC_LEN: usize = 13;
 const SLOT_VEC_LEN: usize = 15;
 
-/// 结构完整性：37 个文件 × 120 帧 × 键集合 / 向量长度 / 数值类型 / 事件形状
+/// 结构完整性：31 个文件 × 120 帧 × 键集合 / 向量长度 / 数值类型 / 事件形状
 #[test]
 fn golden_data_present_and_well_formed() {
     let files = all_golden_files();
-    assert_eq!(files.len(), 37, "9 素材应产出 37 个 golden 文件");
+    assert_eq!(files.len(), 31, "8 素材应产出 31 个 golden 文件");
 
     for path in &files {
         let ctx = path.display().to_string();
@@ -149,7 +149,7 @@ fn golden_data_present_and_well_formed() {
     }
 }
 
-/// 数值健全性：全量 37×120 帧不允许出现 null（NaN 哨兵；实测应为 0）
+/// 数值健全性：全量 31×120 帧不允许出现 null（NaN 哨兵；实测应为 0）
 #[test]
 fn golden_no_nan_sentinel() {
     for path in &all_golden_files() {

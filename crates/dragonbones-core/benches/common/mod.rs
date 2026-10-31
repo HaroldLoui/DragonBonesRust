@@ -98,8 +98,9 @@ pub struct Asset {
 
 /// 扫描 `assets/*_ske.json`，按文件名排序读入全部 ske 原文。
 ///
-/// 注：`testdata/golden/PlantAnimate_compressed` 复用同一份
-/// `PlantAnimate_ske.json`，仓库内没有独立的 compressed 素材文件，故这里自然为 8 个。
+/// 注：`PlantAnimate` 的源数据即压缩 JSON（1142e46 已将
+/// `PlantAnimate_ske_compressed.json` 合并进 `PlantAnimate_ske.json`，仓库内没有独立
+/// compressed 素材文件）；`*_ske_compressed.json` 不匹配 `*_ske.json`，故这里自然为 8 个。
 #[must_use]
 pub fn load_assets() -> Vec<Asset> {
     let root = asset_root();

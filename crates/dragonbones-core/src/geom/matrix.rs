@@ -35,6 +35,27 @@ impl Matrix {
         self.ty = other[offset + 5];
     }
 
+    /// 同 [`Self::copy_from_array`]，但 `other` 长度不足时返回 `false` 且不改本矩阵。
+    ///
+    /// 供解析器对**数据派生偏移**做坏输入防御；合法数据下与 `copy_from_array`
+    /// 逐位等价（官方 JS 越界读到 `undefined` → NaN，Rust 侧选择不 panic）。
+    #[must_use]
+    pub fn try_copy_from_array(&mut self, other: &[f64], offset: usize) -> bool {
+        let Some(end) = offset.checked_add(6) else {
+            return false;
+        };
+        let Some(values) = other.get(offset..end) else {
+            return false;
+        };
+        self.a = values[0];
+        self.b = values[1];
+        self.c = values[2];
+        self.d = values[3];
+        self.tx = values[4];
+        self.ty = values[5];
+        true
+    }
+
     pub fn identity(&mut self) {
         self.a = 1.0;
         self.b = 0.0;

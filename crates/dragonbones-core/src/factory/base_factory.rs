@@ -1925,17 +1925,21 @@ impl BaseFactory {
 //   （NullArmatureProxy 注入 / DisplayHandle::Armature(idx) / NullSlotAdapter /
 //   空壳 TextureAtlasData = jsdump NullFactory 行为），阶段 7 换 Bevy 实现时再泛型化。
 
-// TODO P1-5（阶段 6）: replace_* 系列（均不在 buildArmature 路径上，笔记 A.11）：
-//   - `replace_display(slot, display_data, display_index = -1)`（TS:720-748，@private，
-//     注意 733-741 Image 数据但帧 raw 是 Mesh → 换 meshDisplay 的怪癖）
-//   - `replace_slot_display(...)`（TS:783-796）
-//   - `replace_slot_display_list(...)`（TS:800-821）
+// P1-5 已关闭：replace_* 系列已实现（均不在 buildArmature 路径上，笔记 A.11）：
+//   - `replace_display`（TS:720-748，@private，注意 733-741 Image 数据但帧 raw 是
+//     Mesh → 换 meshDisplay 的怪癖）→ `BaseFactory::replace_display`
+//   - `replace_slot_display(...)`（TS:783-796）→ `replace_slot_display`
+//   - `replace_slot_display_list(...)`（TS:800-821）→ `replace_slot_display_list`
 //   - `replace_skin(armature, skin, isOverride, exclude)`（TS:860-900，miss 回落
-//     `skin.parent.defaultSkin`、isOverride 清帧、不写 replaceTextureData）
+//     `skin.parent.defaultSkin`、isOverride 清帧、不写 replaceTextureData）→ `replace_skin`
 //   - `replace_animation(armature, armatureData, isOverride)`（TS:939-984，递归子骨架）
+//     → `replace_animation`
+//   验收覆盖：`tests/replace.rs`。
+//
+// TODO P1-5（阶段 6，剩余只读包装 / 回收 API）:
 //   - `get_all_dragon_bones_data / get_all_texture_atlas_data`（TS:988-996，字段已 pub 可直读）
 //   - `get_dragon_bones_data(name)`（TS:456-458）：`_dragonBonesDataMap` 按名取——
-//     Rust 侧 `data_map.get(name)` 直读即可，包装方法待阶段 6 与 replace_* 一起补
+//     Rust 侧 `data_map.get(name)` 直读即可，包装方法待补
 //   - `get_texture_atlas_data(name)`（TS:545-547）：返回**数组**（同名多 atlas，
 //     笔记 A.2-4）——Rust `atlas_map.get(name)` 直读，包装方法同批补
 //   - `update_texture_atlases`（TS:424-433）、`clear/remove*`（TS:647-666 / 516-524 /

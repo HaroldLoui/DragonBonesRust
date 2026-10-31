@@ -801,8 +801,9 @@ impl Armature {
     /// 方向）命中槽的 A 交点；无命中 `None`。TS `:548-551`「A/B 出参均未提供 →
     /// 首个命中即 break」分支因 Rust 恒“提供”出参而不复刻。
     ///
-    /// TODO P1-3（阶段 6）：`Slot::intersects_segment` 内部 BoundingBox 未实现
-    ///（恒 None）→ 整体暂恒 None；遍历/累计骨架照抄，阶段 6 无需改本方法结构。
+    /// P1-3 已关闭：`Slot::intersects_segment`（`armature/slot.rs`）内部
+    /// `BoundingBox::intersects_segment`（`model/bounding_box.rs`）已实现，本方法的
+    /// 遍历/累计即 TS `:510-573` 的完整语义，不再恒 `None`。
     #[allow(clippy::too_many_arguments)] // TS 形参即 8 个坐标，照抄签名
     #[must_use]
     pub fn intersects_segment(

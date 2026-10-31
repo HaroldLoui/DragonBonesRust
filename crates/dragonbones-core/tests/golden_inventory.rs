@@ -38,14 +38,6 @@ const SPECS: &[AssetSpec] = &[
         anims: &["Idle", "Shoot", "Death", "Food", "Water", "Random"],
     },
     AssetSpec {
-        dir: "PlantAnimate_compressed",
-        armature: "MegaGatlingPea",
-        bones: 29,
-        slots: 31,
-        frame_rate: 30,
-        anims: &["Idle", "Shoot", "Death", "Food", "Water", "Random"],
-    },
-    AssetSpec {
         dir: "Rooster_Ani",
         armature: "armatureName",
         bones: 63,
@@ -150,33 +142,5 @@ fn golden_inventory_matches_asset_specs() {
         }
     }
 
-    assert_eq!(total_anims, 37, "合计动画数应为 37");
-}
-
-/// PlantAnimate 压缩/非压缩是同一数据：除 meta.skeFile 外逐字节语义相等
-#[test]
-fn plantanimate_compressed_matches_plain() {
-    let anims = ["Idle", "Shoot", "Death", "Food", "Water", "Random"];
-
-    for anim in anims {
-        let mut plain = read_value(&golden_path("PlantAnimate", anim));
-        let mut compressed = read_value(&golden_path("PlantAnimate_compressed", anim));
-
-        // skeFile 字段必然不同（文件名不同），剔除后其余应完全相等
-        plain["meta"]
-            .as_object_mut()
-            .unwrap()
-            .remove("skeFile")
-            .expect("plain meta 应含 skeFile");
-        compressed["meta"]
-            .as_object_mut()
-            .unwrap()
-            .remove("skeFile")
-            .expect("compressed meta 应含 skeFile");
-
-        assert_eq!(
-            plain, compressed,
-            "PlantAnimate/{anim} 与 compressed 版本应一致（仅 skeFile 可不同）"
-        );
-    }
+    assert_eq!(total_anims, 31, "合计动画数应为 31");
 }
