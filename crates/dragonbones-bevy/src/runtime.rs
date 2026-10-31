@@ -302,7 +302,7 @@ impl Plugin for DragonBonesPlugin {
             .register_asset_loader(AtlasAssetLoader)
             .init_resource::<DragonBonesMaterials>()
             .init_resource::<DragonBonesSyncConfig>()
-            .init_resource::<DragonBonesEventQueue>()
+            .insert_non_send(DragonBonesEventQueue::default())
             .add_message::<DragonBonesEvent>()
             .add_message::<DragonBonesCommand>()
             .add_message::<crate::player::DragonBonesCommandError>()
@@ -700,7 +700,7 @@ fn setup_armatures(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<DragonBonesMaterial>>,
     mut material_cache: ResMut<DragonBonesMaterials>,
-    event_queue: Res<DragonBonesEventQueue>,
+    event_queue: NonSend<DragonBonesEventQueue>,
     mut query: Query<(
         Entity,
         Ref<DragonBonesArmature>,

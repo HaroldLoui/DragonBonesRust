@@ -363,6 +363,11 @@ pub struct Slot {
     pub bounding_box_data: Option<BoundingBoxData>,
     /// 对齐 `_textureData`（Slot.ts:247），`_onClear` = null（:323）。
     pub texture_data: Option<TextureData>,
+    /// 适配层内容版本号（Rust 侧簿记，无 TS 对应物）：`_updateDisplayData`
+    /// 检测到 display frame / geometry / texture 内容变化时自增。Bevy 适配层用
+    /// 它判断 `replace_texture_data`/`replace_skin` 这类“不改 display 索引只改
+    /// 内容”的运行时替换，避免每帧对全部 slot 做内容哈希。
+    pub content_revision: u32,
     /// 对齐 `_rawDisplay`（Slot.ts:248），`_onClear` = null（:324）。
     pub raw_display: DisplayHandle,
     /// 对齐 `_meshDisplay`（Slot.ts:249），`_onClear` = null（:325）；可能与 raw 相同。
@@ -412,8 +417,9 @@ impl Default for Slot {
             // :328 `_parent = null as any`——契约 `parent: BoneIdx` 非 Option（数据必有
             // 骨），未初始化槽在 init 时重写；0 占位无消费者（update 前必 init）。
             parent: BoneIdx(0),
-            display_controller: None,                   // :294
-            display_data_dirty: false,                  // :296
+            display_controller: None,  // :294
+            display_data_dirty: false, // :296
+            content_revision: 0,
             display_dirty: false,                       // :297
             geometry_dirty: false,                      // :298
             texture_dirty: false,                       // :299
@@ -857,6 +863,7 @@ impl Slot {
             || self.geometry_data != prev_geometry_data
             || self.texture_data != prev_texture_data
         {
+            self.content_revision = self.content_revision.wrapping_add(1); // Rust 侧簿记（D-6.14）
             // ---- pivot（:409-457）----
             // TS `this._geometryData === null && this._textureData !== null`（:410）
             if self.geometry_data.is_none()
@@ -1729,6 +1736,7 @@ impl Slot {
         self.geometry_data = None; // :321
         self.bounding_box_data = None; // :322
         self.texture_data = None; // :323
+        self.content_revision = 0; // Rust 侧簿记（无 TS 对应物）
         self.raw_display = DisplayHandle::Null; // :324
         self.mesh_display = DisplayHandle::Null; // :325
         self.display = None; // :326

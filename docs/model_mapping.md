@@ -665,6 +665,7 @@ ormalRadians` 无对应参数，阶段 6 扩签名时补（armature.rs 方法文
 | D-6.13 | 官方 `_updatePathVertices` 的 `weightData !== null` 分支按 geometryBones 权重混合顶点（`Constraint.ts:314-347`） | **已实现**（`path_constraint.rs::update_weighted_path_vertices` 逐行对照；null 骨不消费浮点的怪癖照抄 TS）；无权重路径保持 D-6.12 行为 | 合成 IR/权重单测覆盖三段骨表与 scale；素材无 Path 样本，尚未与官方运行时对拍 |
 | D-6.14 | Slot pivot 缩放用 `_textureData.parent.scale`（逐贴图所属图集对象引用，`Slot.ts:412`） | `DisplayFrame::texture_atlas_scale` 按帧登记工厂命中图集 scale（`_get_texture_data` 返回），`_updateDisplayData` 优先读帧级值，未登记回退 build 级单值；外部 `replace_texture_data` 清帧级值 | 同名多 atlas/autoSearch 跨 data/空壳 atlas 三种场景不再取错 pivot；`tests/texture_atlas_scale.rs` 覆盖命中 scale=2 与 replace 回退 |
 | D-6.15 | 缺 root/target 骨的约束在官方同样崩溃（`Constraint.ts:203` null 写属性、`:94/:110` `_target.global` TypeError） | Rust `Constraint::init` 保持 panic（与 TS 崩溃点对齐）；缺 chain 骨的 IK 按 TS 静默降级单骨 | 新增 3 个单测锁定行为；不做“warn+跳过”的偏离实现 |
+| D-6.16 | Slot 无内容版本号概念，适配层靠逐帧比较 display frame 内容判断运行时替换 | `Slot::content_revision`（Rust 侧簿记，非 TS 字段）：`_updateDisplayData` 检测到 display/geometry/texture 变化时自增；Bevy 同步只 hash 该计数器 + 结构字段 | 语义/数值零影响（golden 全绿）；`replace_texture_data`/`replace_skin` 仍当帧刷新，热路径去掉逐槽内容哈希 |
 | D-6.6 | dbbin header 自定义 UTF-8 解码 | 用标准 `str::from_utf8`；官方导出数据合法 | P1-1；非法字节行为未复刻 |
 | D-6.7 | `DragonBonesData.binary` 在 JSON 路径是打包 IR，dbbin 路径是整份输入字节 | JSON 路径已实现 `IrArrays::to_binary`；dbbin 路径保存输入 | P1-1/P1-10；`tests/ir_binary.rs` 8/8 字节相等 |
 | D-6.9 | `replaceAnimation` 官方替换 `animation.animations` 映射并递归 child | animation map override + child armature 递归已实现（按目标 skin display.path） | `tests/replace.rs` 覆盖 map 与 child 递归 |

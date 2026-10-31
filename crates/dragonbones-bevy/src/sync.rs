@@ -55,8 +55,25 @@ use crate::runtime::{
 /// visibility, colors, blend mode, bone matrices for skinned meshes,
 /// interpolated deform vertices) instead of relying on a dirty flag that every
 /// mutation site would have to remember to set.
-#[allow(clippy::type_complexity)]
+/// Reused per-frame scratch containers for [`sync_dragonbones`].
+///
+/// The system used to allocate a dozen `HashMap`/`HashSet`/`Vec` values every
+/// frame (even for clean armatures); they are now kept in a `Local` and cleared
+/// in place so the capacity survives across frames.
+#[derive(Default)]
+pub(crate) struct SyncScratch {
+    slot_orders: HashMap<ArmatureIdx, HashMap<SlotIdx, usize>>,
+    top_affines: HashMap<ArmatureIdx, Affine3A>,
+    top_visible: HashMap<ArmatureIdx, bool>,
+    child_links: Vec<(ArmatureIdx, Entity, ArmatureIdx, Entity)>,
+    parent_slot_info: HashMap<Entity, (ArmatureIdx, SlotIdx)>,
+    resolved: HashMap<ArmatureIdx, (Affine3A, bool)>,
+    dirty: HashSet<ArmatureIdx>,
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn sync_dragonbones(
+    mut scratch: Local<SyncScratch>,
     config: Res<DragonBonesSyncConfig>,
     mut runtime: NonSendMut<DragonBonesRuntime>,
     mut roots: Query<
@@ -83,13 +100,25 @@ pub(crate) fn sync_dragonbones(
     mut material_cache: ResMut<DragonBonesMaterials>,
 ) {
     let (factory, bindings) = runtime.split_mut();
+    let SyncScratch {
+        slot_orders,
+        top_affines,
+        top_visible,
+        child_links,
+        parent_slot_info,
+        resolved,
+        dirty,
+    } = &mut *scratch;
+    slot_orders.clear();
+    top_affines.clear();
+    top_visible.clear();
+    child_links.clear();
+    parent_slot_info.clear();
+    resolved.clear();
+    dirty.clear();
 
     // 1) Top-level armature affines + effective root visibility, and the parent
     //    links of every child-armature root.
-    let mut top_affines: HashMap<ArmatureIdx, Affine3A> = HashMap::new();
-    let mut top_visible: HashMap<ArmatureIdx, bool> = HashMap::new();
-    // (child armature, child root entity, parent armature, parent slot entity)
-    let mut child_links: Vec<(ArmatureIdx, Entity, ArmatureIdx, Entity)> = Vec::new();
     for (entity, instance, global, visibility, child) in &mut roots {
         let armature_idx = instance.armature;
         match child {
@@ -109,8 +138,6 @@ pub(crate) fn sync_dragonbones(
 
     // 2) Child-armature resolution (skipped entirely for the common no-child
     //    case, which keeps idle armatures cheap).
-    let mut slot_orders: HashMap<ArmatureIdx, HashMap<SlotIdx, usize>> = HashMap::new();
-    let mut parent_slot_info: HashMap<Entity, (ArmatureIdx, SlotIdx)> = HashMap::new();
     if !child_links.is_empty() {
         let parents: HashSet<ArmatureIdx> = child_links.iter().map(|link| link.2).collect();
         for parent in parents {
@@ -126,16 +153,13 @@ pub(crate) fn sync_dragonbones(
             }
         }
     }
-    let mut resolved: HashMap<ArmatureIdx, (Affine3A, bool)> = top_affines
-        .iter()
-        .map(|(armature, affine)| {
-            (
-                *armature,
-                (*affine, top_visible.get(armature).copied().unwrap_or(true)),
-            )
-        })
-        .collect();
-    let mut remaining = child_links;
+    resolved.extend(top_affines.iter().map(|(armature, affine)| {
+        (
+            *armature,
+            (*affine, top_visible.get(armature).copied().unwrap_or(true)),
+        )
+    }));
+    let mut remaining = std::mem::take(child_links);
     while !remaining.is_empty() {
         let mut progressed = false;
         let mut next = Vec::with_capacity(remaining.len());
@@ -206,7 +230,6 @@ pub(crate) fn sync_dragonbones(
     }
 
     // 4) Armature-level dirty check, then slot order maps for dirty armatures.
-    let mut dirty: HashSet<ArmatureIdx> = HashSet::new();
     for (_entity, instance, global, visibility, child) in &mut roots {
         let armature_idx = instance.armature;
         let (affine, visible) = if child.is_some() {

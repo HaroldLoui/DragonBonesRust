@@ -249,6 +249,17 @@ cargo bench -p dragonbones-bevy    # 16 个：baseline 2 + static A/B × {1,10,1
 
 修复点：`slot_orders` 只对 dirty armature（以及有 child armature 的父 armature）构建，无 child 的常见场景完全跳过子骨架解析；同时把 `held_materials` 快照 clone 与 `new_materials` 提交表删掉，改为直接读写 binding 的材质键集。剩余约 10–12% 开销来自新增的内容指纹（`hash.rs`，纯数值、无字符串），它换来 `replace_texture_data`/`replace_skin` 这类“不改 display 索引只改内容”的运行时替换能当帧刷新。
 
+**2026-10-31 C6（每帧分配 / 内容版本号）复测**（同机 `advance-only Dragon 10` = 14.4 µs，等于 10-29 基线，无需归一化）：
+
+| 场景 | 10-29 基线 | C6 前（本会话） | C6 后 |
+|---|---|---|---|
+| static 10 armature，脏标记开 | 33.0 µs | 31.8 µs | **32.8 µs** |
+| static 100 armature，脏标记开 | 78.6 µs | 99.3 µs | **81.9 µs（+4%）** |
+| static 100 armature，脏标记关 | 162.6 µs | 259.0 µs | 199.5 µs（+23%） |
+| animated Dragon 1 armature | 30.6 µs | 28.3 µs | 28.8 µs |
+
+改动：事件队列从 `Arc<Mutex<Vec<_>>>` 改为 NonSend `Rc<RefCell<_>>`（core 工厂本来就在 NonSend 资源里，每事件不再加锁）；sync 的 7 个 `HashMap/HashSet/Vec` 改为 `Local<SyncScratch>` 跨帧复用；更关键的是去掉每帧逐 slot 的内容哈希——core `Slot` 增加 `content_revision`（Rust 侧簿记，`_updateDisplayData` 检测到 display/geometry/texture 内容变化时自增，**不改变 TS 语义/数值**），Bevy 侧只 hash 这个计数器，`replace_texture_data`/`replace_skin` 的当帧刷新能力保持不变。`skip_off` 路径仍有约 23% 的额外成本（每槽都走完整同步 + revision 指纹 + 可见性/材质逻辑），默认 `skip_clean_armatures = true` 的热路径已回到基线 ±4%。
+
 **读数**：`animated` 减去 `advance` 得到适配层每 armature 的 sync 成本——Dragon（18 slot，图集 quad 为主）约 2.5 µs，Rooster（15 slot，含 weighted mesh）约 5.3 µs，**按 slot 折算蒙皮路径贵约 2.6 倍**，即 CPU 蒙皮/FFD 是动画场景下适配层的主要开销（见 §1.4 的 GPU skinning 决策）。core `advance_time` 在 Rooster（63 骨骼）上 6.3 µs/armature，已超过适配层 sync，属于 §2 的 core 动画推进本身。
 
 ### 3.3 待补的基线

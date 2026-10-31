@@ -20,11 +20,12 @@
 //! }
 //! ```
 //!
-//! The queue uses `Arc<Mutex<…>>` because the core factory (and therefore the
-//! proxies) lives in a non-send Bevy resource, while the messages are written by
-//! a regular send system.
+//! The queue is a non-send resource (`Rc<RefCell<…>>`): the core factory lives in
+//! a non-send Bevy resource anyway, so the proxies and the draining system can
+//! share the queue without any locking.
 
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use bevy::prelude::*;
 use dragonbones_core::armature::{ArmatureIdx, ArmatureProxy, NullArmatureProxy};
@@ -52,27 +53,31 @@ impl DragonBonesEvent {
 
 /// Queue shared between the non-send armature proxies and the draining Bevy
 /// system.
-#[derive(Resource, Clone, Default)]
+///
+/// Non-send resource: the core factory (and its proxies) is non-send, so the
+/// queue does not need a mutex; `RefCell` borrows are never held across a
+/// dispatch/drain boundary, so no panics are possible.
+#[derive(Default)]
 pub(crate) struct DragonBonesEventQueue {
-    events: Arc<Mutex<Vec<DragonBonesEvent>>>,
+    events: Rc<RefCell<Vec<DragonBonesEvent>>>,
+}
+
+impl Clone for DragonBonesEventQueue {
+    fn clone(&self) -> Self {
+        Self {
+            events: Rc::clone(&self.events),
+        }
+    }
 }
 
 impl DragonBonesEventQueue {
     fn push(&self, event: DragonBonesEvent) {
-        match self.events.lock() {
-            Ok(mut events) => events.push(event),
-            // A poisoned lock only happens if a previous drain panicked; dropping
-            // events is better than panicking inside the animation update.
-            Err(poisoned) => poisoned.into_inner().push(event),
-        }
+        self.events.borrow_mut().push(event);
     }
 
     /// Takes every queued event, leaving the queue empty.
     pub(crate) fn drain(&self) -> Vec<DragonBonesEvent> {
-        match self.events.lock() {
-            Ok(mut events) => std::mem::take(&mut *events),
-            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
-        }
+        std::mem::take(&mut *self.events.borrow_mut())
     }
 }
 
@@ -152,7 +157,7 @@ impl ArmatureProxy for BevyArmatureProxy {
 /// Runs after [`crate::DragonBonesSystems::Advance`]'s advance step, so events
 /// produced by this frame's animation update are readable in the same frame.
 pub(crate) fn forward_dragonbones_events(
-    queue: Res<DragonBonesEventQueue>,
+    queue: NonSendMut<DragonBonesEventQueue>,
     mut writer: MessageWriter<DragonBonesEvent>,
 ) {
     for event in queue.drain() {
