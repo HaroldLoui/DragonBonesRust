@@ -366,7 +366,7 @@ pub(crate) fn sync_dragonbones(
             && let Some(weighted) = visual.weighted.as_mut()
             && let Some(mut mesh) = meshes.get_mut(&mesh_handle.0)
         {
-            update_weighted_positions(weighted, armature, &mut mesh);
+            update_weighted_positions(weighted, armature, slot_deform(slot), &mut mesh);
         } else if visual.kind == SlotRenderKind::ArmatureSpace
             && let Some(unskinned) = visual.unskinned.as_mut()
             && unskinned.surface.is_some()

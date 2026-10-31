@@ -5,6 +5,7 @@ use bevy::sprite_render::MeshMaterial2d;
 
 use dragonbones_core::armature::{Armature, ArmatureIdx, BoneIdx, Slot};
 use dragonbones_core::core::enums::{BoneType, binary_offset};
+use dragonbones_core::geom::Matrix;
 use dragonbones_core::model::{GeometryData, TextureData};
 
 use crate::blend::DragonBonesBlend;
@@ -42,6 +43,8 @@ pub(crate) struct WeightedMeshData {
     pub vertices: Vec<Vec<BoneWeight>>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+    /// `GeometryData.inheritDeform` (geometry inherits the slot's FFD timeline).
+    pub inherit_deform: bool,
     positions: Vec<[f32; 3]>,
 }
 
@@ -283,7 +286,8 @@ fn build_slot_geometry(
         };
         if geometry.weight.is_some() {
             let data = decode_weighted_mesh(slot, geometry, texture, atlas_size, armature_scale);
-            let mesh = build_weighted_mesh(&data, armature);
+            let deform = slot_deform(slot);
+            let mesh = build_weighted_mesh(&data, armature, deform);
             return (mesh, SlotRenderKind::ArmatureSpace, Some(data), None);
         }
         let (mut mesh, mut data) =
@@ -334,44 +338,50 @@ pub(crate) fn update_unskinned_positions(
     write_positions(mesh, &data.positions);
 }
 
-/// Recompute skinned vertex positions from the current bone matrices.
+/// Recompute skinned vertex positions from the current bone matrices and the
+/// slot's FFD deform offsets.
 pub(crate) fn update_weighted_positions(
     data: &mut WeightedMeshData,
     armature: &Armature,
+    deform: &[f64],
     mesh: &mut Mesh,
 ) {
-    data.positions.clear();
-    data.positions.reserve(data.vertices.len());
-    for influences in &data.vertices {
-        let mut x = 0.0f64;
-        let mut y = 0.0f64;
-        for influence in influences {
-            let Some(bone_idx) = influence.bone else {
-                continue;
-            };
-            let Some(bone) = armature.bones.get(bone_idx.index()) else {
-                continue;
-            };
-            let matrix = bone.base.global_transform_matrix;
-            let weight = influence.weight as f64;
-            x += (matrix.a * influence.x as f64 + matrix.c * influence.y as f64 + matrix.tx)
-                * weight;
-            y += (matrix.b * influence.x as f64 + matrix.d * influence.y as f64 + matrix.ty)
-                * weight;
-        }
-        data.positions.push([x as f32, y as f32, 0.0]);
-    }
+    let mut positions = std::mem::take(&mut data.positions);
+    weighted_positions_with(
+        data,
+        |bone_idx| {
+            armature
+                .bones
+                .get(bone_idx.index())
+                .map(|bone| bone.base.global_transform_matrix)
+        },
+        deform,
+        &mut positions,
+    );
+    data.positions = positions;
     // Writing in place is safe here: this runs in PostUpdate before render
     // extraction, and the mesh is created with MAIN_WORLD usage.
     write_positions(mesh, &data.positions);
 }
 
-fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature) -> Mesh {
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    let mut positions = Vec::with_capacity(data.vertices.len());
+/// Weighted position math shared by the initial mesh build and the per-frame
+/// update.
+///
+/// Mirrors the weighted branch of `PixiSlot._updateMesh` (`PixiSlot.ts:281-313`):
+/// each influence transforms its *own* bind position plus the next deform pair,
+/// then the results are blended by weight. The deform cursor advances per
+/// non-null influence (not per vertex), and a null bone consumes nothing — both
+/// quirks are copied from the reference implementation instead of "fixed".
+fn weighted_positions_with(
+    data: &WeightedMeshData,
+    mut bone_matrix: impl FnMut(BoneIdx) -> Option<Matrix>,
+    deform: &[f64],
+    positions: &mut Vec<[f32; 3]>,
+) {
+    positions.clear();
+    positions.reserve(data.vertices.len());
+    let has_deform = data.inherit_deform && !deform.is_empty();
+    let mut deform_cursor = 0usize;
     for influences in &data.vertices {
         let mut x = 0.0f64;
         let mut y = 0.0f64;
@@ -379,18 +389,41 @@ fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature) -> Mesh {
             let Some(bone_idx) = influence.bone else {
                 continue;
             };
-            let Some(bone) = armature.bones.get(bone_idx.index()) else {
+            let Some(matrix) = bone_matrix(bone_idx) else {
                 continue;
             };
-            let matrix = bone.base.global_transform_matrix;
+            let mut x_local = influence.x as f64;
+            let mut y_local = influence.y as f64;
+            if has_deform {
+                x_local += deform.get(deform_cursor).copied().unwrap_or(0.0);
+                y_local += deform.get(deform_cursor + 1).copied().unwrap_or(0.0);
+                deform_cursor += 2;
+            }
             let weight = influence.weight as f64;
-            x += (matrix.a * influence.x as f64 + matrix.c * influence.y as f64 + matrix.tx)
-                * weight;
-            y += (matrix.b * influence.x as f64 + matrix.d * influence.y as f64 + matrix.ty)
-                * weight;
+            x += (matrix.a * x_local + matrix.c * y_local + matrix.tx) * weight;
+            y += (matrix.b * x_local + matrix.d * y_local + matrix.ty) * weight;
         }
         positions.push([x as f32, y as f32, 0.0]);
     }
+}
+
+fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature, deform: &[f64]) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    let mut positions = Vec::with_capacity(data.vertices.len());
+    weighted_positions_with(
+        data,
+        |bone_idx| {
+            armature
+                .bones
+                .get(bone_idx.index())
+                .map(|bone| bone.base.global_transform_matrix)
+        },
+        deform,
+        &mut positions,
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs.clone());
     mesh.insert_indices(Indices::U32(data.indices.clone()));
@@ -532,11 +565,24 @@ fn decode_weighted_mesh(
     let ints = &root.ir.int_array;
     let floats = &root.ir.float_array;
     let geo = geometry.offset as usize;
-    let vertex_count = ints[geo + binary_offset::geometry::VERTEX_COUNT].max(0) as usize;
-    let triangle_count = ints[geo + binary_offset::geometry::TRIANGLE_COUNT].max(0) as usize;
-    let float_offset = fix_i16_offset(ints[geo + binary_offset::geometry::FLOAT_OFFSET]);
+    let Some(&vertex_count) = ints.get(geo + binary_offset::geometry::VERTEX_COUNT) else {
+        return WeightedMeshData::default();
+    };
+    let vertex_count = vertex_count.max(0) as usize;
+    let Some(&triangle_count) = ints.get(geo + binary_offset::geometry::TRIANGLE_COUNT) else {
+        return WeightedMeshData::default();
+    };
+    let triangle_count = triangle_count.max(0) as usize;
+    let Some(&raw_float_offset) = ints.get(geo + binary_offset::geometry::FLOAT_OFFSET) else {
+        return WeightedMeshData::default();
+    };
+    let float_offset = fix_i16_offset(raw_float_offset);
     let weight_offset = weight.offset as usize;
-    let weight_float = fix_i16_offset(ints[weight_offset + binary_offset::weight::FLOAT_OFFSET]);
+    let Some(&raw_weight_float) = ints.get(weight_offset + binary_offset::weight::FLOAT_OFFSET)
+    else {
+        return WeightedMeshData::default();
+    };
+    let weight_float = fix_i16_offset(raw_weight_float);
     let bone_count = weight.bones.len();
     let mut ib = weight_offset + binary_offset::weight::BONE_INDICES + bone_count;
     let mut iv = weight_float;
@@ -607,6 +653,7 @@ fn decode_weighted_mesh(
         vertices,
         uvs,
         indices,
+        inherit_deform: geometry.inherit_deform,
         positions: Vec::new(),
     }
 }
@@ -815,5 +862,115 @@ mod tests {
         // v' = 0.2       -> 0.2 * 8 / 32 = 0.05
         assert!((uv[0] - 0.2).abs() < 1e-6, "{uv:?}");
         assert!((uv[1] - 0.05).abs() < 1e-6, "{uv:?}");
+    }
+
+    fn weighted_data(influences: Vec<BoneWeight>, inherit_deform: bool) -> WeightedMeshData {
+        WeightedMeshData {
+            vertices: vec![influences],
+            uvs: Vec::new(),
+            indices: Vec::new(),
+            inherit_deform,
+            positions: Vec::new(),
+        }
+    }
+
+    fn translate(x: f64, y: f64) -> Matrix {
+        Matrix {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx: x,
+            ty: y,
+        }
+    }
+
+    #[test]
+    fn weighted_mesh_applies_ffd_per_influence_like_the_reference() {
+        // Two influences on one vertex; the deform cursor advances per
+        // influence (PixiSlot.ts:281-313), not per vertex.
+        let data = weighted_data(
+            vec![
+                BoneWeight {
+                    bone: Some(BoneIdx(0)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                BoneWeight {
+                    bone: Some(BoneIdx(1)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            true,
+        );
+        let matrices = [translate(10.0, 0.0), translate(0.0, 20.0)];
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |idx| Some(matrices[idx.index()]),
+            &[2.0, 3.0, 4.0, 5.0],
+            &mut positions,
+        );
+        // influence 0: (0+2, 0+3) + (10, 0) -> (12, 3) * 0.5
+        // influence 1: (0+4, 0+5) + (0, 20) -> (4, 25) * 0.5
+        assert!((positions[0][0] - 8.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 14.0).abs() < 1e-5, "{positions:?}");
+    }
+
+    #[test]
+    fn weighted_mesh_null_bone_does_not_consume_deform() {
+        let data = weighted_data(
+            vec![
+                BoneWeight {
+                    bone: None,
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                BoneWeight {
+                    bone: Some(BoneIdx(0)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            true,
+        );
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |_idx| Some(translate(0.0, 0.0)),
+            &[2.0, 3.0, 4.0, 5.0],
+            &mut positions,
+        );
+        // Reference quirk: a null bone is skipped without consuming floats, so
+        // the valid influence reads the first deform pair (2, 3).
+        assert!((positions[0][0] - 1.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 1.5).abs() < 1e-5, "{positions:?}");
+    }
+
+    #[test]
+    fn weighted_mesh_without_inherit_deform_ignores_deform() {
+        let data = weighted_data(
+            vec![BoneWeight {
+                bone: Some(BoneIdx(0)),
+                weight: 1.0,
+                x: 1.0,
+                y: 2.0,
+            }],
+            false,
+        );
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |_idx| Some(translate(0.0, 0.0)),
+            &[100.0, 100.0],
+            &mut positions,
+        );
+        assert!((positions[0][0] - 1.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 2.0).abs() < 1e-5, "{positions:?}");
     }
 }

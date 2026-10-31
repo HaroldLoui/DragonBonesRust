@@ -57,7 +57,10 @@ is the armature's world placement; each slot is spawned as a child with a
   with the region (`u' = 1 - v, v' = u`, matching the Phaser/Cocos adapters); the
   same mapping is used for mesh and skinned-mesh UVs.
 - Non-skinned mesh slots, including FFD/deform vertex updates.
-- Weighted/skinned mesh slots rebuilt in armature space every frame.
+- Weighted/skinned mesh slots rebuilt in armature space every frame, including
+  the slot's FFD deform applied per influence exactly like the reference adapters
+  (`PixiSlot.ts:281-313`, including the per-influence deform cursor and the
+  null-bone "consume nothing" quirk).
 - Surface mesh displays: when the slot's parent bone is a Surface, vertices are
   warped per vertex by the Surface matrix in armature space (matching the
   reference adapters), with FFD deform applied first.
