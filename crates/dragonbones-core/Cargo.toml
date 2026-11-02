@@ -1,10 +1,33 @@
 [package]
 name = "dragonbones-core"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+
+# `cargo bench -p dragonbones-core` 只跑 criterion bench：关掉 lib 隐式的
+# libtest bench target，否则 libtest 会把 criterion 参数（--sample-size 等）当未知选项。
+[lib]
+bench = false
 
 [dependencies]
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false
+
+[[bench]]
+name = "assemble"
+harness = false
+
+[[bench]]
+name = "advance"
+harness = false

@@ -164,7 +164,7 @@ for (let i = 0; i < frameCount; i++) {
 const asset = path
   .basename(skePath)
   .replace(/[.]json$/, "")
-  .replace(/_ske_compressed$/, "_compressed")
+
   .replace(/_ske$/, "");
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });

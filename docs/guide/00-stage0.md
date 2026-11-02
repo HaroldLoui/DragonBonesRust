@@ -21,7 +21,7 @@
 | F8 | `Transform.updateTransform` 在 requirements P0-1/常见坑里被提及，但 5.7 源码不存在该方法 | 阶段 1 验收改为：`Transform.toMatrix` / `fromMatrix` 语义对齐（对 skew 的处理在 `toMatrix` 的 `c/d` 分支） |
 | F9 | 事件监听必须实现 `hasDBEventListener`，否则 `AnimationState._advanceFadeTime` 抛 TypeError（requirements 已写，实测确认） | EvProxy 四方法齐全 |
 
-已生成的验证产物（可删可重生成）：`testdata/golden/` 37 个文件 ≈ 37MB（9 素材 × 全动画 × 120 帧）。是否入库由你决定（37MB 偏大，可只提交脚本、CI 里生成）。
+已生成的验证产物（可删可重生成）：`testdata/golden/` 31 个文件（8 素材 × 全动画 × 120 帧）。2026-10-31 注：原 `PlantAnimate` 的 compressed 变体已在 1142e46 合并进 `PlantAnimate_ske.json`，历史数字 37 个/9 素材随之变为 31 个/8 素材。是否入库由你决定（37MB 偏大，可只提交脚本、CI 里生成）。
 
 ---
 

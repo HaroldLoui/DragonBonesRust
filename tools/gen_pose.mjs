@@ -1,5 +1,5 @@
 // tools/gen_pose.mjs — 镜像 gen_golden.mjs 的 9 素材扫描，逐个 spawn posedump.mjs
-//              → testdata/pose/<去 _ske(_compressed) 后缀主名>.json（每个素材 1 个静姿态文件）
+//              → testdata/pose/<去 _ske 后缀主名>.json（每个素材 1 个静姿态文件）
 // 用法: node tools/gen_pose.mjs
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -13,15 +13,15 @@ const OUT = path.join(ROOT, "testdata", "pose");
 
 // ==== 结构照 gen_golden.mjs:14-24 ====
 const skes = fs.readdirSync(ASSETS)
-  .filter(f => f.endsWith("_ske.json") || f.endsWith("_ske_compressed.json"));
+  .filter(f => f.endsWith("_ske.json"));
 
 let ok = 0, fail = 0;
 for (const ske of skes) {
-  const tex = ske.replace(/_ske(_compressed)?[.]json$/, "_tex.json");   // F7
+  const tex = ske.replace(/_ske[.]json$/, "_tex.json");   // F7
   const data = JSON.parse(fs.readFileSync(path.join(ASSETS, ske), "utf8"));
   const armName = data.armature[0].name;                               // F7: 从数据读（9 素材单骨架）
-  // 文件名: Dragon_ske → Dragon.json, PlantAnimate_ske → PlantAnimate_compressed.json
-  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "").replace(/_ske_compressed$/, "_compressed");
+  // 文件名: Dragon_ske → Dragon.json
+  const stem = ske.replace(/[.]json$/, "").replace(/_ske$/, "");
   const out = path.join(OUT, `${stem}.json`);
   const r = spawnSync(process.execPath, [
     path.join(HERE, "posedump.mjs"),

@@ -1,8 +1,8 @@
 # DragonBones Rust 运行时 — 需求文档与实施指南
 
-> 版本：v1.0（2026-10-03）
-> 状态：调研完成，待实施
-> 关联目录：`DragonBonesJS/`（官方 JS 参考实现）、`assets/`（待播放素材）、`src/`（当前为空壳）
+> 版本：v1.0（2026-10-03）；状态更新 2026-10-25
+> 状态：阶段 0–6 已完成（core 与 JS 黄金数据差分全绿）；阶段 7 Bevy 适配层 MVP 已落地，并完成生命周期/共享材质/slot 索引三项收口
+> 关联目录：`DragonBonesJS/`（官方 JS 参考实现）、`assets/`（待播放素材）、`crates/`（Rust 实现）
 
 ---
 
@@ -23,13 +23,13 @@
 
 ### 0.1 项目目标
 
-用 Rust **完全复刻** DragonBones 官方 JS 运行时（`DragonBonesJS/DragonBones`）的核心部分，并提供一个 Bevy 适配层，最终在 Bevy 中播放 `assets/` 目录下的 9 个素材动画。
+用 Rust **完全复刻** DragonBones 官方 JS 运行时（`DragonBonesJS/DragonBones`）的核心部分，并提供一个 Bevy 适配层，最终在 Bevy 中播放 `assets/` 目录下的 8 个素材动画。
 
 ### 0.2 "100% 复刻"的验收定义
 
 以 **JS 版运行时的实际行为为规格（spec）**，通过逐帧数值差分测试验收：
 
-- 9 个素材 × 全部动画 × ≥120 帧
+- 8 个素材 × 全部动画 × ≥120 帧
 - 骨骼世界变换、插槽状态（displayIndex / color / zOrder / zIndex / visible）、事件序列
 - `f64` 字段容差 `1e-6`，dbbin（f32）路径容差 `1e-4`，整数/枚举/索引必须完全相等
 
@@ -52,7 +52,7 @@
 
 | 项 | 结论 |
 |---|---|
-| Bevy 版本 | **0.19.1 stable** 开发；0.20 正式发布后只迁移适配层（core 与 Bevy 完全解耦） |
+| Bevy 版本 | **0.20.0**（已迁移；core 与 Bevy 完全解耦） |
 | Rust edition | 2024（`Cargo.toml` 已设置） |
 | 数值精度 | core 全程 `f64`，仅在渲染边界降 `f32` |
 | 数据结构 | arena + `newtype` 索引，禁用 `Rc<RefCell>` |
@@ -142,7 +142,7 @@ readonly armature / readonly animation
 补充事实：
 
 - 全部为 **DragonBones 5.5 数据格式**，单骨架、单页图集
-- `PlantAnimate_ske.json`（37KB）与 `PlantAnimate_ske.json`（251KB）**键集合与帧计数完全一致**，前者只是移除了空白字符的同一格式，无需专门处理逻辑
+- `PlantAnimate_ske.json` 即压缩（无空白字符）格式；原独立的 `PlantAnimate_ske_compressed.json` 已在 1142e46 合并进该文件（键集合/帧计数一致），黄金数据同步收敛为 8 素材 / 31 个动画（PlantAnimate 6 个）
 - 文件名含非 ASCII 字符（中文），需验证 Bevy 资源加载路径处理（风险 R7）
 - 仓库 `Pixi/Demos/` 下还有大量额外素材，含 `.dbbin` 二进制样本，可用于 P1 阶段测试
 
@@ -150,8 +150,8 @@ readonly armature / readonly animation
 
 | 项 | 实测结果 |
 |---|---|
-| Bevy 版本 | `0.20.0-rc.2`（2026-09-28）、stable `0.19.1` |
-| Bevy 0.19.1 关键 API | `bevy::mesh::Mesh2d`、`bevy::sprite_render::Material2d`（含 `specialize` / `fragment_shader` / `vertex_shader` / `alpha_mode` / `depth_bias`）、`ColorMaterial`、`AlphaMode2d`、`MeshMaterial2d` |
+| Bevy 版本 | `0.20.0` stable（2026-10） |
+| Bevy 0.20 关键 API | `bevy::mesh::Mesh2d`、`bevy::sprite_render::Material2d`（含 `specialize` / `fragment_shader` / `vertex_shader` / `alpha_mode` / `depth_bias`）、`ColorMaterial`、`AlphaMode2d`、`MeshMaterial2d` |
 | Node | v22.18.0 已安装 |
 | JS 参考运行时 | `DragonBonesJS/Pixi/Demos/8.x/libs/dragonBones/dragonBones.js`（728KB UMD）**已实测可在 Node 中直接 require 并完整驱动** |
 | crates.io 现状 | `rusty_dragonbones` 0.3.0 仅 354 行，是骨架，无参考价值；`bevy_spine` 等仅覆盖 Spine |
@@ -171,7 +171,7 @@ readonly armature / readonly animation
 | P0-2 | `BaseObject` 对象池语义（`borrowObject` / `returnToPool` / `_onClear` / `bufferObject` 缓冲回收队列） | 生命周期与 JS 等价，无提前释放 |
 | P0-3 | 全部枚举（`core/DragonBones.ts:27-277`）：`BinaryOffset` `ArmatureType` `BoneType` `DisplayType` `BoundingBoxType` `ActionType` `BlendMode(14)` `TweenType` `TimelineType(17)` `OffsetMode` `AnimationFadeOutMode` `AnimationBlendType` `AnimationBlendMode` `ConstraintType` `PositionMode` `SpacingMode` `RotateMode` | 数值一一对应 |
 | P0-4 | `model/` 11 个数据模型的字段与结构 | 与 TS 字段一一对应 |
-| P0-5 | JSON 解析器 → 扁平 IR，支持数据版本 `2.3 / 3.0 / 4.0 / 4.5 / 5.0 / 5.5 / 5.6` | 9 个素材的 IR 数组与 JS **逐元素相等** |
+| P0-5 | JSON 解析器 → 扁平 IR，支持数据版本 `2.3 / 3.0 / 4.0 / 4.5 / 5.0 / 5.5 / 5.6` | 8 个素材的 IR 数组与 JS **逐元素相等** |
 | P0-6 | 骨架层级变换：`inheritTranslation / inheritRotation / inheritScale / inheritReflection` + `flipX / flipY` + `Alpha` 传播 | 姿态矩阵差分 ≤ 1e-6 |
 | P0-7 | `Slot` 全逻辑：displayIndex、color、zOrder、zIndex、visible、alpha、deformVertices、DisplayFrame、14 个抽象方法的 Rust 等价物（trait） | 差分通过 |
 | P0-8 | **16 个具体 TimelineState + 5 个抽象基类 + `BlendState`**<br>具体：`ActionTimelineState` `ZOrderTimelineState` `BoneAllTimelineState` `BoneTranslateTimelineState` `BoneRotateTimelineState` `BoneScaleTimelineState` `SurfaceTimelineState` `AlphaTimelineState` `SlotDisplayTimelineState` `SlotColorTimelineState` `SlotZIndexTimelineState` `DeformTimelineState` `IKConstraintTimelineState` `AnimationProgressTimelineState` `AnimationWeightTimelineState` `AnimationParametersTimelineState`<br>抽象：`TimelineState` `TweenTimelineState` `SingleValueTimelineState` `DoubleValueTimelineState` `MutilpleValueTimelineState` | 逐帧数值差分 |
@@ -180,7 +180,7 @@ readonly armature / readonly animation
 | P0-11 | 事件系统：`EventObject`（`frameEvent` / `soundEvent` / action）、缓冲与在 `advanceTime` 末尾派发 | 事件序列与 JS 完全一致 |
 | P0-12 | `WorldClock` + `DragonBones.advanceTime` 顶层驱动（含对象回收与事件派发顺序） | 时间推进行为一致 |
 | P0-13 | `BaseFactory` 装配：`_fillBuildArmaturePackage` / `_buildBones` / `_buildSlots` / `_buildConstraints` / `_getSlotDisplay` / `buildArmature` | `buildArmature` 后骨架结构一致 |
-| P0-14 | **差分测试基建**（详见 §3 阶段 0） | 9 素材 × 全动画 × ≥120 帧全绿 |
+| P0-14 | **差分测试基建**（详见 §3 阶段 0） | 8 素材 × 全动画 × ≥120 帧全绿 |
 
 ### 2.2 P1 — 完整度
 
@@ -209,7 +209,7 @@ readonly armature / readonly animation
 | P2-6 | blend 模式 → 自定义 `Material2d`（见 R1） |
 | P2-7 | 事件 → Bevy `Event` / `EventWriter` |
 | P2-8 | 时间驱动：接入 Bevy `Time` + `SystemSet` 调度 |
-| P2-9 | Demo：播放 `assets/` 下 9 个素材动画，覆盖 blend 与 mesh 用例 |
+| P2-9 | Demo：播放 `assets/` 下 8 个素材动画，覆盖 blend 与 mesh 用例 |
 | P2-10 | Bevy 0.20 迁移预案（只动 `dragonbones-bevy`） |
 
 ---
@@ -245,13 +245,13 @@ readonly armature / readonly animation
 **交付物**
 
 - `tools/jsdump.mjs`
-- `testdata/golden/*.json`（9 个素材的逐帧黄金数据）
+- `testdata/golden/*.json`（8 个素材的逐帧黄金数据）
 - workspace 骨架 + 空测试
 
 **验收标准**
 
 - `node tools/jsdump.mjs assets/Dragon_ske.json` 能输出 19 骨骼 / 18 插槽骨架的 120 帧数据
-- 9 个素材全部转储成功，无异常
+- 8 个素材全部转储成功，无异常
 
 **JS 参考环境完整代码**（已实测跑通）
 
@@ -462,7 +462,7 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 **验收标准**
 
-- **9 个素材的 5 组 IR 数组与 JS 逐元素完全相等**（f64 容差 1e-12 或直接 bit 相等）
+- **8 个素材的 5 组 IR 数组与 JS 逐元素完全相等**（f64 容差 1e-12 或直接 bit 相等）
 - 数据版本 5.5 全键通过；其他版本至少能解析不 panic
 
 **常见坑**
@@ -607,7 +607,7 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 **验收标准**
 
-- 单动画播放：9 素材 × 全动画 × 120 帧差分通过
+- 单动画播放：8 素材 × 全动画 × 120 帧差分通过
 - `gotoAndStopByFrame` 往返一致
 - `resetToPose` 后姿态与初始姿态一致
 
@@ -637,7 +637,7 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 | 用例 | 覆盖点 |
 |---|---|
-| 单动画播放 ×9 素材 | 基线 |
+| 单动画播放 ×8 素材 | 基线 |
 | `fadeOut` + `fadeIn` 交叉 | fade 状态机 |
 | 同 layer 叠加两动画 | layer 权重 |
 | `gotoAndStopByFrame` 往返 | 时间跳转 |
@@ -655,7 +655,7 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 **验收标准**
 
 - **P0 全部 14 项通过**
-- 差分测试 9 素材 × 全动画 × 全用例矩阵全绿
+- 差分测试 8 素材 × 全动画 × 全用例矩阵全绿
 
 **工期**：3–5 天
 
@@ -697,7 +697,19 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 > **实现状态（2026-10-21）**：MVP 已落地 `crates/dragonbones-bevy` + `crates/dragonbones-demo`。
 > 已支持：ske/tex 资源加载、armature/slot 实体、B2 `GlobalTransform` 直写、image/非蒙皮 mesh/蒙皮 mesh（含 FFD）、颜色乘子、z 排序、时间驱动。
-> 未完成：Add/Multiply/Screen/Overlay blend、rotated atlas、Surface mesh 顶点变形、child armature、事件转发；demo 通过命令行参数选择单个 rig（`--demo <name>` 或位置参数，可选 dragon/dragon_blend/plant/rooster/long/surface）；动画组在 Bevy UI 覆盖层中展示，运行时用 `1-9` / `Left` / `Right` 切换（起始动画不是命令行参数）。
+> 当时未完成（均已在 2026-10-29 收口，见下）：Add/Multiply/Screen/Overlay blend、rotated atlas、Surface mesh 顶点变形、child armature、事件转发；demo 通过命令行参数选择单个 rig（`--demo <name>` 或位置参数，可选 dragon/dragon_blend/plant/rooster/long/surface）；动画组在 Bevy UI 覆盖层中展示，运行时用 `1-9` / `Left` / `Right` 切换（起始动画不是命令行参数）。
+>
+> **2026-10-25 收口**：despawn → dispose 生命周期（core arena、skeleton/atlas 注册、mesh/material 资产回收）；按 atlas page 共享 `ColorMaterial` + per-slot 顶点色；sync 系统改为 O(slots) 的 `SlotIdx → order` 映射。对应实现见 `crates/dragonbones-bevy/src/{runtime,sync,render,material}.rs`，测试见 `crates/dragonbones-bevy/tests/lifecycle.rs`。
+>
+> **2026-10-29 收口**：armature 级脏标记（pose hash + root affine，`DragonBonesSyncConfig` 可关）；criterion benchmark 基线（core 25 个 + 适配层 16 个，含 rig 对比 profile）；自定义 `Material2d` 支持 Normal/Add/Multiply/Screen，按 `(atlas image, blend)` 共享材质（Overlay 等需读目标像素的模式仍回退 Normal）；直写 `GlobalTransform` 的 schedule 集成测试；动画事件转发为 Bevy `Message`（`DragonBonesEvent`）；CPU 蒙皮复用 scratch buffer + 原地写顶点；运行时动画命令 API（`DragonBonesCommand`：play/play_config/stop/pause/resume/set_speed）；`rotated: true` 图集区域（内容宽高互换 + UV 旋转）；Surface mesh 逐顶点变形（armature-space + 每顶点 Surface 矩阵）；child armature display（嵌套 root、父 slot 世界矩阵、可见性沿父链、子树递归回收）。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend,schedule,events,player,rotated_atlas,surface_mesh,child_armature}.rs`。
+
+> **2026-10-31 技术债收口（P1）**：适配层——sync 只为 dirty/带 child armature 的 armature 构建 slot 顺序表（修复 child armature 支持带来的静态同步回归），顶层 `Visibility` 参与脏检查、可见槽写 `Inherited`、隐藏槽写 `Hidden`（root Hidden 可隐藏整棵子树，sync 排在 `VisibilityPropagate` 之前），child armature 仅当前 display 可见，材质引用计数改为直接在 binding 上更新（同帧多槽切换同一 blend 只 acquire 一次），脏检查改为内容指纹（display frame 的 region/geometry/pivot/child，不含字符串）使 `replace_texture_data`/`replace_skin` 当帧刷新；core——parser 数据派生下标改 checked（坏输入返回 None 而非 panic）、清理 4 处“已实现却写未实现”的陈旧 TODO、移除 PlantAnimate `compressed` 重复素材与 27 个逐字节重复的黄金数据（8 素材 / 31 动画）。文档同步修正素材数、benchmark 数量（适配层 16 个）与 Bevy 版本。测试见 `crates/dragonbones-bevy/tests/{lifecycle,blend,child_armature}.rs` 与 core 测试。
+
+> **2026-10-31 技术债收口（core P2，对照 DragonBonesJS）**：PathConstraint 加权分支（`Constraint.ts:314-347`，含 geometryBones 加权混合与 null 骨浮点错位照抄）从缺失补为已实现；`cachedFrameRate` 二次设置按 `Armature.ts:768-779`/`ArmatureData.ts:269-278` 修正（`>0` 早退且不赋值，外层已进入才递归 child armature），getter/帧表保持一致；`texture_atlas_scale` 从 build 级单值改为按 display frame 登记命中图集 scale（`Slot.ts:412`，外部 replace 回退旧值）；确认缺骨约束在官方同样崩溃，保留 panic 并补测试/注释；`replace_*` 索引归一化抽 helper（行为不变）并补负索引/越界/defaultSkin 测试；`Armature::intersects_segment` 补 A/B 选择不对称测试。core 测试 230 → 245，golden/ir/pose 数值零漂移。
+
+> **2026-10-31 core 热路径（P2 续）**：timeline 的 bone 目标查找由线性 `find` 改为下标直取（`BoneIdx` = 创建序 = `armature.bones` 下标不变量，`debug_assert` 锁定），golden/ir/pose 零漂移；Rooster（63 骨）`advance_time` 6.90→6.31 µs、`advance_one` 6.78→6.38 µs（Dragon/Plant 在噪声内）。slot 查找保留线性（zOrder 重排使下标≠SlotIdx，当前槽数 ≤18 收益不足）；`cached_frame_indices` 共享化按 D-6.3 记录为已知取舍（官方表可变共享、Rust 克隆且仅 animation_dirty 时挂载）。
+
+> **2026-10-31 core 测试缺口（P2 收尾）**：① `_parseDeformFrame` 的 weight 分支——核对官方 TS 该分支本身就是 `// TODO`（`ObjectDataParser.ts:1993`，不写任何帧数据），Rust 保持同样的 no-op 语义并在代码注释中写明；新增 `tests/deform_weight.rs`（向 Rooster 加权 mesh 注入 ffd 时间轴，断言解析成功且 `frame_float_array` 与基线逐值相同）。② dbbin mesh 对拍——submodule 内全部官方 dbbin 样本（mecha×2、dragon_boy）均不含 mesh，且仓库没有 dbbin 导出器，无法生成可信 mesh 样本；现有 `tests/dbbin.rs` 仅覆盖 header/数组/时间轴等价。该缺口为**外部阻塞**，已写入 model_mapping D-6.10（需官方 mesh dbbin 样本或导出器后再补 golden）。
 
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
@@ -755,8 +767,8 @@ MVP 用 `ColorMaterial` 的 per-slot color 做乘子：
 color = (rM, gM, bM, aM * _globalAlpha)
 ```
 
-- 每个 slot 一个材质，避免 material uniform 同步；`ColorTransform` 的 RGB/alpha offset 暂不支持（需要自定义 shader 或顶点色）。
-- 后续若要支持 offset，可改为 per-vertex color + 自定义 `Material2d`。
+- 材质按 `(atlas image, blend mode)` 共享（不再每 slot 一个），per-slot tint 走顶点色 `ATTRIBUTE_COLOR`；`ColorTransform` 的 RGB/alpha offset 暂不支持（现有自定义 `Material2d` 只做颜色乘子）。
+- 若后续要支持 offset，可在同一 shader 里扩展顶点属性或 uniform 数组。
 
 #### 7.5 zOrder 排序（P2-5）
 
@@ -795,7 +807,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 
 #### 7.8 Demo（P2-9）
 
-- 播放 9 个素材，键盘切换动画
+- 播放 8 个素材，键盘切换动画
 - 专门展示：mesh 变形（`Surface_P1_4`）、blend 模式（`Dragon_Blend` / `Rooster_Blend`）
 
 **交付物**
@@ -805,7 +817,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 
 **验收标准**
 
-- 9 个素材全部能播放，动画切换、事件触发正常
+- 8 个素材全部能播放，动画切换、事件触发正常
 - mesh 变形与 blend 效果与浏览器中的 DragonBones 官方 demo 目视一致
 - 无系统 panic、无每帧分配尖峰
 
@@ -890,7 +902,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 | 渲染参考实现（4 文件 607 行） | `Pixi/8.x/src/dragonBones/pixi/` |
 | JS 参考运行时（可 Node require） | `Pixi/Demos/8.x/libs/dragonBones/dragonBones.js` |
 | JS 素材（含 `.dbbin`） | `Pixi/Demos/8.x/resources/` |
-| Bevy API | <https://docs.rs/bevy/0.19.1>：`bevy::mesh::Mesh2d`、`bevy::sprite_render::Material2d` |
+| Bevy API | <https://docs.rs/bevy/0.20.0>：`bevy::mesh::Mesh2d`、`bevy::sprite_render::Material2d` |
 
 ### 6.1 TS 源文件 → Rust 模块映射表
 
@@ -940,9 +952,9 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 
 | 里程碑 | 阶段 | 内容 | 工期（专职） | 验收 |
 |---|---|---|---|---|
-| **M0** | 阶段 0 | workspace + `jsdump.mjs` + 黄金数据 + CI | 0.5 天 | 9 素材全部转储成功 |
+| **M0** | 阶段 0 | workspace + `jsdump.mjs` + 黄金数据 + CI | 0.5 天 | 8 素材全部转储成功 |
 | **M1** | 阶段 1 | geom + core + model | 3–5 天 | 单元测试 + 枚举核对表 |
-| **M2** | 阶段 2 | 解析器 → IR | 5–8 天 | **IR 逐元素相等**（9 素材） |
+| **M2** | 阶段 2 | 解析器 → IR | 5–8 天 | **IR 逐元素相等**（8 素材） |
 | **M3** | 阶段 3 | armature 层级 | 5–8 天 | 静姿态矩阵差分 ≤ 1e-6 |
 | **M4** | 阶段 4 | 动画系统 | 8–12 天 | 单动画逐帧差分 |
 | **M5** | 阶段 5 | 工厂 + 事件 + P0 收口 | 3–5 天 | **P0 全绿（14 项）** |
@@ -954,7 +966,7 @@ SystemSet::DragonBones  // 在 transform propagation 之前推进动画
 
 ### 建议的第一步
 
-在写任何 Rust 业务代码之前，先做**阶段 0** —— 把 `tools/jsdump.mjs` 完整写出来，跑通 9 个素材的黄金数据转储。这一步同时完成三件事：
+在写任何 Rust 业务代码之前，先做**阶段 0** —— 把 `tools/jsdump.mjs` 完整写出来，跑通 8 个素材的黄金数据转储。这一步同时完成三件事：
 
 1. 验证参考环境确实可用（本调研已预验证，剩协议定义）
 2. 把"100%"从口号变成可执行的验收标准

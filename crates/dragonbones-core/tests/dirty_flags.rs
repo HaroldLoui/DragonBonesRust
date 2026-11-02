@@ -15,9 +15,17 @@ fn build() -> (BaseFactory, dragonbones_core::armature::ArmatureIdx) {
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));
     let idx = factory
-        .build_armature("Dragon", "Dragon", "", "Dragon", Box::new(NullArmatureProxy::new()))
+        .build_armature(
+            "Dragon",
+            "Dragon",
+            "",
+            "Dragon",
+            Box::new(NullArmatureProxy::new()),
+        )
         .expect("build");
-    factory.attach_armature(factory.root_clock(), idx).expect("attach");
+    factory
+        .attach_armature(factory.root_clock(), idx)
+        .expect("attach");
     (factory, idx)
 }
 
@@ -48,8 +56,16 @@ fn lock_update_blocks_advance_and_z_index_sorts_slots() {
     armature.z_index_dirty = true;
     factory.advance_time(1.0 / 24.0);
     let armature = factory.armature(idx);
-    let first_pos = armature.slots.iter().position(|slot| slot.idx == first).unwrap();
-    let second_pos = armature.slots.iter().position(|slot| slot.idx == second).unwrap();
+    let first_pos = armature
+        .slots
+        .iter()
+        .position(|slot| slot.idx == first)
+        .unwrap();
+    let second_pos = armature
+        .slots
+        .iter()
+        .position(|slot| slot.idx == second)
+        .unwrap();
     assert!(second_pos < first_pos, "zIndex 小的槽应排在前面");
 }
 

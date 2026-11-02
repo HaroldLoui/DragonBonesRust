@@ -3,7 +3,6 @@ use bevy::text::{FontSize, TextColor, TextFont};
 use bevy::ui::widget::Text;
 use bevy::ui::{BackgroundColor, Node, PositionType, UiRect, Val};
 use bevy::window::WindowResolution;
-use dragonbones_bevy::DragonBonesRuntime;
 use dragonbones_bevy::prelude::*;
 
 /// Usage:
@@ -43,7 +42,25 @@ fn main() {
         .add_plugins(DragonBonesPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, (switch_animation, update_animation_hud).chain())
+        .add_systems(Update, log_dragonbones_events)
         .run();
+}
+
+/// Prints the animation events the adapter forwards into Bevy messages.
+///
+/// The demo logs every event at `info` so the bridge is visible while running;
+/// a real game would usually filter for `complete` / `frameEvent` / `soundEvent`.
+fn log_dragonbones_events(mut events: MessageReader<DragonBonesEvent>) {
+    for event in events.read() {
+        info!(
+            "DragonBones event: {} (armature {:?}, name {:?}, bone {:?}, slot {:?})",
+            event.event_type(),
+            event.armature,
+            event.event.name,
+            event.event.bone_name,
+            event.event.slot_name,
+        );
+    }
 }
 
 const DEMO_NAMES: &[&str] = &[
@@ -253,13 +270,13 @@ fn usage_error(message: &str) -> ! {
 fn switch_animation(
     keys: Res<ButtonInput<KeyCode>>,
     mut selected: ResMut<SelectedDemo>,
-    mut runtime: NonSendMut<DragonBonesRuntime>,
-    instances: Query<&DragonBonesInstance>,
+    mut commands: MessageWriter<DragonBonesCommand>,
+    instances: Query<(Entity, &DragonBonesInstance)>,
 ) {
     if selected.demo.animations.is_empty() {
         return;
     }
-    let Some(instance) = instances.iter().next() else {
+    let Some((root, _instance)) = instances.iter().next() else {
         return;
     };
 
@@ -294,25 +311,11 @@ fn switch_animation(
     next = next_index;
 
     let animation_name = selected.demo.animations[next].clone();
-    let played = {
-        let Some(armature) = runtime
-            .factory
-            .armatures
-            .get_mut(instance.armature.index())
-            .and_then(Option::as_mut)
-        else {
-            return;
-        };
-        armature
-            .animation
-            .play(Some(animation_name.as_str()), -1)
-            .is_some()
-    };
-    if played {
-        runtime.factory.advance_one(instance.armature, 0.0);
-        selected.current = next;
-        info!("animation: {animation_name}");
-    }
+    // Dogfood the public command API: the adapter applies the command before
+    // this frame's advance, so the pose/event updates happen immediately.
+    commands.write(DragonBonesCommand::play(root, animation_name.clone()));
+    selected.current = next;
+    info!("animation: {animation_name}");
 }
 
 fn update_animation_hud(

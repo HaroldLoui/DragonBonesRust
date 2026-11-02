@@ -14,7 +14,9 @@ fn user_data_actions_canvas_and_blend_mode_are_parsed() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
     let ske = read_value(&root.join("synthetic/features/features_ske.json"));
     let mut factory = BaseFactory::new();
-    let data = factory.parse_dragon_bones_data(&ske, "features").expect("parse");
+    let data = factory
+        .parse_dragon_bones_data(&ske, "features")
+        .expect("parse");
     let armature = data.armatures.get("features_fixture").expect("armature");
 
     let slot = armature.slots.get("slot").expect("slot");
@@ -38,8 +40,20 @@ fn user_data_actions_canvas_and_blend_mode_are_parsed() {
 #[test]
 fn all_fourteen_blend_modes_parse_from_strings() {
     let names = [
-        "normal", "add", "alpha", "darken", "difference", "erase", "hardlight", "invert",
-        "layer", "lighten", "multiply", "overlay", "screen", "subtract",
+        "normal",
+        "add",
+        "alpha",
+        "darken",
+        "difference",
+        "erase",
+        "hardlight",
+        "invert",
+        "layer",
+        "lighten",
+        "multiply",
+        "overlay",
+        "screen",
+        "subtract",
     ];
     let expected = [
         BlendMode::Normal,
@@ -79,11 +93,17 @@ fn all_fourteen_blend_modes_parse_from_strings() {
         }],
     });
     let mut factory = BaseFactory::new();
-    let data = factory.parse_dragon_bones_data(&ske, "blend").expect("parse");
+    let data = factory
+        .parse_dragon_bones_data(&ske, "blend")
+        .expect("parse");
     let armature = data.armatures.get("blend_modes").expect("armature");
     for (index, expected) in expected.iter().enumerate() {
         assert_eq!(
-            armature.slots.get(&format!("slot_{index}")).unwrap().blend_mode,
+            armature
+                .slots
+                .get(&format!("slot_{index}"))
+                .unwrap()
+                .blend_mode,
             *expected,
             "blend mode {index}"
         );

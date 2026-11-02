@@ -11,7 +11,7 @@ use dragonbones_core::armature::NullArmatureProxy;
 use dragonbones_core::factory::BaseFactory;
 use std::path::Path;
 
-# [test]
+#[test]
 fn path_constraint_pose_matches_js_golden() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
     let base = read_value(&root.join("synthetic/path/path_ske.json"));
@@ -77,8 +77,19 @@ fn path_constraint_pose_matches_js_golden() {
                 let g = &bone.global;
                 let m = &bone.global_transform_matrix;
                 let got = [
-                    g.x, g.y, g.rotation, g.scale_x, g.scale_y, g.skew, m.a, m.b, m.c, m.d, m.tx,
-                    m.ty, bone.global_alpha,
+                    g.x,
+                    g.y,
+                    g.rotation,
+                    g.scale_x,
+                    g.scale_y,
+                    g.skew,
+                    m.a,
+                    m.b,
+                    m.c,
+                    m.d,
+                    m.tx,
+                    m.ty,
+                    bone.global_alpha,
                 ];
                 for (index, value) in want.as_array().expect("vector").iter().enumerate() {
                     let Some(want) = value.as_f64() else {

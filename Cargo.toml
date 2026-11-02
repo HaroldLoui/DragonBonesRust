@@ -4,9 +4,13 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Rust reimplementation of the DragonBones runtime with a Bevy 2D adapter"
+repository = "https://github.com/HaroldLoui/DragonBonesRust"
 
 [workspace.dependencies]
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 indexmap = "2"
 log = "0.4"
 thiserror = "2"
+criterion = "0.5"

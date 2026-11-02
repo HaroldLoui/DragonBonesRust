@@ -1,5 +1,7 @@
 # DragonBonesRust
 
+[![CI](https://github.com/HaroldLoui/DragonBonesRust/actions/workflows/ci.yml/badge.svg)](https://github.com/HaroldLoui/DragonBonesRust/actions/workflows/ci.yml)
+
 用 Rust 重写 [DragonBones](https://github.com/DragonBones/DragonBonesJS) 运行时核心，并提供 Bevy 2D 适配层。
 
 目标不是做一个简化版，而是**逐项对齐官方 TS 运行时的数值语义**：core 全程 `f64`、arena + 索引、对象生命周期与脏标记按 TS 源码建模；再通过 Bevy 适配层在 Bevy 0.20 中播放龙骨骼动画。
@@ -11,7 +13,7 @@
 | 部分 | 状态 |
 |---|---|
 | `dragonbones-core` | 阶段 0–6 已完成：geom/model/parser/runtime/animation/constraints/cache，JSON 与 dbbin 两条数据路径，JS 黄金数据差分 |
-| `dragonbones-bevy` | Bevy 0.20 适配层 MVP：资源加载、armature/slot 实体、`GlobalTransform` 直写、image/mesh/蒙皮/FFD、颜色、z 排序、时间驱动 |
+| `dragonbones-bevy` | Bevy 0.20 适配层 MVP：资源加载、armature/slot 实体、`GlobalTransform` 直写、image/mesh/蒙皮/FFD、颜色、z 排序、时间驱动；despawn → dispose 生命周期、按 atlas 共享材质 + 顶点色、O(1) slot 索引 |
 | `dragonbones-demo` | 可运行 demo，支持 6 个 rig，UI 中切换动画组 |
 
 已验证素材：
@@ -22,7 +24,7 @@
 - Surface_P1_4
 - 龙（中文文件名）
 
-> 版本：本地开发使用 **Rust 1.99.1**、**Bevy 0.20.0**。
+> 版本：本地开发使用 **Rust 1.99.1**（已固定到 `rust-toolchain.toml`）、**Bevy 0.20.0**。
 >
 > `DragonBonesJS/` 是 git submodule，固定在上游 commit `64b6c69`。只跑
 > `cargo build/test` 不需要它；重新生成黄金数据或对照 TS 源码时需要初始化子模块。
@@ -102,7 +104,7 @@ TransformSystems::Propagate
 - skew 不需要顶点烘焙；
 - 标准 `Mesh2d` 的裁剪、排序和 batching 仍然可用；
 - 蒙皮 mesh 在 armature 空间重建顶点，非蒙皮 mesh 使用 slot 局部矩阵；
-- 每帧全量同步所有 slot（root 移动时 Bevy 会重写子实体 GT，不能只同步 dirty slot）。
+- 每帧先比对 armature pose hash + root affine：pose 未变的角色整骨架跳过同步（root 移动时 Bevy 会重写子实体 GT，因此 root 变化仍会触发全量写）。
 
 更多细节见 [crates/dragonbones-bevy/README.md](crates/dragonbones-bevy/README.md)。
 
@@ -111,20 +113,27 @@ TransformSystems::Propagate
 已实现：
 
 - `_ske.json` / `_tex.json` / `_tex.png` 资源加载
-- armature root + slot 实体映射
+- armature root + slot 实体映射；root 实体 despawn 时回收 core arena、skeleton/atlas 注册与 mesh/material 资产
 - image slot、非蒙皮 mesh、蒙皮 weighted mesh、FFD deform
-- 颜色乘子 + global alpha（offset 暂忽略）
+- 颜色乘子 + global alpha：按 `(atlas, blend)` 共享自定义 `Material2d`，per-slot 颜色写入顶点色（offset 暂忽略）
+- blend mode：Normal / Add / Multiply / Screen 走固定管线混合状态；Overlay 等需要读目标像素的模式暂回退 Normal
 - 按 core 排序结果写 z，使用 Bevy 透明 phase 排序
+- 每帧 O(slots) 的 slot 索引（`SlotIdx` → 顺序映射），不再逐 slot 线性查找
+- armature 级脏标记（pose hash）：静态/暂停的角色跳过全量 slot 同步，可用 `DragonBonesSyncConfig` 关闭
+- 动画事件（start / complete / loopComplete / frameEvent / soundEvent …）转发为 Bevy `Message`：`DragonBonesEvent`
+- 运行时动画命令 API：`DragonBonesCommand` message 支持 play / play_config（fade、起始位置、速度、播放次数）/ stop / pause / resume / set_speed，命令在当帧 advance 之前生效
+- `rotated: true` 图集区域（内容宽高互换 + UV 旋转，对齐 Phaser/Cocos 参考适配器）
+- Surface mesh 逐顶点变形（父骨为 Surface 的 mesh display，按 Surface 分片仿射矩阵 warp）
+- child armature 子骨架 display（嵌套 root 实体、随父 slot 世界矩阵、可见性沿父链、despawn 递归回收）
 - Bevy UI 动画列表 + 键盘切换
-- 9 个素材中的主要 rig 目视验证
+- 8 个素材中的主要 rig 目视验证（6 个有 demo 入口）
 
 待做（后续打磨）：
 
-- Add / Multiply / Screen / Overlay 等 blend mode
-- `rotated: true` 图集子纹理
-- Surface mesh 的逐顶点变形
-- child armature、替换贴图、事件转发到 Bevy `Event`
-- dirty-slot / 合批等性能优化
+- 动画状态机（layer / group / transition / priority）与运行中 seek
+- Overlay / Darken / Lighten 等需要读渲染目标的 blend mode（当前回退 Normal）
+- 替换贴图 / replace skin 换装
+- 合批 / GPU skinning 等性能优化
 
 ## 测试与参考数据
 
@@ -133,11 +142,23 @@ TransformSystems::Propagate
 - `DragonBonesJS/`：官方参考实现（git submodule，固定 commit `64b6c69`）；
 - `testdata/`：JS 运行时输出的矩阵、姿态、IR、事件等黄金数据；
 - `crates/dragonbones-core/tests/`：逐项差分测试；
+- `crates/dragonbones-bevy/tests/`：headless `App` 集成测试（槽位/材质/生命周期）；
 - `tools/`：生成黄金数据的脚本。
 
 ```powershell
 cargo test --workspace
 ```
+
+性能基线用 criterion（基线数字见 [docs/optimization-roadmap.md](docs/optimization-roadmap.md#3-性能基线-已建立-2026-10-29)）：
+
+```powershell
+cargo bench -p dragonbones-core   # 解析 / 装配 / advance_time
+cargo bench -p dragonbones-bevy   # 1/10/100 armature 的 sync（静态 vs 动画、脏标记 A/B）
+```
+
+黄金数据已提交在 `testdata/`，因此 CI 只跑 `cargo fmt --all --check` /
+`cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace`，
+不需要初始化 `DragonBonesJS` submodule。
 
 ## 文档
 

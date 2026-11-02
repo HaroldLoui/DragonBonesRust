@@ -299,11 +299,7 @@ impl ObjectDataParser {
         self.parse_dragon_bones_data_impl(&header, scale)
     }
 
-    fn parse_dragon_bones_data_impl(
-        &mut self,
-        raw: &Value,
-        scale: f64,
-    ) -> Option<DragonBonesData> {
+    fn parse_dragon_bones_data_impl(&mut self, raw: &Value, scale: f64) -> Option<DragonBonesData> {
         if !is_supported_version(raw) {
             return None;
         }
@@ -1078,13 +1074,10 @@ impl ObjectDataParser {
                 };
             }
             DisplayType::BoundingBox => {
-                if let Some(bounding_box) = self.parse_bounding_box(raw) {
-                    display.kind = DisplayKind::BoundingBox {
-                        bounding_box: Some(Box::new(bounding_box)),
-                    };
-                } else {
-                    return None;
-                }
+                let bounding_box = self.parse_bounding_box(raw)?;
+                display.kind = DisplayKind::BoundingBox {
+                    bounding_box: Some(Box::new(bounding_box)),
+                };
             }
             DisplayType::Path => {
                 let mut geometry = GeometryData::default();
@@ -1279,9 +1272,7 @@ impl ObjectDataParser {
                 let exists = match (key, self.armature.as_ref()) {
                     (BONE, Some(armature)) => armature.get_bone(target_name).is_some(),
                     (SLOT, Some(armature)) => armature.get_slot(target_name).is_some(),
-                    (CONSTRAINT, Some(armature)) => {
-                        armature.constraints.contains_key(target_name)
-                    }
+                    (CONSTRAINT, Some(armature)) => armature.constraints.contains_key(target_name),
                     _ => false,
                 };
                 if !exists {
@@ -1327,8 +1318,7 @@ impl ObjectDataParser {
                 let timeline_name = get_string(raw_timeline, NAME, "");
                 let x = get_number(raw_timeline, X, 0.0);
                 let y = get_number(raw_timeline, Y, 0.0);
-                let Some(timeline) =
-                    self.parse_binary_timeline(timeline_type, offset as i32, x, y)
+                let Some(timeline) = self.parse_binary_timeline(timeline_type, offset as i32, x, y)
                 else {
                     continue;
                 };
@@ -1339,12 +1329,16 @@ impl ObjectDataParser {
                     | TimelineType::BoneRotate
                     | TimelineType::BoneScale
                     | TimelineType::Surface
-                    | TimelineType::BoneAlpha => animation.add_bone_timeline(&timeline_name, timeline),
+                    | TimelineType::BoneAlpha => {
+                        animation.add_bone_timeline(&timeline_name, timeline)
+                    }
                     TimelineType::SlotDisplay
                     | TimelineType::SlotColor
                     | TimelineType::SlotDeform
                     | TimelineType::SlotZIndex
-                    | TimelineType::SlotAlpha => animation.add_slot_timeline(&timeline_name, timeline),
+                    | TimelineType::SlotAlpha => {
+                        animation.add_slot_timeline(&timeline_name, timeline)
+                    }
                     TimelineType::IKConstraint => {
                         animation.add_constraint_timeline(&timeline_name, timeline)
                     }
@@ -1380,16 +1374,15 @@ impl ObjectDataParser {
         if key_frame_count > 1 {
             let total = usize::try_from(frame_count + 1).ok()?;
             frame_indices_offset = i32::try_from(self.frame_indices.len()).ok()?;
-            self.frame_indices.resize(self.frame_indices.len() + total, 0);
+            self.frame_indices
+                .resize(self.frame_indices.len() + total, 0);
             let mut key_index = 0usize;
             let mut frame_start = 0i32;
             let mut count = 0i32;
             let key_count = usize::try_from(key_frame_count).ok()?;
             for frame in 0..total {
                 if frame_start + count <= frame as i32 && key_index < key_count {
-                    let entry = offset_index
-                        + binary_offset::timeline::FRAME_OFFSET
-                        + key_index;
+                    let entry = offset_index + binary_offset::timeline::FRAME_OFFSET + key_index;
                     let relative = *self.timeline_array.get(entry)?;
                     frame_start = *self
                         .frame_array
@@ -2089,7 +2082,7 @@ impl ObjectDataParser {
         let anim_frame_offset = self.animation.as_ref().unwrap().frame_offset;
 
         if key_frame_count == 1 {
-            let value = self.dispatch_frame(frame_kind, &raw_frames[0], 0, 0) - anim_frame_offset;
+            let value = self.dispatch_frame(frame_kind, &raw_frames[0], 0, 0)? - anim_frame_offset;
             self.timeline.as_mut().unwrap().frame_indices_offset = -1;
             self.tlset(
                 timeline_offset + binary_offset::timeline::FRAME_OFFSET,
@@ -2115,14 +2108,16 @@ impl ObjectDataParser {
                     } else {
                         match raw_frame {
                             FrameRef::Action(_) => {
-                                self.action_frames[ik + 1].frame_start as usize - frame_start
+                                // 防御：动作帧表由数据派生，坏输入缺下一帧时丢弃该时间轴。
+                                let next = self.action_frames.get(ik + 1)?;
+                                (next.frame_start as usize).saturating_sub(frame_start)
                             }
                             FrameRef::Json(v) => get_number(v, DURATION, 1.0) as usize,
                         }
                     };
 
                     let value =
-                        self.dispatch_frame(frame_kind, &raw_frame, frame_start, frame_count)
+                        self.dispatch_frame(frame_kind, &raw_frame, frame_start, frame_count)?
                             - anim_frame_offset;
                     self.tlset(
                         timeline_offset + binary_offset::timeline::FRAME_OFFSET + ik,
@@ -2144,8 +2139,8 @@ impl ObjectDataParser {
         frame: &FrameRef<'_>,
         frame_start: usize,
         frame_count: usize,
-    ) -> i32 {
-        match kind {
+    ) -> Option<i32> {
+        Some(match kind {
             FrameKind::Frame => self.parse_frame(frame, frame_start),
             FrameKind::Tween => self.parse_tween_frame(frame, frame_start, frame_count),
             FrameKind::SingleValue => {
@@ -2162,12 +2157,14 @@ impl ObjectDataParser {
             FrameKind::BoneScale => self.parse_bone_scale_frame(frame, frame_start, frame_count),
             FrameKind::SlotDisplay => self.parse_slot_display_frame(frame, frame_start),
             FrameKind::SlotColor => self.parse_slot_color_frame(frame, frame_start, frame_count),
-            FrameKind::SlotDeform => self.parse_slot_deform_frame(frame, frame_start, frame_count),
-            FrameKind::Deform => self.parse_deform_frame(frame, frame_start, frame_count),
+            FrameKind::SlotDeform => {
+                self.parse_slot_deform_frame(frame, frame_start, frame_count)?
+            }
+            FrameKind::Deform => self.parse_deform_frame(frame, frame_start, frame_count)?,
             FrameKind::ZOrder => self.parse_z_order_frame(frame, frame_start),
             FrameKind::Action => self.parse_action_frame(frame, frame_start),
             FrameKind::Ik => self.parse_ik_constraint_frame(frame, frame_start, frame_count),
-        }
+        })
     }
 
     // ---- frame parsers ----
@@ -2674,15 +2671,19 @@ impl ObjectDataParser {
         frame: &FrameRef<'_>,
         frame_start: usize,
         frame_count: usize,
-    ) -> i32 {
+    ) -> Option<i32> {
         let frame_float_offset = self.frame_float_array.len();
         let raw = json_of(frame);
         let frame_offset = self.parse_tween_frame(frame, frame_start, frame_count);
 
         let raw_vertices = raw.get(VERTICES).and_then(Value::as_array);
         let offset = get_number(raw, OFFSET, 0.0);
-        let vertex_count =
-            self.int_array[self.deform_offset as usize + binary_offset::geometry::VERTEX_COUNT];
+        // 防御：几何偏移由数据派生，坏输入越界时返回 `None`（丢弃该时间轴）而非 panic；
+        // 合法素材的偏移必然在 `int_array` 内，解析结果与直读完全一致（对齐 binary
+        // 路径 `parse_binary_geometry` 的 `.get()` 写法）。
+        let vertex_count = *self
+            .int_array
+            .get(self.deform_offset as usize + binary_offset::geometry::VERTEX_COUNT)?;
 
         let mut i_b = 0usize;
         let mut i_v = 0usize;
@@ -2696,7 +2697,10 @@ impl ObjectDataParser {
                 .get(&mesh_name)
                 .cloned()
                 .unwrap_or_default();
-            self.help_matrix_a.copy_from_array(&raw_slot_pose, 0);
+            // 防御：`slotPose` 由数据派生（坏输入可能缺项），长度不足时丢弃该时间轴。
+            if !self.help_matrix_a.try_copy_from_array(&raw_slot_pose, 0) {
+                return None;
+            }
             self.reserve_frame_float(weight.count as usize * 2);
             i_b = weight.offset as usize + binary_offset::weight::BONE_INDICES + weight.bones.len();
         } else {
@@ -2732,7 +2736,7 @@ impl ObjectDataParser {
                     .get(&mesh_name)
                     .cloned()
                     .unwrap_or_default();
-                let vertex_bone_count = self.int_array[i_b];
+                let vertex_bone_count = *self.int_array.get(i_b)?;
                 i_b += 1;
 
                 let (tx, ty) = self.help_matrix_a.transform_point(x, y, true);
@@ -2741,10 +2745,15 @@ impl ObjectDataParser {
 
                 let _ = weight;
                 for _ in 0..vertex_bone_count {
-                    let bone_index = self.int_array[i_b];
+                    let bone_index = *self.int_array.get(i_b)?;
                     i_b += 1;
-                    self.help_matrix_b
-                        .copy_from_array(&raw_bone_poses, bone_index as usize * 7 + 1);
+                    // 防御：骨骼位姿偏移由 `int_array` 数据派生，越界时丢弃该时间轴。
+                    if !self
+                        .help_matrix_b
+                        .try_copy_from_array(&raw_bone_poses, bone_index as usize * 7 + 1)
+                    {
+                        return None;
+                    }
                     self.help_matrix_b.invert();
                     let (bx, by) = self.help_matrix_b.transform_point(x, y, true);
                     self.ffloatset(frame_float_offset + i_v, bx);
@@ -2786,7 +2795,7 @@ impl ObjectDataParser {
             );
         }
 
-        frame_offset
+        Some(frame_offset)
     }
 
     fn parse_deform_frame(
@@ -2794,7 +2803,7 @@ impl ObjectDataParser {
         frame: &FrameRef<'_>,
         frame_start: usize,
         frame_count: usize,
-    ) -> i32 {
+    ) -> Option<i32> {
         let frame_float_offset = self.frame_float_array.len();
         let raw = json_of(frame);
         let frame_offset = self.parse_tween_frame(frame, frame_start, frame_count);
@@ -2807,11 +2816,16 @@ impl ObjectDataParser {
             None
         };
         let offset = get_number(raw, OFFSET, 0.0);
-        let vertex_count =
-            self.int_array[self.deform_offset as usize + binary_offset::geometry::VERTEX_COUNT];
+        // 防御：同 `parse_slot_deform_frame`，坏输入的派生偏移越界返回 `None` 而非 panic；
+        // 合法素材结果与直读一致。
+        let vertex_count = *self
+            .int_array
+            .get(self.deform_offset as usize + binary_offset::geometry::VERTEX_COUNT)?;
 
         if self.deform_weight.is_some() {
-            // TODO（对齐 TS `_parseDeformFrame` 的 weight 分支）。
+            // 与官方一致：TS `_parseDeformFrame` 的 `weight !== null` 分支本身就是
+            // `// TODO`（ObjectDataParser.ts:1993），不写任何帧浮点值。此处保持
+            // no-op，由 `tests/deform_weight.rs` 锁定（D-6.17）；不要自创语义。
         } else {
             self.reserve_frame_float(vertex_count as usize * 2);
             let mut i = 0usize;
@@ -2867,7 +2881,7 @@ impl ObjectDataParser {
             );
         }
 
-        frame_offset
+        Some(frame_offset)
     }
 
     fn parse_ik_constraint_frame(
@@ -2995,8 +3009,14 @@ impl ObjectDataParser {
 
                 let sorted_bones = self.armature.as_ref().unwrap().sorted_bones.clone();
                 for i in 0..weight_bone_count {
-                    let raw_bone_index = raw_bone_poses[i * 7] as usize;
-                    let bone_name = self.raw_bones[raw_bone_index].clone();
+                    // 防御：`bonePose` / `rawBones` 均由数据派生，坏输入越界时放弃该几何权重。
+                    let Some(&raw_bone_index) = raw_bone_poses.get(i * 7) else {
+                        return;
+                    };
+                    let raw_bone_index = raw_bone_index as usize;
+                    let Some(bone_name) = self.raw_bones.get(raw_bone_index).cloned() else {
+                        return;
+                    };
                     weight.add_bone(bone_name.clone());
                     weight_bone_indices.push(raw_bone_index);
                     let idx = sorted_bones
@@ -3007,7 +3027,10 @@ impl ObjectDataParser {
                 }
 
                 self.reserve_float(weight_count * 3);
-                self.help_matrix_a.copy_from_array(&raw_slot_pose, 0);
+                // 防御：`slotPose` 由数据派生，坏输入长度不足时放弃该几何权重（不 panic）。
+                if !self.help_matrix_a.try_copy_from_array(&raw_slot_pose, 0) {
+                    return;
+                }
 
                 let mut i_w = 0usize;
                 let mut i_b =
@@ -3015,30 +3038,52 @@ impl ObjectDataParser {
                 let mut i_v = float_offset;
                 for i in 0..vertex_count {
                     let i_d = i * 2;
-                    let vertex_bone_count = raw_weights[i_w] as i32;
+                    let Some(&vertex_bone_count) = raw_weights.get(i_w) else {
+                        return;
+                    };
+                    let vertex_bone_count = vertex_bone_count as i32;
                     i_w += 1;
                     self.iset(i_b, vertex_bone_count);
                     i_b += 1;
 
-                    let x = self.float_array[vertices_offset + i_d];
-                    let y = self.float_array[vertices_offset + i_d + 1];
+                    let x = self
+                        .float_array
+                        .get(vertices_offset + i_d)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let y = self
+                        .float_array
+                        .get(vertices_offset + i_d + 1)
+                        .copied()
+                        .unwrap_or(0.0);
                     let (x, y) = self.help_matrix_a.transform_point(x, y, false);
 
                     for _ in 0..vertex_bone_count {
-                        let raw_bone_index = raw_weights[i_w] as usize;
+                        let Some(&raw_bone_index) = raw_weights.get(i_w) else {
+                            return;
+                        };
+                        let raw_bone_index = raw_bone_index as usize;
                         i_w += 1;
                         let bone_index = weight_bone_indices
                             .iter()
                             .position(|b| *b == raw_bone_index)
                             .map_or(0, |p| p as i32);
-                        self.help_matrix_b
-                            .copy_from_array(&raw_bone_poses, bone_index as usize * 7 + 1);
+                        // 防御：骨骼位姿偏移由 `int_array` 数据派生，越界时放弃该几何权重。
+                        if !self
+                            .help_matrix_b
+                            .try_copy_from_array(&raw_bone_poses, bone_index as usize * 7 + 1)
+                        {
+                            return;
+                        }
                         self.help_matrix_b.invert();
                         let (bx, by) = self.help_matrix_b.transform_point(x, y, false);
                         self.iset(i_b, bone_index);
                         i_b += 1;
-                        self.fset(i_v, raw_weights[i_w]);
+                        let Some(&bone_weight) = raw_weights.get(i_w) else {
+                            return;
+                        };
                         i_w += 1;
+                        self.fset(i_v, bone_weight);
                         i_v += 1;
                         self.fset(i_v, bx);
                         i_v += 1;
@@ -3053,7 +3098,10 @@ impl ObjectDataParser {
                     .collect();
                 let sorted_bones = self.armature.as_ref().unwrap().sorted_bones.clone();
                 for (i, &raw_bone_index) in raw_bone_indices.iter().enumerate() {
-                    let bone_name = self.raw_bones[raw_bone_index].clone();
+                    // 防御：`bones` 由数据派生，坏输入越界时放弃该几何权重。
+                    let Some(bone_name) = self.raw_bones.get(raw_bone_index).cloned() else {
+                        return;
+                    };
                     weight.add_bone(bone_name.clone());
                     let idx = sorted_bones
                         .iter()
@@ -3069,15 +3117,23 @@ impl ObjectDataParser {
                     weight_offset + binary_offset::weight::BONE_INDICES + raw_bone_indices.len();
                 let mut i_f = float_offset;
                 for _ in 0..weight_count {
-                    let vertex_bone_count = raw_weights[i_w] as i32;
+                    let Some(&vertex_bone_count) = raw_weights.get(i_w) else {
+                        return;
+                    };
+                    let vertex_bone_count = vertex_bone_count as i32;
                     i_w += 1;
                     self.iset(i_b, vertex_bone_count);
                     i_b += 1;
 
                     for _ in 0..vertex_bone_count {
-                        let bone_index = raw_weights[i_w] as usize;
+                        let Some(&bone_index) = raw_weights.get(i_w) else {
+                            return;
+                        };
+                        let bone_index = bone_index as usize;
                         i_w += 1;
-                        let bone_weight = raw_weights[i_w];
+                        let Some(&bone_weight) = raw_weights.get(i_w) else {
+                            return;
+                        };
                         i_w += 1;
                         let x = raw_vertices
                             .and_then(|v| v.get(i_v))

@@ -1,12 +1,15 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
+use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy::sprite_render::{AlphaMode2d, ColorMaterial};
+use bevy::sprite_render::MeshMaterial2d;
 
 use dragonbones_core::armature::{Armature, ArmatureIdx, BoneIdx, Slot};
-use dragonbones_core::core::enums::binary_offset;
+use dragonbones_core::core::enums::{BoneType, binary_offset};
+use dragonbones_core::geom::Matrix;
 use dragonbones_core::model::{GeometryData, TextureData};
 
+use crate::blend::DragonBonesBlend;
+use crate::material::DragonBonesMaterial;
 use crate::math::slot_color;
 use crate::runtime::DragonBonesSlot;
 
@@ -31,18 +34,127 @@ pub(crate) struct BoneWeight {
 }
 
 /// CPU-side data needed to update a skinned mesh every frame.
+///
+/// `positions` is a per-slot scratch buffer: the skinning loop fills it every
+/// frame and the result is copied into the existing mesh attribute in place, so
+/// steady-state updates allocate nothing (see [`write_positions`]).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WeightedMeshData {
     pub vertices: Vec<Vec<BoneWeight>>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+    /// `GeometryData.inheritDeform` (geometry inherits the slot's FFD timeline).
+    pub inherit_deform: bool,
+    positions: Vec<[f32; 3]>,
 }
 
 /// CPU-side data for an unskinned mesh whose vertices may be moved by a
-/// DragonBones FFD (deform) timeline.
+/// DragonBones FFD (deform) timeline or, when the slot's parent bone is a
+/// Surface, warped per vertex by the Surface's local-to-armature matrix.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnskinnedMeshData {
     pub base_positions: Vec<[f32; 3]>,
+    /// Parent Surface bone when this mesh is a surface display; the slot then
+    /// uses [`SlotRenderKind::ArmatureSpace`] and vertices are warped per frame.
+    pub(crate) surface: Option<BoneIdx>,
+    /// Reused scratch buffer for the deformed positions (see [`write_positions`]).
+    positions: Vec<[f32; 3]>,
+}
+
+/// The slot's current FFD/deform offsets when the geometry inherits deform.
+pub(crate) fn slot_deform(slot: &Slot) -> &[f64] {
+    if slot
+        .geometry_data
+        .as_ref()
+        .is_some_and(|geometry| geometry.inherit_deform)
+    {
+        slot.display_frame
+            .and_then(|index| slot.display_frames.get(index))
+            .map_or(&[], |frame| frame.deform_vertices.as_slice())
+    } else {
+        &[]
+    }
+}
+
+/// The parent Surface bone when this slot renders a surface mesh.
+fn slot_parent_surface(armature: &Armature, slot: &Slot) -> Option<BoneIdx> {
+    armature
+        .bones
+        .get(slot.parent.index())
+        .filter(|bone| bone.bone_type != BoneType::Bone)
+        .map(|_| slot.parent)
+}
+
+/// Warps base (content-space) vertices through the Surface matrix.
+///
+/// Mirrors the reference adapters (`EgretSlot.ts:504-522`): for a surface mesh
+/// each vertex is transformed by `Surface._getGlobalTransformMatrix(x, y)` and
+/// the result lives in armature space, so the slot transform must be identity.
+fn surface_positions(
+    armature: &Armature,
+    surface: BoneIdx,
+    base_positions: &[[f32; 3]],
+    deform: &[f64],
+) -> Vec<[f32; 3]> {
+    let Some(bone) = armature.bones.get(surface.index()) else {
+        return base_positions.to_vec();
+    };
+    base_positions
+        .iter()
+        .enumerate()
+        .map(|(index, base)| {
+            let mut x = base[0] as f64;
+            let mut y = base[1] as f64;
+            if deform.len() >= index * 2 + 2 {
+                x += deform[index * 2];
+                y += deform[index * 2 + 1];
+            }
+            let matrix = bone.get_global_transform_matrix(x, y);
+            [
+                (matrix.a * x + matrix.c * y + matrix.tx) as f32,
+                (matrix.b * x + matrix.d * y + matrix.ty) as f32,
+                0.0,
+            ]
+        })
+        .collect()
+}
+
+/// Recomputes surface-mesh vertices from the current Surface lattice.
+pub(crate) fn update_surface_positions(
+    data: &mut UnskinnedMeshData,
+    armature: &Armature,
+    deform: &[f64],
+    mesh: &mut Mesh,
+) {
+    let Some(surface) = data.surface else {
+        return;
+    };
+    data.positions.clear();
+    data.positions.extend(surface_positions(
+        armature,
+        surface,
+        &data.base_positions,
+        deform,
+    ));
+    write_positions(mesh, &data.positions);
+}
+
+/// Writes `positions` into the mesh's position attribute, reusing the existing
+/// attribute storage when possible.
+///
+/// The previous implementation built a fresh `Vec` and called
+/// `insert_attribute` on every skinned slot every frame; at 60 Hz that is an
+/// allocation + copy per slot per frame. Keeping the scratch buffer in the slot
+/// visual and writing in place removes the steady-state allocation.
+fn write_positions(mesh: &mut Mesh, positions: &[[f32; 3]]) {
+    if let Some(VertexAttributeValues::Float32x3(values)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+        && values.len() == positions.len()
+    {
+        values.copy_from_slice(positions);
+    } else {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.to_vec());
+    }
 }
 
 /// Adapter-side slot data needed to rebuild the mesh when the display frame
@@ -50,40 +162,64 @@ pub(crate) struct UnskinnedMeshData {
 #[derive(Component)]
 pub struct DragonBonesSlotVisual {
     pub kind: SlotRenderKind,
-    pub atlas_texture: Handle<Image>,
     pub atlas_size: UVec2,
+    /// Atlas page image this slot samples. Together with [`Self::blend`] it
+    /// identifies the shared [`DragonBonesMaterial`] of the slot, which is what
+    /// the sync pass uses when the core slot's blend mode changes at runtime.
+    pub atlas_image: Handle<Image>,
+    /// Blend mode currently applied by the slot's material.
+    pub blend: DragonBonesBlend,
     pub last_display_frame: Option<usize>,
+    /// Fingerprint of the display/frame content the mesh was built from; the
+    /// sync pass rebuilds the mesh when the content changes without a frame
+    /// index change (runtime `replace_*` calls).
+    pub content_hash: u64,
+    /// Last color baked into the mesh's `ATTRIBUTE_COLOR`; the slot only rewrites
+    /// vertex colors when this changes.
+    pub color: Color,
     pub(crate) weighted: Option<WeightedMeshData>,
     pub(crate) unskinned: Option<UnskinnedMeshData>,
 }
 
+/// Bakes a uniform color into the mesh's vertex color attribute.
+///
+/// Slots share one material per `(atlas page, blend mode)`, so the per-slot
+/// DragonBones color multiplier (and global alpha) has to travel with the
+/// geometry. [`DragonBonesMaterial`]'s fragment shader multiplies the sampled
+/// texture by the vertex color when the mesh has `ATTRIBUTE_COLOR`. Vertex
+/// colors are linear-space, hence `Color::to_linear`.
+pub(crate) fn apply_vertex_color(mesh: &mut Mesh, color: Color) {
+    let linear = color.to_linear();
+    let value = [linear.red, linear.green, linear.blue, linear.alpha];
+    let vertex_count = mesh.count_vertices();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![value; vertex_count]);
+}
+
 /// Spawn one slot entity under the armature root.
+///
+/// Returns the spawned entity and the mesh handle so the runtime can release the
+/// mesh asset when the armature is disposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_slot(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
     root: Entity,
     armature_idx: ArmatureIdx,
     armature: &Armature,
     slot: &Slot,
-    atlas_texture: &Handle<Image>,
+    material: &Handle<DragonBonesMaterial>,
+    blend: DragonBonesBlend,
+    atlas_image: &Handle<Image>,
     atlas_size: UVec2,
     armature_scale: f64,
-) -> Entity {
+) -> (Entity, Handle<Mesh>) {
     let (mesh, kind, weighted, unskinned) =
         build_slot_visual(slot, armature, atlas_size, armature_scale);
-    let material = ColorMaterial {
-        color: slot_color(slot),
-        texture: Some(atlas_texture.clone()),
-        alpha_mode: AlphaMode2d::Blend,
-        ..default()
-    };
-    let material_handle = materials.add(material);
-    commands
+    let mesh_handle = meshes.add(mesh);
+    let entity = commands
         .spawn((
-            Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(material_handle),
+            Mesh2d(mesh_handle.clone()),
+            MeshMaterial2d(material.clone()),
             Transform::default(),
             Visibility::Hidden,
             ChildOf(root),
@@ -93,18 +229,43 @@ pub(crate) fn spawn_slot(
             },
             DragonBonesSlotVisual {
                 kind,
-                atlas_texture: atlas_texture.clone(),
                 atlas_size,
+                atlas_image: atlas_image.clone(),
+                blend,
                 last_display_frame: slot.display_frame,
+                content_hash: crate::hash::slot_visual_hash(slot),
+                color: slot_color(slot),
                 weighted,
                 unskinned,
             },
         ))
-        .id()
+        .id();
+    (entity, mesh_handle)
 }
 
 /// Build the mesh and any per-frame skinning data for a slot.
+///
+/// The mesh already carries the slot's current color as vertex colors; see
+/// [`apply_vertex_color`].
 pub(crate) fn build_slot_visual(
+    slot: &Slot,
+    armature: &Armature,
+    atlas_size: UVec2,
+    armature_scale: f64,
+) -> (
+    Mesh,
+    SlotRenderKind,
+    Option<WeightedMeshData>,
+    Option<UnskinnedMeshData>,
+) {
+    let (mut mesh, kind, weighted, unskinned) =
+        build_slot_geometry(slot, armature, atlas_size, armature_scale);
+    apply_vertex_color(&mut mesh, slot_color(slot));
+    (mesh, kind, weighted, unskinned)
+}
+
+/// Geometry-only half of [`build_slot_visual`]: no vertex color attribute yet.
+fn build_slot_geometry(
     slot: &Slot,
     armature: &Armature,
     atlas_size: UVec2,
@@ -125,10 +286,22 @@ pub(crate) fn build_slot_visual(
         };
         if geometry.weight.is_some() {
             let data = decode_weighted_mesh(slot, geometry, texture, atlas_size, armature_scale);
-            let mesh = build_weighted_mesh(&data, armature);
+            let deform = slot_deform(slot);
+            let mesh = build_weighted_mesh(&data, armature, deform);
             return (mesh, SlotRenderKind::ArmatureSpace, Some(data), None);
         }
-        let (mesh, data) = build_unskinned_mesh(geometry, texture, atlas_size, armature_scale);
+        let (mut mesh, mut data) =
+            build_unskinned_mesh(geometry, texture, atlas_size, armature_scale);
+        if let Some(surface) = slot_parent_surface(armature, slot) {
+            // Surface mesh: per-vertex Surface warp in armature space.
+            data.surface = Some(surface);
+            let positions =
+                surface_positions(armature, surface, &data.base_positions, slot_deform(slot));
+            data.positions.clear();
+            data.positions.extend_from_slice(&positions);
+            write_positions(&mut mesh, &positions);
+            return (mesh, SlotRenderKind::ArmatureSpace, None, Some(data));
+        }
         return (mesh, SlotRenderKind::Local, None, Some(data));
     }
 
@@ -146,31 +319,69 @@ pub(crate) fn build_slot_visual(
 
 /// Apply the current FFD/deform offsets to an unskinned mesh.
 pub(crate) fn update_unskinned_positions(
-    data: &UnskinnedMeshData,
+    data: &mut UnskinnedMeshData,
     deform: &[f64],
     mesh: &mut Mesh,
 ) {
     if deform.len() < data.base_positions.len() * 2 {
         return;
     }
-    let mut positions = Vec::with_capacity(data.base_positions.len());
-    for (index, base) in data.base_positions.iter().enumerate() {
-        positions.push([
-            base[0] + deform[index * 2] as f32,
-            base[1] + deform[index * 2 + 1] as f32,
-            base[2],
-        ]);
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    data.positions.clear();
+    data.positions
+        .extend(data.base_positions.iter().enumerate().map(|(index, base)| {
+            [
+                base[0] + deform[index * 2] as f32,
+                base[1] + deform[index * 2 + 1] as f32,
+                base[2],
+            ]
+        }));
+    write_positions(mesh, &data.positions);
 }
 
-/// Recompute skinned vertex positions from the current bone matrices.
+/// Recompute skinned vertex positions from the current bone matrices and the
+/// slot's FFD deform offsets.
 pub(crate) fn update_weighted_positions(
-    data: &WeightedMeshData,
+    data: &mut WeightedMeshData,
     armature: &Armature,
+    deform: &[f64],
     mesh: &mut Mesh,
 ) {
-    let mut positions = Vec::with_capacity(data.vertices.len());
+    let mut positions = std::mem::take(&mut data.positions);
+    weighted_positions_with(
+        data,
+        |bone_idx| {
+            armature
+                .bones
+                .get(bone_idx.index())
+                .map(|bone| bone.base.global_transform_matrix)
+        },
+        deform,
+        &mut positions,
+    );
+    data.positions = positions;
+    // Writing in place is safe here: this runs in PostUpdate before render
+    // extraction, and the mesh is created with MAIN_WORLD usage.
+    write_positions(mesh, &data.positions);
+}
+
+/// Weighted position math shared by the initial mesh build and the per-frame
+/// update.
+///
+/// Mirrors the weighted branch of `PixiSlot._updateMesh` (`PixiSlot.ts:281-313`):
+/// each influence transforms its *own* bind position plus the next deform pair,
+/// then the results are blended by weight. The deform cursor advances per
+/// non-null influence (not per vertex), and a null bone consumes nothing — both
+/// quirks are copied from the reference implementation instead of "fixed".
+fn weighted_positions_with(
+    data: &WeightedMeshData,
+    mut bone_matrix: impl FnMut(BoneIdx) -> Option<Matrix>,
+    deform: &[f64],
+    positions: &mut Vec<[f32; 3]>,
+) {
+    positions.clear();
+    positions.reserve(data.vertices.len());
+    let has_deform = data.inherit_deform && !deform.is_empty();
+    let mut deform_cursor = 0usize;
     for influences in &data.vertices {
         let mut x = 0.0f64;
         let mut y = 0.0f64;
@@ -178,48 +389,41 @@ pub(crate) fn update_weighted_positions(
             let Some(bone_idx) = influence.bone else {
                 continue;
             };
-            let Some(bone) = armature.bones.get(bone_idx.index()) else {
+            let Some(matrix) = bone_matrix(bone_idx) else {
                 continue;
             };
-            let matrix = bone.base.global_transform_matrix;
+            let mut x_local = influence.x as f64;
+            let mut y_local = influence.y as f64;
+            if has_deform {
+                x_local += deform.get(deform_cursor).copied().unwrap_or(0.0);
+                y_local += deform.get(deform_cursor + 1).copied().unwrap_or(0.0);
+                deform_cursor += 2;
+            }
             let weight = influence.weight as f64;
-            x += (matrix.a * influence.x as f64 + matrix.c * influence.y as f64 + matrix.tx)
-                * weight;
-            y += (matrix.b * influence.x as f64 + matrix.d * influence.y as f64 + matrix.ty)
-                * weight;
+            x += (matrix.a * x_local + matrix.c * y_local + matrix.tx) * weight;
+            y += (matrix.b * x_local + matrix.d * y_local + matrix.ty) * weight;
         }
         positions.push([x as f32, y as f32, 0.0]);
     }
-    // Replacing the attribute is safe here: this runs in PostUpdate before
-    // render extraction, and the mesh is created with MAIN_WORLD usage.
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
 }
 
-fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature) -> Mesh {
+fn build_weighted_mesh(data: &WeightedMeshData, armature: &Armature, deform: &[f64]) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
     let mut positions = Vec::with_capacity(data.vertices.len());
-    for influences in &data.vertices {
-        let mut x = 0.0f64;
-        let mut y = 0.0f64;
-        for influence in influences {
-            let Some(bone_idx) = influence.bone else {
-                continue;
-            };
-            let Some(bone) = armature.bones.get(bone_idx.index()) else {
-                continue;
-            };
-            let matrix = bone.base.global_transform_matrix;
-            let weight = influence.weight as f64;
-            x += (matrix.a * influence.x as f64 + matrix.c * influence.y as f64 + matrix.tx)
-                * weight;
-            y += (matrix.b * influence.x as f64 + matrix.d * influence.y as f64 + matrix.ty)
-                * weight;
-        }
-        positions.push([x as f32, y as f32, 0.0]);
-    }
+    weighted_positions_with(
+        data,
+        |bone_idx| {
+            armature
+                .bones
+                .get(bone_idx.index())
+                .map(|bone| bone.base.global_transform_matrix)
+        },
+        deform,
+        &mut positions,
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs.clone());
     mesh.insert_indices(Indices::U32(data.indices.clone()));
@@ -244,24 +448,28 @@ fn empty_mesh() -> Mesh {
 }
 
 fn build_image_mesh(slot: &Slot, texture: &TextureData, atlas_size: UVec2) -> Mesh {
-    let region = texture.region;
     let frame = texture.frame;
-    // Core's pivot already includes the trimmed frame offset. Local vertices
-    // are the content rectangle (region), shifted so the pivot is the origin.
+    // Core's pivot already includes the trimmed frame offset. Local vertices are
+    // the content rectangle, shifted so the pivot is the origin. A rotated atlas
+    // region stores the content rotated 90 degrees, so the content size is the
+    // swapped region size (TS `Slot.ts:422-424` only does this without a trim
+    // frame).
+    let (content_width, content_height) = image_content_size(texture);
     let content_x = frame.map_or(0.0, |frame| -frame.x);
     let content_y = frame.map_or(0.0, |frame| -frame.y);
     let x0 = (content_x - slot.pivot_x) as f32;
     let y0 = (content_y - slot.pivot_y) as f32;
-    let x1 = x0 + region.width as f32;
-    let y1 = y0 + region.height as f32;
+    let x1 = x0 + content_width;
+    let y1 = y0 + content_height;
 
-    let (u0, v0, u1, v1) = uv_rect(texture, atlas_size);
     let positions = vec![[x0, y0, 0.0], [x1, y0, 0.0], [x1, y1, 0.0], [x0, y1, 0.0]];
-    let uvs = if texture.rotated {
-        vec![[u0, v1], [u1, v1], [u1, v0], [u0, v0]]
-    } else {
-        vec![[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
-    };
+    // Local quad corners: top-left, top-right, bottom-right, bottom-left.
+    let uvs = vec![
+        atlas_uv(texture, atlas_size, 0.0, 0.0),
+        atlas_uv(texture, atlas_size, 1.0, 0.0),
+        atlas_uv(texture, atlas_size, 1.0, 1.0),
+        atlas_uv(texture, atlas_size, 0.0, 1.0),
+    ];
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -305,12 +513,11 @@ fn build_unskinned_mesh(
     }
 
     let uv_offset = float_offset + vertex_count * 2;
-    let (u_base, v_base, u_scale, v_scale) = uv_transform(texture, atlas_size);
     let mut uvs = Vec::with_capacity(vertex_count);
     for i in 0..vertex_count {
         let u = floats.get(uv_offset + i * 2).copied().unwrap_or(0.0);
         let v = floats.get(uv_offset + i * 2 + 1).copied().unwrap_or(0.0);
-        uvs.push([(u_base + u * u_scale) as f32, (v_base + v * v_scale) as f32]);
+        uvs.push(atlas_uv(texture, atlas_size, u, v));
     }
 
     let index_start = geo + binary_offset::geometry::VERTEX_INDICES;
@@ -329,6 +536,8 @@ fn build_unskinned_mesh(
 
     let data = UnskinnedMeshData {
         base_positions: positions.clone(),
+        surface: None,
+        positions: Vec::new(),
     };
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -356,11 +565,24 @@ fn decode_weighted_mesh(
     let ints = &root.ir.int_array;
     let floats = &root.ir.float_array;
     let geo = geometry.offset as usize;
-    let vertex_count = ints[geo + binary_offset::geometry::VERTEX_COUNT].max(0) as usize;
-    let triangle_count = ints[geo + binary_offset::geometry::TRIANGLE_COUNT].max(0) as usize;
-    let float_offset = fix_i16_offset(ints[geo + binary_offset::geometry::FLOAT_OFFSET]);
+    let Some(&vertex_count) = ints.get(geo + binary_offset::geometry::VERTEX_COUNT) else {
+        return WeightedMeshData::default();
+    };
+    let vertex_count = vertex_count.max(0) as usize;
+    let Some(&triangle_count) = ints.get(geo + binary_offset::geometry::TRIANGLE_COUNT) else {
+        return WeightedMeshData::default();
+    };
+    let triangle_count = triangle_count.max(0) as usize;
+    let Some(&raw_float_offset) = ints.get(geo + binary_offset::geometry::FLOAT_OFFSET) else {
+        return WeightedMeshData::default();
+    };
+    let float_offset = fix_i16_offset(raw_float_offset);
     let weight_offset = weight.offset as usize;
-    let weight_float = fix_i16_offset(ints[weight_offset + binary_offset::weight::FLOAT_OFFSET]);
+    let Some(&raw_weight_float) = ints.get(weight_offset + binary_offset::weight::FLOAT_OFFSET)
+    else {
+        return WeightedMeshData::default();
+    };
+    let weight_float = fix_i16_offset(raw_weight_float);
     let bone_count = weight.bones.len();
     let mut ib = weight_offset + binary_offset::weight::BONE_INDICES + bone_count;
     let mut iv = weight_float;
@@ -408,12 +630,11 @@ fn decode_weighted_mesh(
 
     // UVs follow the bind vertices, not the weight float block.
     let uv_offset = float_offset + vertex_count * 2;
-    let (u_base, v_base, u_scale, v_scale) = uv_transform(texture, atlas_size);
     let mut uvs = Vec::with_capacity(vertex_count);
     for i in 0..vertex_count {
         let u = floats.get(uv_offset + i * 2).copied().unwrap_or(0.0);
         let v = floats.get(uv_offset + i * 2 + 1).copied().unwrap_or(0.0);
-        uvs.push([(u_base + u * u_scale) as f32, (v_base + v * v_scale) as f32]);
+        uvs.push(atlas_uv(texture, atlas_size, u, v));
     }
 
     let index_start = geo + binary_offset::geometry::VERTEX_INDICES;
@@ -432,28 +653,41 @@ fn decode_weighted_mesh(
         vertices,
         uvs,
         indices,
+        inherit_deform: geometry.inherit_deform,
+        positions: Vec::new(),
     }
 }
 
-fn uv_rect(texture: &TextureData, atlas_size: UVec2) -> (f32, f32, f32, f32) {
-    let width = atlas_size.x.max(1) as f32;
-    let height = atlas_size.y.max(1) as f32;
-    let x0 = texture.region.x as f32 / width;
-    let y0 = texture.region.y as f32 / height;
-    let x1 = (texture.region.x + texture.region.width) as f32 / width;
-    let y1 = (texture.region.y + texture.region.height) as f32 / height;
-    (x0, y0, x1, y1)
+/// Display size of an atlas region in content space.
+///
+/// Mirrors TS `Slot.ts:422-424`: a region stored rotated 90 degrees in the atlas
+/// has its width/height swapped, but only when there is no trim frame.
+fn image_content_size(texture: &TextureData) -> (f32, f32) {
+    if texture.rotated && texture.frame.is_none() {
+        (texture.region.height as f32, texture.region.width as f32)
+    } else {
+        (texture.region.width as f32, texture.region.height as f32)
+    }
 }
 
-fn uv_transform(texture: &TextureData, atlas_size: UVec2) -> (f64, f64, f64, f64) {
+/// Maps a normalized content-space UV onto the atlas page.
+///
+/// The non-rotated case is the plain sub-rect mapping. For a rotated region the
+/// content is stored rotated 90 degrees, so the atlas coordinates rotate with it
+/// (`u' = 1 - v`, `v' = u`) — the same formula as the Phaser 3
+/// (`PhaserSlot.ts:174-182`) and Cocos 1.x adapters.
+fn atlas_uv(texture: &TextureData, atlas_size: UVec2, u: f64, v: f64) -> [f32; 2] {
     let width = atlas_size.x.max(1) as f64;
     let height = atlas_size.y.max(1) as f64;
-    (
-        texture.region.x / width,
-        texture.region.y / height,
-        texture.region.width / width,
-        texture.region.height / height,
-    )
+    let (u, v) = if texture.rotated {
+        (1.0 - v, u)
+    } else {
+        (u, v)
+    };
+    [
+        ((texture.region.x + u * texture.region.width) / width) as f32,
+        ((texture.region.y + v * texture.region.height) / height) as f32,
+    ]
 }
 
 fn fix_i16_offset(value: i32) -> usize {
@@ -548,5 +782,195 @@ mod tests {
         assert!(!weighted.vertices.is_empty());
         assert!(!weighted.indices.is_empty());
         assert!(mesh.count_vertices() > 0);
+    }
+
+    fn synthetic_texture(rotated: bool) -> TextureData {
+        use dragonbones_core::geom::Rectangle;
+        // Stored region 16 x 8 at (0, 0) on a 32 x 32 page: the content of a
+        // rotated region is 8 wide x 16 high.
+        TextureData {
+            region: Rectangle::new(0.0, 0.0, 16.0, 8.0),
+            rotated,
+            ..TextureData::default()
+        }
+    }
+
+    fn image_mesh(texture: &TextureData) -> Mesh {
+        let slot = Slot::default(); // pivot 0,0
+        build_image_mesh(&slot, texture, UVec2::new(32, 32))
+    }
+
+    fn positions(mesh: &Mesh) -> Vec<[f32; 3]> {
+        match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(values)) => values.clone(),
+            other => panic!("unexpected position attribute: {other:?}"),
+        }
+    }
+
+    fn uvs(mesh: &Mesh) -> Vec<[f32; 2]> {
+        match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(values)) => values.clone(),
+            other => panic!("unexpected uv attribute: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_rotated_image_quad_uses_region_size_and_plain_uvs() {
+        let mesh = image_mesh(&synthetic_texture(false));
+        assert_eq!(
+            positions(&mesh),
+            vec![
+                [0.0, 0.0, 0.0],
+                [16.0, 0.0, 0.0],
+                [16.0, 8.0, 0.0],
+                [0.0, 8.0, 0.0],
+            ]
+        );
+        // top-left, top-right, bottom-right, bottom-left
+        assert_eq!(
+            uvs(&mesh),
+            vec![[0.0, 0.0], [0.5, 0.0], [0.5, 0.25], [0.0, 0.25],]
+        );
+    }
+
+    #[test]
+    fn rotated_image_quad_swaps_content_size_and_rotates_uvs() {
+        let mesh = image_mesh(&synthetic_texture(true));
+        // The stored region is 16 x 8, so the displayed content is 8 x 16.
+        assert_eq!(
+            positions(&mesh),
+            vec![
+                [0.0, 0.0, 0.0],
+                [8.0, 0.0, 0.0],
+                [8.0, 16.0, 0.0],
+                [0.0, 16.0, 0.0],
+            ]
+        );
+        // u' = 1 - v, v' = u on the stored region: TL -> stored top-right,
+        // TR -> bottom-right, BR -> bottom-left, BL -> top-left.
+        assert_eq!(
+            uvs(&mesh),
+            vec![[0.5, 0.0], [0.5, 0.25], [0.0, 0.25], [0.0, 0.0],]
+        );
+    }
+
+    #[test]
+    fn atlas_uv_rotates_mesh_uvs() {
+        let texture = synthetic_texture(true);
+        let uv = atlas_uv(&texture, UVec2::new(32, 32), 0.2, 0.6);
+        // u' = 1 - 0.6 = 0.4 -> 0.4 * 16 / 32 = 0.2
+        // v' = 0.2       -> 0.2 * 8 / 32 = 0.05
+        assert!((uv[0] - 0.2).abs() < 1e-6, "{uv:?}");
+        assert!((uv[1] - 0.05).abs() < 1e-6, "{uv:?}");
+    }
+
+    fn weighted_data(influences: Vec<BoneWeight>, inherit_deform: bool) -> WeightedMeshData {
+        WeightedMeshData {
+            vertices: vec![influences],
+            uvs: Vec::new(),
+            indices: Vec::new(),
+            inherit_deform,
+            positions: Vec::new(),
+        }
+    }
+
+    fn translate(x: f64, y: f64) -> Matrix {
+        Matrix {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx: x,
+            ty: y,
+        }
+    }
+
+    #[test]
+    fn weighted_mesh_applies_ffd_per_influence_like_the_reference() {
+        // Two influences on one vertex; the deform cursor advances per
+        // influence (PixiSlot.ts:281-313), not per vertex.
+        let data = weighted_data(
+            vec![
+                BoneWeight {
+                    bone: Some(BoneIdx(0)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                BoneWeight {
+                    bone: Some(BoneIdx(1)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            true,
+        );
+        let matrices = [translate(10.0, 0.0), translate(0.0, 20.0)];
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |idx| Some(matrices[idx.index()]),
+            &[2.0, 3.0, 4.0, 5.0],
+            &mut positions,
+        );
+        // influence 0: (0+2, 0+3) + (10, 0) -> (12, 3) * 0.5
+        // influence 1: (0+4, 0+5) + (0, 20) -> (4, 25) * 0.5
+        assert!((positions[0][0] - 8.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 14.0).abs() < 1e-5, "{positions:?}");
+    }
+
+    #[test]
+    fn weighted_mesh_null_bone_does_not_consume_deform() {
+        let data = weighted_data(
+            vec![
+                BoneWeight {
+                    bone: None,
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                BoneWeight {
+                    bone: Some(BoneIdx(0)),
+                    weight: 0.5,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            true,
+        );
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |_idx| Some(translate(0.0, 0.0)),
+            &[2.0, 3.0, 4.0, 5.0],
+            &mut positions,
+        );
+        // Reference quirk: a null bone is skipped without consuming floats, so
+        // the valid influence reads the first deform pair (2, 3).
+        assert!((positions[0][0] - 1.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 1.5).abs() < 1e-5, "{positions:?}");
+    }
+
+    #[test]
+    fn weighted_mesh_without_inherit_deform_ignores_deform() {
+        let data = weighted_data(
+            vec![BoneWeight {
+                bone: Some(BoneIdx(0)),
+                weight: 1.0,
+                x: 1.0,
+                y: 2.0,
+            }],
+            false,
+        );
+        let mut positions = Vec::new();
+        weighted_positions_with(
+            &data,
+            |_idx| Some(translate(0.0, 0.0)),
+            &[100.0, 100.0],
+            &mut positions,
+        );
+        assert!((positions[0][0] - 1.0).abs() < 1e-5, "{positions:?}");
+        assert!((positions[0][1] - 2.0).abs() < 1e-5, "{positions:?}");
     }
 }

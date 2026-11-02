@@ -24,9 +24,9 @@
 
 use std::cell::Cell;
 
-use super::bone::{Bone, BoneRuntime};
 use super::BoneIdx;
-use crate::core::enums::{binary_offset, BoneType};
+use super::bone::{Bone, BoneRuntime};
+use crate::core::enums::{BoneType, binary_offset};
 use crate::geom::transform::PI;
 use crate::geom::{Matrix, Transform};
 use crate::model::GeometryData;
@@ -134,7 +134,9 @@ impl SurfaceState {
                 //（armature_data.rs:362-369）对所有 Surface 骨统一回填 → None ⟹ 数据未
                 // finalize；TS 该路径解引用 null 崩溃，Rust 防御为告警 + 空顶点缓冲
                 //（后续 `_update_vertices`/采样对空缓冲防御性跳过，记对照表偏差）。
-                log::warn!("surface geometry root not set (Surface.ts:451; finalize_root not run?)");
+                log::warn!(
+                    "surface geometry root not set (Surface.ts:451; finalize_root not run?)"
+                );
                 0
             }
         };
@@ -305,8 +307,16 @@ impl Bone {
         // TransformObject 透传 → 同时取两个 &mut 会整借 `self` → 用局部承接再写回。
         let mut global = self.global;
         get_affine_transform(
-            0.0, 0.0, l_a, l_a, // :161 局部原点锚定、期望边长 lA
-            a_x, a_y, b_x, b_y, c_x, c_y,
+            0.0,
+            0.0,
+            l_a,
+            l_a, // :161 局部原点锚定、期望边长 lA
+            a_x,
+            a_y,
+            b_x,
+            b_y,
+            c_x,
+            c_y,
             &mut global,
             &mut self.global_transform_matrix,
             false,
@@ -359,7 +369,8 @@ impl Bone {
                 for i in 0..vertex_count {
                     let i_d = (i * 2) as usize;
                     let x = ts_read(float_array, v_base.saturating_add(i_d as i64)) + deform[i_d]; // :104
-                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1)) + deform[i_d + 1]; // :105
+                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1))
+                        + deform[i_d + 1]; // :105
                     let matrix = parent.get_global_transform_matrix(x, y); // :106
                     //
                     state.vertices[i_d] = matrix.a * x + matrix.c * y + matrix.tx; // :108
@@ -372,7 +383,8 @@ impl Bone {
                 for i in 0..vertex_count {
                     let i_d = (i * 2) as usize;
                     let x = ts_read(float_array, v_base.saturating_add(i_d as i64)) + deform[i_d]; // :116
-                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1)) + deform[i_d + 1]; // :117
+                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1))
+                        + deform[i_d + 1]; // :117
                     //
                     state.vertices[i_d] =
                         parent_matrix.a * x + parent_matrix.c * y + parent_matrix.tx; // :119
@@ -385,7 +397,8 @@ impl Bone {
                 for i in 0..vertex_count {
                     let i_d = (i * 2) as usize;
                     let x = ts_read(float_array, v_base.saturating_add(i_d as i64)) + deform[i_d]; // :127
-                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1)) + deform[i_d + 1]; // :128
+                    let y = ts_read(float_array, v_base.saturating_add(i_d as i64 + 1))
+                        + deform[i_d + 1]; // :128
                     state.vertices[i_d] = x;
                     state.vertices[i_d + 1] = y;
                 }
@@ -493,11 +506,7 @@ impl Bone {
             }
             // :192 Left.
             is_down = y > state.k_x * (x + l_a) + p_y; // :193
-            matrix_index = ((segment_x * segment_y
-                + segment_x
-                + segment_y
-                + segment_y
-                + index_y)
+            matrix_index = ((segment_x * segment_y + segment_x + segment_y + segment_y + index_y)
                 * 2.0
                 + if is_down { 1.0 } else { 0.0 })
                 * 7.0; // :194
@@ -567,8 +576,7 @@ impl Bone {
             if matrices[mi].get() > 0.0 {
                 cache_load(&mut help_matrix, matrices, mi + 1); // :248
             } else {
-                let vertex_index =
-                    (((index_y + 1.0) * (segment_x_d + 2.0)) - 2.0) as usize; // :251
+                let vertex_index = (((index_y + 1.0) * (segment_x_d + 2.0)) - 2.0) as usize; // :251
                 let dd_x = state.hull_cache[4]; // :252
                 let dd_y = state.hull_cache[5]; // :253
                 let s_x = state.hull_cache[0] + index_y * dd_x; // :254 端点沿方向推进
@@ -620,9 +628,8 @@ impl Bone {
             }
             // :294 Up.
             is_down = y > state.k_y * (x - p_x - d_x) - l_b; // :295
-            matrix_index = ((segment_x * segment_y + index_x) * 2.0
-                + if is_down { 1.0 } else { 0.0 })
-                * 7.0; // :296
+            matrix_index =
+                ((segment_x * segment_y + index_x) * 2.0 + if is_down { 1.0 } else { 0.0 }) * 7.0; // :296
             let mi = matrix_index as usize;
 
             if matrices[mi].get() > 0.0 {
@@ -682,11 +689,7 @@ impl Bone {
             }
             // :345 Down
             is_down = y > state.k_y * (x - p_x - d_x) + l_a; // :346 ⚠ 常数是 lA(200) 不是 lB
-            matrix_index = ((segment_x * segment_y
-                + segment_x
-                + segment_y
-                + index_x)
-                * 2.0
+            matrix_index = ((segment_x * segment_y + segment_x + segment_y + index_x) * 2.0
                 + if is_down { 1.0 } else { 0.0 })
                 * 7.0; // :347
             let mi = matrix_index as usize;
@@ -694,8 +697,7 @@ impl Bone {
             if matrices[mi].get() > 0.0 {
                 cache_load(&mut help_matrix, matrices, mi + 1); // :350
             } else {
-                let vertex_index =
-                    ((segment_y * (segment_x_d + 2.0)) + index_x * 2.0) as usize; // :353
+                let vertex_index = ((segment_y * (segment_x_d + 2.0)) + index_x * 2.0) as usize; // :353
                 let dd_x = state.hull_cache[10]; // :354
                 let dd_y = state.hull_cache[11]; // :355
                 let s_x = state.hull_cache[6] - (segment_x - index_x) * dd_x; // :356
@@ -742,16 +744,14 @@ impl Bone {
         } else {
             // :392 —— Center（格子内部，按对角线分上下两个三角形）
             is_down = y > state.k * (x - p_x - d_x) + p_y; // :393
-            matrix_index = ((segment_x * index_y + index_x) * 2.0
-                + if is_down { 1.0 } else { 0.0 })
-                * 7.0; // :394
+            matrix_index =
+                ((segment_x * index_y + index_x) * 2.0 + if is_down { 1.0 } else { 0.0 }) * 7.0; // :394
             let mi = matrix_index as usize;
 
             if matrices[mi].get() > 0.0 {
                 cache_load(&mut help_matrix, matrices, mi + 1); // :397
             } else {
-                let vertex_index =
-                    (index_x * 2.0 + index_y * (segment_x_d + 2.0)) as usize; // :400
+                let vertex_index = (index_x * 2.0 + index_y * (segment_x_d + 2.0)) as usize; // :400
                 let i = vertex_index;
 
                 if is_down {
