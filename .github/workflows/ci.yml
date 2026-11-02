@@ -36,6 +36,10 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux windowing/audio dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev             libx11-dev libxcursor-dev libxi-dev libxrandr-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -49,4 +53,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux windowing/audio dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev             libx11-dev libxcursor-dev libxi-dev libxrandr-dev
       - run: cargo test --workspace
