@@ -741,7 +741,8 @@ mod tests {
 
     #[test]
     fn dragon_image_slot_builds_quad_mesh() {
-        let (factory, idx) = build_factory("Dragon_ske.json", "Dragon_tex.json", "Dragon");
+        let (factory, idx) =
+            build_factory("Dragon/Dragon_ske.json", "Dragon/Dragon_tex.json", "Dragon");
         let armature = factory.armatures[idx.index()].as_ref().unwrap();
         let slot = armature
             .slots
@@ -759,8 +760,8 @@ mod tests {
     #[test]
     fn rooster_weighted_slot_decodes_and_builds() {
         let (factory, idx) = build_factory(
-            "Rooster_Ani_ske.json",
-            "Rooster_Ani_tex.json",
+            "Rooster_Ani/Rooster_Ani_ske.json",
+            "Rooster_Ani/Rooster_Ani_tex.json",
             "armatureName",
         );
         let armature = factory.armatures[idx.index()].as_ref().unwrap();

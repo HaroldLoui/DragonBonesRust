@@ -16,6 +16,14 @@ pub fn asset_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
+/// 某套素材的目录：`assets/<rig>`，其中 `key` 可以是 `Dragon`、`Dragon_ske` 或
+/// `Dragon_ske.json`（素材按 rig 名分目录存放）。
+pub fn rig_dir(key: &str) -> PathBuf {
+    let stem = key.strip_suffix(".json").unwrap_or(key);
+    let stem = stem.strip_suffix("_ske").unwrap_or(stem);
+    asset_root().join(stem)
+}
+
 pub fn ir_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/ir")
 }
@@ -33,8 +41,8 @@ pub fn tex_stem(ske_stem: &str) -> String {
 
 /// 解析单个素材：返回 (骨架数据, 图集)。
 pub fn parse_asset(ske_stem: &str) -> (DragonBonesData, TextureAtlasData) {
-    let ske = read_json(&asset_root().join(format!("{ske_stem}.json")));
-    let tex = read_json(&asset_root().join(format!("{}.json", tex_stem(ske_stem))));
+    let ske = read_json(&rig_dir(ske_stem).join(format!("{ske_stem}.json")));
+    let tex = read_json(&rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem))));
 
     let mut parser = ObjectDataParser::new();
     let data = parser

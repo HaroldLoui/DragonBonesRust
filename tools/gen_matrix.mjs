@@ -14,16 +14,14 @@ const ROOT = path.resolve(HERE, "..");
 const ASSET_DIR = path.join(ROOT, "assets");
 const OUT = path.join(ROOT, "testdata", "matrix");
 
-function texPathFor(skeFile) {
-  return path.join(ASSET_DIR, skeFile.replace(/_ske[.]json$/, "_tex.json"));
-}
-
 function readAsset(asset) {
-  const ske = path.join(ASSET_DIR, asset.file);
+  const dir = path.join(ASSET_DIR, asset.name);
+  const ske = path.join(dir, asset.file);
+  const tex = path.join(dir, asset.file.replace(/_ske[.]json$/, "_tex.json"));
   const data = JSON.parse(fs.readFileSync(ske, "utf8"));
   const armature = data.armature[0].name;
   const animations = data.armature[0].animation.map(a => a.name);
-  return { ske, tex: texPathFor(asset.file), armature, animations };
+  return { ske, tex, armature, animations };
 }
 
 function run(caseDef) {

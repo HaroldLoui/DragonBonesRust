@@ -47,8 +47,8 @@ fn base_app() -> App {
 fn asset_server_loads_skeleton_and_atlas_through_the_adapter_loaders() {
     let mut app = base_app();
     let server = app.world().resource::<AssetServer>().clone();
-    let skeleton: Handle<SkeletonAsset> = server.load("Dragon_ske.json");
-    let atlas: Handle<AtlasAsset> = server.load("Dragon_tex.json");
+    let skeleton: Handle<SkeletonAsset> = server.load("Dragon/Dragon_ske.json");
+    let atlas: Handle<AtlasAsset> = server.load("Dragon/Dragon_tex.json");
 
     let mut loaded = false;
     for _ in 0..5000 {
@@ -86,11 +86,11 @@ fn asset_server_loads_skeleton_and_atlas_through_the_adapter_loaders() {
 fn install_dragon_assets(app: &mut App) -> (Handle<SkeletonAsset>, Handle<AtlasAsset>) {
     let dir = assets_dir();
     let skeleton_json: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("Dragon_ske.json")).expect("read skeleton"),
+        &std::fs::read_to_string(dir.join("Dragon/Dragon_ske.json")).expect("read skeleton"),
     )
     .expect("parse skeleton");
     let atlas_json: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("Dragon_tex.json")).expect("read atlas"),
+        &std::fs::read_to_string(dir.join("Dragon/Dragon_tex.json")).expect("read atlas"),
     )
     .expect("parse atlas");
     let mut parser = ObjectDataParser::default();

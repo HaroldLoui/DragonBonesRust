@@ -9,7 +9,7 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::ir_snapshot::{asset_root, tex_stem};
+use common::ir_snapshot::{rig_dir, tex_stem};
 use dragonbones_core::animation::world_clock::{AnimatableHandle, ClockError, ClockId};
 use dragonbones_core::armature::{
     Armature, ArmatureIdx, ArmatureProxy, DbEventListener, DisplayHandle, ListenerId,
@@ -306,8 +306,9 @@ fn attach_rejects_clock_cycles_without_changing_existing_relation() {
 const DRAGON_KEY: &str = "Dragon_ske";
 
 fn build_animated_dragon(advances: Arc<AtomicUsize>) -> (BaseFactory, ArmatureIdx) {
-    let ske = common::read_value(&asset_root().join(format!("{DRAGON_KEY}.json")));
-    let tex = common::read_value(&asset_root().join(format!("{}.json", tex_stem(DRAGON_KEY))));
+    let ske = common::read_value(&rig_dir(DRAGON_KEY).join(format!("{DRAGON_KEY}.json")));
+    let tex =
+        common::read_value(&rig_dir(DRAGON_KEY).join(format!("{}.json", tex_stem(DRAGON_KEY))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, DRAGON_KEY)
@@ -492,8 +493,9 @@ fn child_display(name: &str, parent: &str) -> DisplayData {
 /// 新 child 继承父骨架当前 clock。
 #[test]
 fn slot_display_switch_detaches_old_child_and_new_child_inherits_parent_clock() {
-    let ske = common::read_value(&asset_root().join(format!("{DRAGON_KEY}.json")));
-    let tex = common::read_value(&asset_root().join(format!("{}.json", tex_stem(DRAGON_KEY))));
+    let ske = common::read_value(&rig_dir(DRAGON_KEY).join(format!("{DRAGON_KEY}.json")));
+    let tex =
+        common::read_value(&rig_dir(DRAGON_KEY).join(format!("{}.json", tex_stem(DRAGON_KEY))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, DRAGON_KEY)

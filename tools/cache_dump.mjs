@@ -3,8 +3,8 @@ import fs from "node:fs";
 import { createFactory, buildArmature, fin } from "./dbharness.mjs";
 
 const asset = "Dragon";
-const ske = `assets/${asset}_ske.json`;
-const tex = `assets/${asset}_tex.json`;
+const ske = `assets/${asset}/${asset}_ske.json`;
+const tex = `assets/${asset}/${asset}_tex.json`;
 const out = "testdata/golden_cache/dragon_walk.json";
 const { factory } = createFactory(ske, tex, asset);
 const armature = buildArmature(factory, "Dragon", asset);

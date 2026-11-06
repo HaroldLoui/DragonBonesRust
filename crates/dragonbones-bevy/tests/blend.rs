@@ -154,8 +154,11 @@ fn slot_entity_for(app: &App, slots: &[Entity], slot_idx: SlotIdx) -> Option<Ent
 #[test]
 fn dragon_blend_rig_shares_one_material_per_image_and_blend() {
     let mut app = test_app();
-    let (skeleton, atlas) =
-        install_assets(&mut app, "Dragon_Blend_ske.json", "Dragon_Blend_tex.json");
+    let (skeleton, atlas) = install_assets(
+        &mut app,
+        "Dragon_Blend/Dragon_Blend_ske.json",
+        "Dragon_Blend/Dragon_Blend_tex.json",
+    );
     let root = spawn_armature(&mut app, &skeleton, &atlas);
     app.update();
 
@@ -220,8 +223,11 @@ fn dragon_blend_rig_shares_one_material_per_image_and_blend() {
 #[test]
 fn unsupported_overlay_slot_renders_with_its_normal_material() {
     let mut app = test_app();
-    let (skeleton, atlas) =
-        install_assets(&mut app, "Dragon_Blend_ske.json", "Dragon_Blend_tex.json");
+    let (skeleton, atlas) = install_assets(
+        &mut app,
+        "Dragon_Blend/Dragon_Blend_ske.json",
+        "Dragon_Blend/Dragon_Blend_tex.json",
+    );
     let root = spawn_armature(&mut app, &skeleton, &atlas);
     app.update();
 
@@ -268,7 +274,8 @@ fn runtime_blend_mode_change_swaps_material_and_cleanup_releases_all() {
     // The plain Dragon rig uses normal blending only, so it starts with exactly
     // one shared material.
     let mut app = test_app();
-    let (skeleton, atlas) = install_assets(&mut app, "Dragon_ske.json", "Dragon_tex.json");
+    let (skeleton, atlas) =
+        install_assets(&mut app, "Dragon/Dragon_ske.json", "Dragon/Dragon_tex.json");
     let root = spawn_armature(&mut app, &skeleton, &atlas);
     app.update();
 
@@ -335,7 +342,8 @@ fn runtime_blend_mode_change_swaps_material_and_cleanup_releases_all() {
 #[test]
 fn two_slots_switching_to_the_same_new_blend_in_one_frame_share_one_reference() {
     let mut app = test_app();
-    let (skeleton, atlas) = install_assets(&mut app, "Dragon_ske.json", "Dragon_tex.json");
+    let (skeleton, atlas) =
+        install_assets(&mut app, "Dragon/Dragon_ske.json", "Dragon/Dragon_tex.json");
     let root = spawn_armature(&mut app, &skeleton, &atlas);
     app.update();
 

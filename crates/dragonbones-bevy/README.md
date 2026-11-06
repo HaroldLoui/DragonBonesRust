@@ -30,8 +30,8 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn(Camera2d);
     commands.spawn((
         DragonBonesArmature {
-            skeleton: assets.load("Dragon_ske.json"),
-            atlas: assets.load("Dragon_tex.json"),
+            skeleton: assets.load("Dragon/Dragon_ske.json"),
+            atlas: assets.load("Dragon/Dragon_tex.json"),
             armature_name: "Dragon".to_owned(),
             animation: Some("stand".to_owned()),
         },
@@ -259,31 +259,22 @@ a GPU cannot compile those pipelines.
 
 ## Demo
 
-`crates/dragonbones-demo` loads one rig selected by a command-line argument:
+`crates/dragonbones-demo` scans `assets/` at startup and loads every rig it
+finds (one subdirectory per rig). The command-line argument only picks the
+initially selected rig; it does not change the load order:
 
 ```text
-cargo run -p dragonbones-demo -- <name>
-cargo run -p dragonbones-demo -- --demo <name>
-cargo run -p dragonbones-demo -- --list
+cargo run -p dragonbones-demo                     # first rig in load order
+cargo run -p dragonbones-demo -- PlantAnimate     # start on the given rig
+cargo run -p dragonbones-demo -- --list           # list rigs in load order
 ```
 
-Available rigs:
+While the demo runs:
 
-```text
-dragon (default) | dragon_blend | plant | rooster | long | surface
-```
-
-Animation selection is intentionally not a CLI option. The demo reads each
-rig's animation names from its skeleton JSON and shows them in a Bevy UI overlay
-(top-left). While the demo runs:
-
+- click the buttons in the right-hand panel to switch rigs
+- press `Up` / `Down` to switch rigs
 - press `1`-`9` to select an animation
 - press `Left` / `Right` to cycle through the current rig's animations
 
-For example:
-
-```powershell
-cargo run -p dragonbones-demo -- rooster
-cargo run -p dragonbones-demo -- --demo plant
-cargo run -p dragonbones-demo -- --demo long
-```
+The animation names and the rig list are read from each rig's skeleton JSON;
+discovery order is the directory-name order (case-insensitive).

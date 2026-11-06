@@ -7,7 +7,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::ir_snapshot::{asset_root, tex_stem};
+use common::ir_snapshot::{rig_dir, tex_stem};
 use common::{EventLog, RecordingProxy, read_value};
 use dragonbones_core::animation::StateId;
 use dragonbones_core::armature::ArmatureIdx;
@@ -74,8 +74,8 @@ fn run_matrix_case(path: &Path) {
         .collect();
     let compare_pose_enabled = meta["comparePose"].as_bool().expect("comparePose");
 
-    let ske = read_value(&asset_root().join(ske_file));
-    let tex = read_value(&asset_root().join(format!("{}.json", tex_stem(ske_stem))));
+    let ske = read_value(&rig_dir(ske_file).join(ske_file));
+    let tex = read_value(&rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, ske_stem)

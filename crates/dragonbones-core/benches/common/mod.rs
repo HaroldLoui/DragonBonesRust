@@ -68,8 +68,9 @@ pub struct Rig {
 #[must_use]
 pub fn load_rig(spec: &'static RigSpec) -> Rig {
     let root = asset_root();
-    let ske_path = root.join(format!("{}.json", spec.ske_stem));
-    let tex_path = root.join(format!("{}.json", spec.ske_stem.replace("_ske", "_tex")));
+    let rig_dir = root.join(spec.name);
+    let ske_path = rig_dir.join(format!("{}.json", spec.ske_stem));
+    let tex_path = rig_dir.join(format!("{}.json", spec.ske_stem.replace("_ske", "_tex")));
 
     let ske_text = std::fs::read_to_string(&ske_path)
         .unwrap_or_else(|error| panic!("读取 {} 失败：{error}", ske_path.display()));
@@ -88,7 +89,7 @@ pub fn load_rig(spec: &'static RigSpec) -> Rig {
     }
 }
 
-/// 单个 ske 素材的原文（解析吞吐 group 用，素材按 `assets/*_ske.json` 自动发现）。
+/// 单个 ske 素材的原文（解析吞吐 group 用，素材按 `assets/<rig>/*_ske.json` 自动发现）。
 pub struct Asset {
     /// 文件名去扩展名，如 `Dragon_ske`。
     pub stem: String,
@@ -96,27 +97,41 @@ pub struct Asset {
     pub text: String,
 }
 
-/// 扫描 `assets/*_ske.json`，按文件名排序读入全部 ske 原文。
+/// 扫描 `assets/<rig>/*_ske.json`，按文件名排序读入全部 ske 原文。
 ///
 /// 注：`PlantAnimate` 的源数据即压缩 JSON（1142e46 已将
 /// `PlantAnimate_ske_compressed.json` 合并进 `PlantAnimate_ske.json`，仓库内没有独立
-/// compressed 素材文件）；`*_ske_compressed.json` 不匹配 `*_ske.json`，故这里自然为 8 个。
+/// compressed 素材文件）；`*_ske_compressed.json` 不匹配 `*_ske.json`。
 #[must_use]
 pub fn load_assets() -> Vec<Asset> {
     let root = asset_root();
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&root)
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("读取目录 {} 失败：{error}", root.display()))
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.file_name()
+        .filter_map(|entry| entry.ok())
+    {
+        let rig_dir = entry.path();
+        if !rig_dir.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(&rig_dir)
+            .unwrap_or_else(|error| panic!("读取目录 {} 失败：{error}", rig_dir.display()))
+            .filter_map(|file| file.ok())
+        {
+            let path = file.path();
+            if path
+                .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.ends_with("_ske.json"))
-        })
-        .collect();
+            {
+                paths.push(path);
+            }
+        }
+    }
     paths.sort();
     assert!(
         !paths.is_empty(),
-        "{} 下没有找到任何 *_ske.json 素材",
+        "{} 下没有找到任何 <rig>/*_ske.json 素材",
         root.display()
     );
 

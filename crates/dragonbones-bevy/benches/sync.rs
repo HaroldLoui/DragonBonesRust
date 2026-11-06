@@ -57,8 +57,8 @@ struct Rig {
 /// Image-heavy rig (almost every slot is a plain atlas quad).
 const DRAGON: Rig = Rig {
     label: "Dragon",
-    skeleton_file: "Dragon_ske.json",
-    atlas_file: "Dragon_tex.json",
+    skeleton_file: "Dragon/Dragon_ske.json",
+    atlas_file: "Dragon/Dragon_tex.json",
     armature_name: "Dragon",
     animation: "stand",
 };
@@ -67,8 +67,8 @@ const DRAGON: Rig = Rig {
 /// has to rebuild mesh vertex positions on the CPU.
 const ROOSTER: Rig = Rig {
     label: "Rooster",
-    skeleton_file: "Rooster_Ani_ske.json",
-    atlas_file: "Rooster_Ani_tex.json",
+    skeleton_file: "Rooster_Ani/Rooster_Ani_ske.json",
+    atlas_file: "Rooster_Ani/Rooster_Ani_tex.json",
     armature_name: "armatureName",
     animation: "rooster_idle_anim",
 };
