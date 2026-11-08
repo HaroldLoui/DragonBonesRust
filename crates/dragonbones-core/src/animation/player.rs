@@ -1,6 +1,5 @@
 //! Animation container and stable state ordering (`Animation.ts`).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -11,7 +10,7 @@ use crate::event::EventObject;
 use crate::model::{AnimationConfig, AnimationData, ArmatureData, DragonBonesData};
 
 use super::animation_state::{AnimationState, FadeEvent, FadeState, SubFadeState};
-use super::blend_state::{BlendState, BlendStateKey};
+use super::blend_state::BlendStates;
 use super::state_id::{StateArena, StateArenaError, StateId};
 use super::timeline_states::{AnimationTimelineSource, TimelineInstance, TimelineTarget};
 use crate::core::enums::TimelineType;
@@ -97,7 +96,7 @@ pub struct Animation {
     state_ids_scratch: Vec<StateId>,
     last_state: Option<StateId>,
     animation_config: AnimationConfig,
-    blend_states: HashMap<BlendStateKey, BlendState>,
+    blend_states: BlendStates,
     /// 父骨架 `playConfig` 新状态创建后请求子骨架同名继承（`Animation.ts:443-452`）。
     /// TODO D-4.36：按 arena 序（父 < 子）在同一帧内排空；仅 `play()` 返回时子状态
     /// 尚未创建。若某子骨架 idx < 父（工厂正常装配不会出现），其本帧已提前推进，
@@ -127,7 +126,7 @@ impl Default for Animation {
             state_ids_scratch: Vec::new(),
             last_state: None,
             animation_config: AnimationConfig::default(),
-            blend_states: HashMap::new(),
+            blend_states: BlendStates::default(),
             pending_child_animations: Vec::new(),
             time_scale: 1.0,
             inherit_time_scale: 1.0,
@@ -2135,7 +2134,7 @@ mod tests {
                 z_index_dirty: &mut z_index_dirty,
                 proxy: &mut proxy,
             };
-            let mut blend_states = std::collections::HashMap::new();
+            let mut blend_states = crate::animation::blend_state::BlendStates::default();
             state.advance_time_with_context(
                 1.0,
                 1.0,

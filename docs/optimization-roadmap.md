@@ -237,6 +237,16 @@ Rooster 7.23 µs 上下波动，差异均在 ±1.5% 噪声内，未能量化出�
 - IR 的 float 数组已经被 f32 量化，core 用 f64 承载；如果内存成为问题，可评估内部 f32 存储 + 边界转换，但会触及黄金容差；
 - 当前素材规模较小，优先级低于适配层。
 
+### 2.7 混合状态查表（✅ 已实现 2026-11-08）
+
+- 每帧 `update_groups` 要对每条 bone/slot timeline 在 `blend_states: HashMap<BlendStateKey, BlendState>` 里查一次，
+  默认 `SipHash` 对 `Arc<str>` key 的哈希占了动画相位里可观的一部分；
+- 改为 `rustc_hash::FxHashMap`（`pub type BlendStates`，见 `crates/dragonbones-core/src/animation/blend_state.rs`），
+  key/值类型与语义完全不变，数值零风险（`reset_blend_states` 的唯一迭代点与顺序无关）；
+- 同会话 A/B（criterion 20 samples）：`advance/Dragon/factory_advance_time` 2.011 → **1.599 µs**（−20%）、
+  `factory_advance_one` 3.502 → **2.963 µs**（−15%）；`PlantAnimate` 4.643 → **4.169 µs**（−10%）；
+  `Rooster_Ani` 7.277 → **6.206 µs**（−15%）、`advance_one` 6.994 → **6.115 µs**（−13%）。
+
 ---
 
 ## 3. 性能基线（✅ 已建立 2026-10-29）
@@ -366,7 +376,8 @@ dbbin 二进制入口（`dbbin` 组，只测 `parse_binary_dragon_bones_data`）
 | `load/batch29/parser_only` | 72.7 ms | 28.4 ms | −61% |
 | `load/batch29/serde_json+parser` | 105.3 ms | 56.3 ms | −46% |
 
-动画推进（`cargo bench -p dragonbones-core --bench advance`）：
+动画推进（`cargo bench -p dragonbones-core --bench advance`；本节数字为方案 B 主体完成后，
+比混合状态查表改用 `rustc-hash` 早一版，后者见 §2.7）：
 
 | benchmark | HEAD | 方案 B 后 | 变化 |
 |---|---|---|---|
@@ -387,8 +398,9 @@ dbbin 二进制入口（`dbbin` 组，只测 `parse_binary_dragon_bones_data`）
 剩余热点（临时相位插桩，已移除）：动画时间轴更新占整帧 60–70%（Dragon
 ≈1.74 µs、PlantAnimate ≈1.81 µs），矩阵相位 bones+slots 占约 30%；
 加载侧剩余成本约一半在 `serde_json`（≈29.4 ms），其余为 `dispatch_frame` 的逐帧
-`Value` 访问。进一步收益需要动 `update_groups` 的逐 timeline 混合状态查表、
-`dispatch_frame` 的逐帧 `Value` 访问或 typed deserialize，风险高于本轮。
+`Value` 访问。`update_groups` 的混合状态查表已改用 `rustc-hash`（§2.7，再降 10–20%）；
+进一步收益需要动 `dispatch_frame` 的逐帧 `Value` 访问或 typed deserialize，风险更高；
+矩阵/三角函数的 SIMD 化需要改 SoA 布局并改变浮点运算顺序，与 golden 位一致冲突，暂不做。
 
 语料审计（`crates/dragonbones-core/tests/corpus_audit.rs`，536 套）在本轮解析优化后
 从 30.0 s 降到 **27.7 s**，仍保持 536/536 通过、JS 对拍 39 一致 / 0 不一致。

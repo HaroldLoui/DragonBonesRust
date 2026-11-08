@@ -1,12 +1,10 @@
 //! Fixed-order timeline group dispatch and per-frame BlendState allocation.
 
-use std::collections::HashMap;
-
 use crate::animation::AnimationUpdateCtx;
 use crate::animation::animation_state::{
     AnimationState, FadeState, SubFadeState, TIMELINE_GROUP_UPDATE_ORDER, TimelineGroup,
 };
-use crate::animation::blend_state::{BlendState, BlendStateKey};
+use crate::animation::blend_state::{BlendStateKey, BlendStates};
 use crate::animation::timeline_state::ActionTimelineTime;
 
 use super::{TimelineInstance, TimelineTarget};
@@ -14,7 +12,7 @@ use super::{TimelineInstance, TimelineTarget};
 pub(crate) fn update_groups(
     state: &mut AnimationState,
     context: &mut AnimationUpdateCtx<'_>,
-    blend_states: &mut HashMap<BlendStateKey, BlendState>,
+    blend_states: &mut BlendStates,
     action_time: Option<ActionTimelineTime>,
     update_bone_timeline: bool,
 ) {
