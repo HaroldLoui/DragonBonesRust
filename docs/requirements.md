@@ -711,6 +711,8 @@ const armature = factory.buildArmature("Dragon", "Dragon");
 
 > **2026-10-31 core 测试缺口（P2 收尾）**：① `_parseDeformFrame` 的 weight 分支——核对官方 TS 该分支本身就是 `// TODO`（`ObjectDataParser.ts:1993`，不写任何帧数据），Rust 保持同样的 no-op 语义并在代码注释中写明；新增 `tests/deform_weight.rs`（向 Rooster 加权 mesh 注入 ffd 时间轴，断言解析成功且 `frame_float_array` 与基线逐值相同）。② dbbin mesh 对拍——submodule 内全部官方 dbbin 样本（mecha×2、dragon_boy）均不含 mesh，且仓库没有 dbbin 导出器，无法生成可信 mesh 样本；现有 `tests/dbbin.rs` 仅覆盖 header/数组/时间轴等价。该缺口为**外部阻塞**，已写入 model_mapping D-6.10（需官方 mesh dbbin 样本或导出器后再补 golden）。
 
+> **2026-11-08 core 语料审计（P2 证据面）**：新增 `crates/dragonbones-core/tests/corpus_audit.rs`（`#[ignore]`，扫本地 `_research/` 下 536 套真实 skeleton，逐动画推进并抽样对拍官方 JS 运行时的结构快照与 IR 数组），全量 536/536 通过、JS 对拍 39 一致/0 不一致。审计暴露并修复 4 类问题：zOrder 负偏移导致的 `unchanged_index` 下溢 panic（4 套）、子骨架显示撞同名图集贴图触发的 `unreachable!`（6 套）、IK 链骨 scaleY 过零时 `Transform::from_matrix` 分解出 NaN（3 套）、槽级 `actions` 因误读 `self.skin` 丢失（1 套，JS 对拍差异）。前两类新增 `tests/malformed_input.rs` 回归；NaN 与 zOrder 容错作为对 TS 的有意健壮性偏差登记在 model_mapping D-6.18/D-6.19。方法论、命令与结果见 [docs/core_audit.md](core_audit.md)。
+
 **目标**：把已验证的核心接入 Bevy，播放 `assets/` 下的素材动画。
 
 > **前置**：先完成 §5 的预研问题 Q1–Q3，再动手。

@@ -963,10 +963,16 @@ impl ObjectDataParser {
 
                 if let Some(raw_displays) = raw_slot.get(DISPLAY).and_then(Value::as_array) {
                     for raw_display in raw_displays {
+                        // TS: `displays.length` 为当前 skin 中该 slot 已解析的
+                        // 显示数量（`_parseDisplay` 的 `this._skin.getDisplays`），
+                        // 即本循环已 push 的条数。
+                        let displays_len = skin
+                            .get_displays(&slot_name)
+                            .map_or(0, <[Option<DisplayData>]>::len);
                         let display = if raw_display.is_null() {
                             None
                         } else {
-                            self.parse_display(raw_display)
+                            self.parse_display(raw_display, displays_len)
                         };
                         skin.add_display(slot_name.clone(), display);
                     }
@@ -979,7 +985,7 @@ impl ObjectDataParser {
         skin
     }
 
-    fn parse_display(&mut self, raw: &Value) -> Option<DisplayData> {
+    fn parse_display(&mut self, raw: &Value, displays_len: usize) -> Option<DisplayData> {
         let name = get_string(raw, NAME, "");
         let path = get_string(raw, PATH, "");
 
@@ -1015,21 +1021,20 @@ impl ObjectDataParser {
                 } else if let Some(slot_name) = self.slot.clone()
                     && let Some(slot_actions) = self.slot_child_actions.get(&slot_name).cloned()
                 {
-                    let displays_len = self
-                        .skin
-                        .as_ref()
-                        .and_then(|s| s.get_displays(&slot_name))
-                        .map(<[Option<DisplayData>]>::len);
+                    // TS `_parseDisplay`（ObjectDataParser.ts:690-701）：
+                    // `displays === null ? slot.displayIndex === 0
+                    //                   : slot.displayIndex === displays.length`
+                    // displays 是当前 skin 里该 slot **已解析** 的显示数量，
+                    // 由调用方 parse_skin 传入（此前误用 `self.skin`，但该字段
+                    // 在 parse_skin 期间从未赋值 → 恒 None，导致插槽级 actions
+                    // 永远挂不到子骨架显示上）。
                     let display_index = self
                         .armature
                         .as_ref()
                         .unwrap()
                         .get_slot(&slot_name)
                         .map_or(0, |s| s.display_index);
-                    let should_take = match displays_len {
-                        None => display_index == 0,
-                        Some(len) => display_index as usize == len,
-                    };
+                    let should_take = display_index >= 0 && display_index as usize == displays_len;
                     if should_take {
                         actions = slot_actions;
                         self.slot_child_actions.remove(&slot_name);
@@ -2411,30 +2416,60 @@ impl ObjectDataParser {
             && !raw_z_order.is_empty()
         {
             let slot_count = self.armature.as_ref().unwrap().sorted_slots.len();
-            let mut unchanged = vec![0.0; slot_count - raw_z_order.len() / 2];
+            // TS `new Array(slotCount - rawZOrder.length / 2)` 在负长度时抛 RangeError；
+            // 这里饱和到 0，畸形数据只影响排序回退，不影响解析继续。
+            let mut unchanged = vec![0.0; slot_count.saturating_sub(raw_z_order.len() / 2)];
             let mut z_orders = vec![-1.0; slot_count];
 
             let mut original_index = 0usize;
             let mut unchanged_index = 0usize;
             let mut i = 0;
-            while i < raw_z_order.len() {
-                let slot_index = raw_z_order[i].as_f64().unwrap_or(0.0) as usize;
-                let z_order_offset = raw_z_order[i + 1].as_f64().unwrap_or(0.0);
+            // TS 以 `i < rawZOrder.length; i += 2` 直接读 `rawZOrder[i + 1]`；奇数长度
+            // 时末尾一项无偏移。此处按整对处理，与 TS 的有效数据行为一致。
+            while i + 1 < raw_z_order.len() {
+                let slot_index_f = raw_z_order[i].as_f64().unwrap_or(0.0);
+                let z_order_offset_f = raw_z_order[i + 1].as_f64().unwrap_or(0.0);
+
+                // 畸形数据防御：slotIndex 落后于游标会让 TS 的 `while (originalIndex !==
+                // slotIndex)` 死循环；越界 slotIndex 也只会写出无效数组属性。两者都跳过该对。
+                if !slot_index_f.is_finite()
+                    || slot_index_f < 0.0
+                    || slot_index_f >= slot_count as f64
+                {
+                    i += 2;
+                    continue;
+                }
+                let slot_index = slot_index_f as usize;
+                if slot_index < original_index {
+                    i += 2;
+                    continue;
+                }
 
                 while original_index != slot_index {
-                    unchanged[unchanged_index] = original_index as f64;
+                    if unchanged_index < unchanged.len() {
+                        unchanged[unchanged_index] = original_index as f64;
+                    }
                     unchanged_index += 1;
                     original_index += 1;
                 }
 
-                let index = original_index + z_order_offset as usize;
-                z_orders[index] = original_index as f64;
+                // TS: `const index = originalIndex + zOrderOffset` — 偏移可为负（把槽
+                // 往前挪，如 BonkChoy `zOrder:[5,21,24,-19,...]`）。Rust 旧实现用
+                // `z_order_offset as usize`，负数饱和成 0，导致 zOrders 覆盖缺失、
+                // 尾部 unchanged_index 递减下溢。这里按 i64 计算并忽略越界写（TS 对
+                // 负下标写的是数组属性，对 0..slotCount 的读取等价于未赋值）。
+                let index = original_index as i64 + z_order_offset_f as i64;
+                if (0..slot_count as i64).contains(&index) {
+                    z_orders[index as usize] = original_index as f64;
+                }
                 original_index += 1;
                 i += 2;
             }
 
             while original_index < slot_count {
-                unchanged[unchanged_index] = original_index as f64;
+                if unchanged_index < unchanged.len() {
+                    unchanged[unchanged_index] = original_index as f64;
+                }
                 unchanged_index += 1;
                 original_index += 1;
             }
@@ -2446,8 +2481,13 @@ impl ObjectDataParser {
             while i > 0 {
                 i -= 1;
                 if z_orders[i] == -1.0 {
-                    unchanged_index -= 1;
-                    self.frameset(frame_offset + 2 + i, unchanged[unchanged_index] as i32);
+                    // TS `unchanged[--unchangedIndex] || 0`：负下标读到 undefined、
+                    // 按 0 处理；`saturating_sub` + `unwrap_or(0.0)` 对齐该语义。
+                    unchanged_index = unchanged_index.saturating_sub(1);
+                    self.frameset(
+                        frame_offset + 2 + i,
+                        unchanged.get(unchanged_index).copied().unwrap_or(0.0) as i32,
+                    );
                 } else {
                     self.frameset(frame_offset + 2 + i, z_orders[i] as i32);
                 }

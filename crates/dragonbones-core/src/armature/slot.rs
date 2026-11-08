@@ -880,21 +880,25 @@ impl Slot {
                     .unwrap_or(self.texture_atlas_scale);
                 let scale = atlas_scale * self.armature_data().scale;
                 // :411 displayData 是 Image 用 displayData，否则用 rawDisplayData（TS 直接 as）
-                let image_display_data: &DisplayData = if let Some(display_data) = &display_data
+                let image_display_data: Option<&DisplayData> = if let Some(display_data) =
+                    &display_data
                     && display_data.type_() == DisplayType::Image
                 {
-                    display_data
+                    Some(display_data)
                 } else {
-                    raw_display_data.as_ref().expect(
-                        "Slot.ts:411 同点解引用 rawDisplayData（textureData 非空 ⟹ factory 已写 raw）",
-                    )
+                    raw_display_data.as_ref()
                 };
-                // :415-416 数据里的归一化 pivot（TS as 成功后 .pivot 必在——进入本分支
-                // 的 geometry 为空 ⟹ 非 Mesh/Path，texture 非空 ⟹ 非 Armature/BoundingBox）
-                let pivot = match &image_display_data.kind {
-                    DisplayKind::Image { pivot, .. } => *pivot,
-                    _ => unreachable!("imageDisplayData 非 Image 类型（Slot.ts:411 as）"),
-                };
+                // :415-416 数据里的归一化 pivot
+                // TS 对非 Image 的 rawDisplayData 直接 `as ImageDisplayData` 取 `.pivot`，
+                // 得 undefined → 相乘后 NaN。该 NaN 在本分支只污染 pivot，而 pivot 只被
+                // 图像显示消费（bevy `render.rs` 的 image 路径），子骨架/包围盒显示无消费方。
+                // Rust 取 (0,0) 保证矩阵与数值检查干净（与 TS 的差异仅在不可见字段上）。
+                let pivot = image_display_data
+                    .and_then(|data| match &data.kind {
+                        DisplayKind::Image { pivot, .. } => Some(*pivot),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 self.pivot_x = pivot.x; // :415
                 self.pivot_y = pivot.y; // :416
 
@@ -921,7 +925,8 @@ impl Slot {
                 // :435-447 换皮 pivot 修正（TS 用对象身份比较 `imageDisplayData !==
                 // rawDisplayData`；Rust 两个本地引用即对象身份 → `ptr::eq` 恒等翻译）
                 if let Some(raw) = raw_display_data.as_ref()
-                    && !std::ptr::eq(image_display_data, raw)
+                    && let Some(image) = image_display_data
+                    && !std::ptr::eq(image, raw)
                 {
                     // TS 静态 _helpMatrix/_helpPoint → 局部临时（任务 1 偏差）
                     let mut help_matrix = Matrix::default();
@@ -931,7 +936,7 @@ impl Slot {
                     self.pivot_x -= x; // :440
                     self.pivot_y -= y; // :441
 
-                    image_display_data.transform.to_matrix(&mut help_matrix); // :443
+                    image.transform.to_matrix(&mut help_matrix); // :443
                     help_matrix.invert(); // :444
                     let (x, y) = help_matrix.transform_point(0.0, 0.0, false); // :445
                     self.pivot_x += x; // :446
