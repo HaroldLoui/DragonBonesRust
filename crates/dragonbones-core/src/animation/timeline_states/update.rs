@@ -24,8 +24,18 @@ pub(crate) fn update_groups(
     let weight_result = state.weight_result;
     let layer = state.layer;
     let display_control = state.display_control;
-    let state_name = state.name.clone();
-    let state_group = state.group.clone();
+    // 仅 displayControl 分支需要状态名；这里把名字临时取出再放回，
+    // 避免每帧 clone，同时不长时间借用整个 state。
+    let state_name = if display_control {
+        std::mem::take(&mut state.name)
+    } else {
+        String::new()
+    };
+    let state_group = if display_control {
+        std::mem::take(&mut state.group)
+    } else {
+        String::new()
+    };
     let fade_state = state.fade_state;
     let sub_fade_state = state.sub_fade_state;
     let fade_progress = state.fade_progress;
@@ -150,6 +160,11 @@ pub(crate) fn update_groups(
                 TimelineGroup::Animation => {}
             }
         }
+    }
+
+    if display_control {
+        state.name = state_name;
+        state.group = state_group;
     }
 }
 

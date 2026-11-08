@@ -162,12 +162,23 @@ impl WorldClock {
         Some(passed_time)
     }
 
+    #[cfg(test)]
     pub(crate) fn member_snapshot(&self) -> Vec<(usize, MemberToken)> {
-        self.members
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| entry.map(|entry| (index, entry.token)))
-            .collect()
+        let mut snapshot = Vec::new();
+        self.member_snapshot_into(&mut snapshot);
+        snapshot
+    }
+
+    /// Appends the current direct members into `out` (clearing it first), so the
+    /// runtime can reuse a scratch buffer instead of allocating per visit.
+    pub(crate) fn member_snapshot_into(&self, out: &mut Vec<(usize, MemberToken)>) {
+        out.clear();
+        out.extend(
+            self.members
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| entry.map(|entry| (index, entry.token))),
+        );
     }
 
     pub(crate) fn active_members(&self) -> Vec<AnimatableHandle> {

@@ -518,7 +518,7 @@ fn push_axis(
 fn blend_key(kind: BlendStateKind, target_name: &str) -> BlendStateKey {
     BlendStateKey {
         kind,
-        target_name: target_name.to_owned(),
+        target_name: target_name.into(),
     }
 }
 
@@ -655,10 +655,7 @@ mod tests {
             .expect("pose deform axis");
         assert!(deform.is_pose);
         assert_eq!(
-            deform
-                .blend_key
-                .as_ref()
-                .map(|key| key.target_name.as_str()),
+            deform.blend_key.as_ref().map(|key| &*key.target_name),
             Some("slot")
         );
         // The animation name also anchors the pose display/color axes.

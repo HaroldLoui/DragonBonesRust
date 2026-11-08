@@ -80,6 +80,25 @@ struct ShareSpec {
 }
 
 /// 对齐 `ObjectDataParser`。
+/// 曲线采样缓存项：同一 (curve, sample_count) 的采样结果可复用。
+#[derive(Clone, Default)]
+struct CurveSamples {
+    curve: Vec<f64>,
+    sample_count: usize,
+    is_omited: bool,
+    samples: Vec<f64>,
+}
+
+fn curve_cache_key(curve: &[f64], sample_count: usize) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for v in curve {
+        h ^= v.to_bits();
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h ^= sample_count as u64;
+    h.wrapping_mul(0x100_0000_01b3)
+}
+
 pub struct ObjectDataParser {
     raw_bones: Vec<String>,
     data: Option<DragonBonesData>,
@@ -99,7 +118,9 @@ pub struct ObjectDataParser {
 
     help_transform: Transform,
     help_color: ColorTransform,
-    help_point: Point,
+    curve_scratch: Vec<f64>,
+    samples_scratch: Vec<f64>,
+    curve_cache: HashMap<u64, CurveSamples>,
     help_matrix_a: Matrix,
     help_matrix_b: Matrix,
 
@@ -157,7 +178,9 @@ impl ObjectDataParser {
             frame_value_scale: 1.0,
             help_transform: Transform::default(),
             help_color: ColorTransform::default(),
-            help_point: Point::default(),
+            curve_scratch: Vec::new(),
+            samples_scratch: Vec::new(),
+            curve_cache: HashMap::new(),
             help_matrix_a: Matrix::default(),
             help_matrix_b: Matrix::default(),
             int_array: Vec::new(),
@@ -333,8 +356,9 @@ impl ObjectDataParser {
             self.cache_bones.clear();
             self.share_specs.clear();
 
-            let raw_armatures = raw[ARMATURE].as_array().cloned().unwrap_or_default();
-            for raw_armature in &raw_armatures {
+            // 借用而非深拷贝整棵 armature `Value` 树：这是 29 套语料解析的最大单点成本。
+            let raw_armatures = raw[ARMATURE].as_array().map_or(&[][..], Vec::as_slice);
+            for raw_armature in raw_armatures {
                 let armature = self.parse_armature(raw_armature, scale);
                 self.data.as_mut().unwrap().add_armature(armature);
             }
@@ -2196,12 +2220,40 @@ impl ObjectDataParser {
         if frame_count > 0 {
             if has_key(raw, CURVE) {
                 let sample_count = frame_count + 1;
-                let curve: Vec<f64> = raw[CURVE]
-                    .as_array()
-                    .map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect())
-                    .unwrap_or_default();
-                let mut samples = vec![0.0; sample_count];
-                let is_omited = self.sampling_easing_curve(&curve, &mut samples);
+                let mut curve = std::mem::take(&mut self.curve_scratch);
+                curve.clear();
+                if let Some(arr) = raw[CURVE].as_array() {
+                    curve.extend(arr.iter().map(|v| v.as_f64().unwrap_or(0.0)));
+                }
+                let cache_key = curve_cache_key(&curve, sample_count);
+                let mut samples = std::mem::take(&mut self.samples_scratch);
+                samples.clear();
+                let mut is_omited = false;
+                let mut hit = false;
+                if let Some(cached) = self.curve_cache.get(&cache_key)
+                    && cached.sample_count == sample_count
+                    && cached.curve == curve
+                {
+                    samples.extend_from_slice(&cached.samples);
+                    is_omited = cached.is_omited;
+                    hit = true;
+                }
+                if !hit {
+                    samples.resize(sample_count, 0.0);
+                    is_omited = Self::sampling_easing_curve(&curve, &mut samples);
+                    if sample_count <= 256 && self.curve_cache.len() < 1024 {
+                        self.curve_cache.insert(
+                            cache_key,
+                            CurveSamples {
+                                curve: curve.clone(),
+                                sample_count,
+                                is_omited,
+                                samples: samples.clone(),
+                            },
+                        );
+                    }
+                }
+                self.curve_scratch = curve;
 
                 self.reserve_frame(1 + 1 + samples.len());
                 self.frameset(
@@ -2222,6 +2274,7 @@ impl ObjectDataParser {
                         js_round(sample * 10000.0) as i32,
                     );
                 }
+                self.samples_scratch = samples;
             } else {
                 let no_tween = -2.0;
                 let mut tween_easing = no_tween;
@@ -3373,7 +3426,7 @@ impl ObjectDataParser {
 
     // ---- easing curve ----
 
-    fn sampling_easing_curve(&mut self, curve: &[f64], samples: &mut [f64]) -> bool {
+    fn sampling_easing_curve(curve: &[f64], samples: &mut [f64]) -> bool {
         let curve_count = curve.len();
 
         if curve_count % 3 == 1 {
@@ -3417,19 +3470,19 @@ impl ObjectDataParser {
 
                 let mut lower = 0.0;
                 let mut higher = 1.0;
+                let mut y = 0.0;
                 while higher - lower > 0.0001 {
                     let percentage = (higher + lower) * 0.5;
                     let (px, py) = get_curve_point(x1, y1, x2, y2, x3, y3, x4, y4, percentage);
-                    self.help_point.x = px;
-                    self.help_point.y = py;
-                    if t - self.help_point.x > 0.0 {
+                    y = py;
+                    if t - px > 0.0 {
                         lower = percentage;
                     } else {
                         higher = percentage;
                     }
                 }
 
-                samples[i] = self.help_point.y;
+                samples[i] = y;
             }
 
             true
@@ -3452,19 +3505,19 @@ impl ObjectDataParser {
 
                 let mut lower = 0.0;
                 let mut higher = 1.0;
+                let mut y = 0.0;
                 while higher - lower > 0.0001 {
                     let percentage = (higher + lower) * 0.5;
                     let (px, py) = get_curve_point(x1, y1, x2, y2, x3, y3, x4, y4, percentage);
-                    self.help_point.x = px;
-                    self.help_point.y = py;
-                    if t - self.help_point.x > 0.0 {
+                    y = py;
+                    if t - px > 0.0 {
                         lower = percentage;
                     } else {
                         higher = percentage;
                     }
                 }
 
-                samples[i] = self.help_point.y;
+                samples[i] = y;
             }
 
             false

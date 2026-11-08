@@ -158,11 +158,38 @@ core 以数值正确性优先，不建议在 profile 之前做微优化。可优
 - 如果加载时间重要，可优先走 dbbin/IR，或为 JSON 做更直接的解析路径；
 - 图集/骨架解析结果可以缓存，多个 armature 共享同一份 `Arc<DragonBonesData>`。
 
+**2026-11-08 方案 B 实测**：`parse_dragon_bones_data_impl` 里 armature 数组原先先 `.cloned()`
+深拷贝整棵 `Value` 树，改为借用 `&[Value]` 后（数据语义不变），同机会话内
+`parse/*/object_data_parser`：Dragon 198.7 → 87.0 µs（−56%）、PlantAnimate
+1 186.7 → 842.6 µs（−29%）。剩余成本集中在 `dispatch_frame` 的逐 keyframe
+`Value` 哈希查找（约 650 ns/keyframe；BoneRotate/Translate/Scale 三类占语料全部
+keyframe 的 87%），继续重写 ROI 低，按本节建议优先走 dbbin/IR。
+
+同日第二轮：曲线帧采样原先每帧对 `curve` 做约 14 次二分 Bezier 求值
+（`sampling_easing_curve`，约 113 ns/采样），改为按 `(curve, sample_count)` 缓存采样结果
++ `curve/samples` scratch 复用后（缓存按解析器实例隔离，上限 1024 项、单条 ≤256 采样；
+29 套素材 21 198 个曲线帧只有 160 组唯一键，命中率极高），`load/batch29/parser_only`
+50.3 → **28.4 ms**、`load/batch29/serde_json+parser` 81.5 → **56.3 ms**
+（相对最初基线 72.7 / 105.3 ms 为 **−61% / −46%**）。此时完整加载耗时约一半在
+`serde_json`（≈29.4 ms），继续压缩需 typed deserialize 或改走 dbbin/IR；
+`dispatch_frame` 的逐 keyframe `Value` 访问（约 650 ns/keyframe）仍在，但占比已降到次要。
+
 ### 2.2 每帧分配
 
 - `AnimationState`、timeline、BlendState、事件队列在动画推进中可能产生临时 Vec；用 `SmallVec`、复用 scratch buffer、预分配容量；
 - 关注 [`timeline_states/update.rs`](../crates/dragonbones-core/src/animation/timeline_states/update.rs) 和 `animation/player.rs` 的热路径；
 - 事件在无监听器时可以更早短路，避免构造无用事件对象。
+
+**2026-11-08 方案 B 已完成主要部分**：`BlendStateKey.target_name` 改 `Arc<str>`
+（每帧 blend key 克隆不再分配）、`AnimationPlayer` 复用 `state_ids_scratch`
+快照、`advance_time_with_context` 借用 animation name、action timeline 改为
+`Arc<DragonBonesData>` 借用 actions、`update_groups` 用 `mem::take` 暂借
+`state.name/group`、子动画 timeline 结果改为 `mem::take` 而非 clone、world clock
+的 path/member 快照用 `BaseFactory` 上的 scratch Vec 复用。结果：稳态
+`advance_time` 每帧分配 Dragon **0**、Rooster_Ani **0**、PlantAnimate **2**
+（来自显示切换子骨架构建的偶发尖峰，非稳态）。同机会话内 advance 基准
+（HEAD → 改后）：Dragon 3.25 → 1.97 µs、PlantAnimate 7.47 → 4.70、
+Rooster_Ani 11.70 → 7.29 µs（约 −37%～−40%）。
 
 ### 2.3 `Slot` 的渲染适配器抽象
 
@@ -189,6 +216,20 @@ B2 路径不使用 `SlotRenderAdapter` 回调，但 core 仍为每个 `Slot` 保
 - 使用 `mul_add`；
 - 减少不必要的 `Transform -> Matrix -> Transform` 往返；
 - 但要保持与 JS 参考实现的数值一致性，改动需跑完黄金数据测试。
+
+**2026-11-08 实验（未采用）**：实现 `Matrix::set_from_transform_concat` /
+`set_concat`（与 to_matrix+concat、copy_from+concat 逐位等价，含位等价单测）并
+做微基准；但跨 crate 基准下融合版反而更慢（10.6 → 16.9 ns），整帧 advance
+也无可见差异——收益被内联/寄存器分配吞掉，已回退。矩阵相位只占整帧约 30%
+（Dragon bones+slots ≈0.56 / 1.97 µs），下一波应优先动画相位（60–70%）。
+
+**2026-11-08 实验（已采用，收益在噪声内）**：`Transform::from_matrix` 的两个角度与
+`Transform::to_matrix` 的非零 rotation/skew 分支改用 `f64::sin_cos`，一次调用同时得到
+正余弦，省掉一次角参数规约；数值与分开 `sin`/`cos` 一致，golden/pose/IR 与 536 套语料
+全部通过。advance 复测（A/B 同会话）Dragon 2.019→2.039 µs、PlantAnimate 4.621→4.554 µs、
+Rooster 7.23 µs 上下波动，差异均在 ±1.5% 噪声内，未能量化出稳定收益——与“矩阵相位约 30%、
+其中三角函数只是一小部分”的判断一致。保留该改动（不增加复杂度且语义等价），矩阵相位
+的下一波优化应以减少 to_matrix/concat 调用次数为主，而不是三角函数本身。
 
 ### 2.6 内存布局与预分配
 
@@ -226,6 +267,39 @@ cargo bench -p dragonbones-bevy    # 16 个：baseline 2 + static A/B × {1,10,1
 **2026-10-31 复测**（同机静默）：bone 目标查找由 `bones.iter().find(|b| b.idx == target)` 改为下标直取（`BoneIdx` 是创建序 = `armature.bones` 下标，未排序），Rooster（63 骨）的 advance 由 6.90/6.78 µs 降到 6.31/6.38 µs，Dragon/Plant 在噪声内（golden 全绿，无数值变化）。slot 目标查找保持线性：槽会按 zOrder 重排，下标 ≠ `SlotIdx`，需要每帧重建位置表；当前 rig 槽数 ≤18，收益不足以抵消复杂度。`cached_frame_indices` 共享化（审计建议 `Arc`）未做：官方该表是共享**可变**缓存（Bone.ts:393 / Slot.ts:712 回填），Rust 按骨架克隆以避免生命周期与并发问题，且只在 `animation_dirty` 时挂载，不是每帧分配，故记录为已知取舍（D-6.3）。
 
 **读数**：动画推进是 3–7 µs/帧量级，解析/装配是百微秒到毫秒量级。对“加载后一直播”的游戏用法，瓶颈明确在适配层（sync/材质/蒙皮），解析只在场景切换时付一次；若要缩短加载，优先走 dbbin/IR（见 2.1）。
+
+#### 3.1.1 方案 B 补充基线（2026-11-08，`cargo bench -p dragonbones-core --bench baseline` / `--bench allocations`）
+
+批量加载（`assets/` 全部 29 套，单进程串行；`baseline` 组，`--sample-size 10`）：
+
+| benchmark | median | 吞吐 |
+|---|---|---|
+| `load/batch29/serde_json_only`（只把 ske 解析成 `Value`） | 30.3 ms | 110.4 MiB/s |
+| `load/batch29/parser_only`（`Value` 已就绪，只跑 parser） | **72.7 ms** | 46.0 MiB/s |
+| `load/batch29/serde_json+parser`（完整加载路径） | **105.3 ms** | 31.8 MiB/s |
+| `load/batch29/single/Dragon` | 326.0 µs | 53.1 MiB/s |
+| `load/batch29/single/PlantAnimate` | 1.053 ms | 33.8 MiB/s |
+| `load/batch29/single/Rooster_Ani` | 1.795 ms | 66.1 MiB/s |
+
+dbbin 二进制入口（`dbbin` 组，只测 `parse_binary_dragon_bones_data`）：
+
+| benchmark | median | 吞吐 |
+|---|---|---|
+| `dbbin/mecha_1002_101d_show_ske` | 174.6 µs | 57.8 MiB/s |
+| `dbbin/mecha_1406_ske` | 187.3 µs | 124.1 MiB/s |
+
+分配基线（`cargo bench -p dragonbones-core --bench allocations`，计数 allocator；`adv/f` = 稳态 `advance_time(1/60)` 每帧）：
+
+| rig | parse allocs / bytes | build allocs / bytes | adv allocs/frame | adv B/frame |
+|---|---|---|---|---|
+| Dragon | 6 248 / 646 KB | 3 955 / 473 KB | 57 | 367 |
+| PlantAnimate | 13 518 / 1.56 MB | 8 527 / 1.11 MB | 58 | 11 362 |
+| Rooster_Ani | 28 090 / 4.28 MB | 15 832 / 2.41 MB | 99 | 1 345 |
+| 29 套 assets 全量加载 | 1 189 204 / 145.6 MB | — | — | — |
+
+**读数**：解析路径里 serde_json 只占约 29%（30.3/105.3 ms），**parser 本身占约 69%**；因此 §2.1 的收益不能只靠换 JSON 后端，必须同时削减 parser 的逐字段 `Value` 访问与临时分配（单个 rig 平均 4 万次分配、5 MB）。动画推进的每帧分配仍为几十到一百次，§2.2 有明确目标（先归零 Dragon/PlantAnimate 的稳态分配）。
+
+> 测量注意：本表在非静默机器上采一次，绝对值只用于本轮改动的前后对比；与 10-29 基线（advance/Dragon 3.327 µs）的差异在机器波动范围内。
 
 ### 3.2 Bevy 适配层（无渲染 headless `App`）
 
@@ -271,6 +345,53 @@ cargo bench -p dragonbones-bevy    # 16 个：baseline 2 + static A/B × {1,10,1
 3. **回归门槛**：目前 CI 只保证 benchmark 能编译（`clippy --all-targets`），数字仍靠手动记录；后续可加 benchmark job 或定期存档 `target/criterion` 结果。
 
 ---
+
+### 3.4 方案 B 前后对照（2026-11-08）
+
+> 所有数字均为**同机、同一会话内背靠背测量**（HEAD stash 后立即复测），
+> 绝对值随 CPU 状态漂移，只用于对比；`advance` 用 criterion 20 samples。
+
+解析（`cargo bench -p dragonbones-core --bench parse`，只取 parser 相位）：
+
+| benchmark | HEAD | 方案 B 后 | 变化 |
+|---|---|---|---|
+| `parse/Dragon/object_data_parser` | 198.7 µs | 87.0 µs | −56% |
+| `parse/PlantAnimate/object_data_parser` | 1 186.7 µs | 842.6 µs | −29% |
+
+批量加载（`cargo bench -p dragonbones-core --bench baseline`，29 套 assets 全量）：
+
+| benchmark | 最初基线 | 方案 B 后 | 变化 |
+|---|---|---|---|
+| `load/batch29/serde_json_only` | 30.3 ms | 29.4 ms | ≈0% |
+| `load/batch29/parser_only` | 72.7 ms | 28.4 ms | −61% |
+| `load/batch29/serde_json+parser` | 105.3 ms | 56.3 ms | −46% |
+
+动画推进（`cargo bench -p dragonbones-core --bench advance`）：
+
+| benchmark | HEAD | 方案 B 后 | 变化 |
+|---|---|---|---|
+| `advance/Dragon/factory_advance_time` | 3.25 µs | 1.97 µs | −39% |
+| `advance/Dragon/factory_advance_one` | 6.08 µs | 3.53 µs | −42% |
+| `advance/PlantAnimate/factory_advance_time` | 7.47 µs | 4.70 µs | −37% |
+| `advance/Rooster_Ani/factory_advance_time` | 11.70 µs | 7.29 µs | −38% |
+| `advance/Rooster_Ani/factory_advance_one` | 11.56 µs | 7.02 µs | −39% |
+
+每帧分配（`cargo bench -p dragonbones-core --bench allocations`）：
+
+| rig | 改前 adv allocs/frame | 改后 adv allocs/frame |
+|---|---|---|
+| Dragon | 57 | **0** |
+| PlantAnimate | 58 | 2（显示切换尖峰） |
+| Rooster_Ani | 99 | **0** |
+
+剩余热点（临时相位插桩，已移除）：动画时间轴更新占整帧 60–70%（Dragon
+≈1.74 µs、PlantAnimate ≈1.81 µs），矩阵相位 bones+slots 占约 30%；
+加载侧剩余成本约一半在 `serde_json`（≈29.4 ms），其余为 `dispatch_frame` 的逐帧
+`Value` 访问。进一步收益需要动 `update_groups` 的逐 timeline 混合状态查表、
+`dispatch_frame` 的逐帧 `Value` 访问或 typed deserialize，风险高于本轮。
+
+语料审计（`crates/dragonbones-core/tests/corpus_audit.rs`，536 套）在本轮解析优化后
+从 30.0 s 降到 **27.7 s**，仍保持 536/536 通过、JS 对拍 39 一致 / 0 不一致。
 
 ## 4. 产品层优化
 

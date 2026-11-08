@@ -93,6 +93,8 @@ pub struct Animation {
     armature_name: String,
     states: StateArena<AnimationState>,
     play_order: Vec<StateId>,
+    /// 复用 `advance_time*` 里的 play_order 快照，避免每帧一次 Vec 分配。
+    state_ids_scratch: Vec<StateId>,
     last_state: Option<StateId>,
     animation_config: AnimationConfig,
     blend_states: HashMap<BlendStateKey, BlendState>,
@@ -122,6 +124,7 @@ impl Default for Animation {
             armature_name: String::new(),
             states: StateArena::default(),
             play_order: Vec::new(),
+            state_ids_scratch: Vec::new(),
             last_state: None,
             animation_config: AnimationConfig::default(),
             blend_states: HashMap::new(),
@@ -352,11 +355,13 @@ impl Animation {
             self.cache_frame_invalidated = true;
         }
 
-        let state_ids = self.play_order.clone();
+        let mut state_ids = std::mem::take(&mut self.state_ids_scratch);
+        state_ids.clear();
+        state_ids.extend_from_slice(&self.play_order);
         let state_count = state_ids.len();
         let mut remove = Vec::new();
         let mut fade_events = Vec::new();
-        for id in state_ids {
+        for id in state_ids.iter().copied() {
             let Some(state) = self.states.get(id) else {
                 continue;
             };
@@ -405,6 +410,7 @@ impl Animation {
                 self.cache_frame_invalidated = true;
             }
         }
+        self.state_ids_scratch = state_ids;
         fade_events
     }
 
@@ -434,18 +440,22 @@ impl Animation {
             *context.cache_frame_index = -1;
         }
 
-        let ids = self.play_order.clone();
+        let mut ids = std::mem::take(&mut self.state_ids_scratch);
+        ids.clear();
+        ids.extend_from_slice(&self.play_order);
         let state_count = ids.len();
         let animation_name = ids
             .first()
             .and_then(|id| self.states.get(*id))
-            .map(|state| state.animation_name.clone())
-            .unwrap_or_default();
+            .map(|state| state.animation_name.as_str());
         let cache_frame_rate = if state_count == 1 {
-            context
-                .frame_cache
-                .as_ref()
-                .and_then(|cache| cache.animation(&animation_name))
+            animation_name
+                .and_then(|name| {
+                    context
+                        .frame_cache
+                        .as_ref()
+                        .and_then(|cache| cache.animation(name))
+                })
                 .map_or(0.0, |cache| cache.rate)
         } else {
             // Animation.ts:250/262：多状态恒传 cacheFrameRate=0，且帧号归 -1。
@@ -453,11 +463,12 @@ impl Animation {
             0.0
         };
         if self.animation_dirty && cache_frame_rate > 0.0 {
-            if let Some(cache) = context
-                .frame_cache
-                .as_deref()
-                .and_then(|cache| cache.animation(&animation_name))
-            {
+            if let Some(cache) = animation_name.and_then(|name| {
+                context
+                    .frame_cache
+                    .as_deref()
+                    .and_then(|cache| cache.animation(name))
+            }) {
                 for bone in context.bones.iter_mut() {
                     if let Some(indices) = cache.bone_indices.get(&bone.bone_name) {
                         bone.cached_frame_indices = Some(indices.clone());
@@ -473,7 +484,7 @@ impl Animation {
         }
         let mut remove = Vec::new();
         let mut events = Vec::new();
-        for id in ids {
+        for id in ids.iter().copied() {
             let Some(state) = self.states.get(id) else {
                 continue;
             };
@@ -522,6 +533,7 @@ impl Animation {
                 *context.cache_frame_index = -1;
             }
         }
+        self.state_ids_scratch = ids;
         events
     }
 
@@ -948,38 +960,50 @@ impl Animation {
     }
 
     fn apply_animation_timeline_results(&mut self, parent_id: StateId) {
-        let updates: Vec<_> = self
+        let timeline_count = self
             .states
             .get(parent_id)
-            .into_iter()
-            .flat_map(|parent| &parent.animation_timelines)
-            .filter_map(|timeline| match timeline.target {
-                TimelineTarget::AnimationState(child_id) => {
-                    Some((child_id, timeline.timeline_type, timeline.results.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-
-        for (child_id, timeline_type, values) in updates {
-            let Some(child) = self.states.get_mut(child_id) else {
+            .map_or(0, |parent| parent.animation_timelines.len());
+        for index in 0..timeline_count {
+            let Some(parent) = self.states.get(parent_id) else {
+                return;
+            };
+            let Some(timeline) = parent.animation_timelines.get(index) else {
                 continue;
             };
-            if child.parent != Some(parent_id) {
+            let TimelineTarget::AnimationState(child_id) = timeline.target else {
                 continue;
+            };
+            let timeline_type = timeline.timeline_type;
+            // 取走而非克隆结果：这段对每条子动画时间轴每帧都跑，克隆在分配计数里
+            // 表现为每帧数十次分配（方案 B §2.2）。
+            let values = {
+                let Some(parent) = self.states.get_mut(parent_id) else {
+                    return;
+                };
+                std::mem::take(&mut parent.animation_timelines[index].results)
+            };
+            if let Some(child) = self.states.get_mut(child_id)
+                && child.parent == Some(parent_id)
+            {
+                match timeline_type {
+                    TimelineType::AnimationProgress => {
+                        child.set_current_time(
+                            values.first().copied().unwrap_or(0.0) * child.duration,
+                        );
+                    }
+                    TimelineType::AnimationWeight => {
+                        child.set_weight(values.first().copied().unwrap_or(0.0));
+                    }
+                    TimelineType::AnimationParameter => {
+                        child.parameter_x = values.first().copied().unwrap_or(0.0);
+                        child.parameter_y = values.get(1).copied().unwrap_or(0.0);
+                    }
+                    _ => {}
+                }
             }
-            match timeline_type {
-                TimelineType::AnimationProgress => {
-                    child.set_current_time(values.first().copied().unwrap_or(0.0) * child.duration);
-                }
-                TimelineType::AnimationWeight => {
-                    child.set_weight(values.first().copied().unwrap_or(0.0));
-                }
-                TimelineType::AnimationParameter => {
-                    child.parameter_x = values.first().copied().unwrap_or(0.0);
-                    child.parameter_y = values.get(1).copied().unwrap_or(0.0);
-                }
-                _ => {}
+            if let Some(parent) = self.states.get_mut(parent_id) {
+                parent.animation_timelines[index].results = values;
             }
         }
     }
@@ -1457,7 +1481,7 @@ mod tests {
         let mut animation = animation();
         let key = BlendStateKey {
             kind: BlendStateKind::BoneTransform,
-            target_name: "root".to_owned(),
+            target_name: "root".into(),
         };
 
         assert!(
@@ -1778,7 +1802,7 @@ mod tests {
         let mut animation = walk_animation();
         let key = BlendStateKey {
             kind: BlendStateKind::BoneTransform,
-            target_name: "root".to_owned(),
+            target_name: "root".into(),
         };
         animation.blend_states.entry(key.clone()).or_default();
         animation.inherit_time_scale = 0.25;
