@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::ir_snapshot::{asset_root, read_json, tex_stem};
+use common::ir_snapshot::{read_json, rig_dir, tex_stem};
 use dragonbones_core::animation::world_clock::AnimatableHandle;
 use dragonbones_core::armature::{
     Armature, ArmatureIdx, ArmatureProxy, Bone, BoneIdx, Constraint, DbEventListener,
@@ -93,8 +93,8 @@ fn slot_of_mut(armature: &mut Armature, idx: SlotIdx) -> Option<&mut Slot> {
 /// 供子骨架注入改数据）。
 fn dragon_factory() -> (BaseFactory, String) {
     let key = DRAGON_KEY.to_string();
-    let ske = read_json(&asset_root().join(format!("{key}.json")));
-    let tex = read_json(&asset_root().join(format!("{}.json", tex_stem(DRAGON_KEY))));
+    let ske = read_json(&rig_dir(&key).join(format!("{key}.json")));
+    let tex = read_json(&rig_dir(DRAGON_KEY).join(format!("{}.json", tex_stem(DRAGON_KEY))));
 
     let mut factory = BaseFactory::new();
     factory

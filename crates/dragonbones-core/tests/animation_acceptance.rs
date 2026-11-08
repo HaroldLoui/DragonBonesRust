@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::ir_snapshot::{asset_root, tex_stem};
+use common::ir_snapshot::{rig_dir, tex_stem};
 use common::{EventLog, RecordingEventManager, RecordingProxy, golden_path, read_value};
 use dragonbones_core::animation::StateId;
 use dragonbones_core::armature::{ArmatureIdx, DisplayHandle, NullArmatureProxy, SlotIdx};
@@ -126,8 +126,8 @@ fn build_golden_fixture(dir: &str, animation: &str) -> (BaseFactory, ArmatureIdx
     let ske_file = golden["meta"]["skeFile"].as_str().expect("ske file");
     let ske_stem = ske_file.strip_suffix(".json").expect("ske suffix");
     let armature_name = golden["meta"]["armature"].as_str().expect("armature name");
-    let ske = read_value(&asset_root().join(ske_file));
-    let tex = read_value(&asset_root().join(format!("{}.json", tex_stem(ske_stem))));
+    let ske = read_value(&rig_dir(ske_file).join(ske_file));
+    let tex = read_value(&rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem))));
 
     let mut factory = BaseFactory::new();
     factory
@@ -425,8 +425,8 @@ const PARENT_KEY: &str = "Dragon_ske";
 /// 父/子都已在同帧推进（正常 arena 序父 idx < 子 idx）。
 #[test]
 fn child_animation_state_is_created_and_advanced_in_same_frame_as_parent_play() {
-    let ske = read_value(&asset_root().join(format!("{PARENT_KEY}.json")));
-    let tex = read_value(&asset_root().join(format!("{}.json", tex_stem(PARENT_KEY))));
+    let ske = read_value(&rig_dir(PARENT_KEY).join(format!("{PARENT_KEY}.json")));
+    let tex = read_value(&rig_dir(PARENT_KEY).join(format!("{}.json", tex_stem(PARENT_KEY))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, PARENT_KEY)
@@ -498,8 +498,8 @@ fn child_animation_state_is_created_and_advanced_in_same_frame_as_parent_play() 
 /// timeScale 再叠加），子改回 1.0 后完整继承父的 2.0。
 #[test]
 fn child_animation_composes_inherited_parent_time_scale_once() {
-    let ske = read_value(&asset_root().join(format!("{PARENT_KEY}.json")));
-    let tex = read_value(&asset_root().join(format!("{}.json", tex_stem(PARENT_KEY))));
+    let ske = read_value(&rig_dir(PARENT_KEY).join(format!("{PARENT_KEY}.json")));
+    let tex = read_value(&rig_dir(PARENT_KEY).join(format!("{}.json", tex_stem(PARENT_KEY))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, PARENT_KEY)

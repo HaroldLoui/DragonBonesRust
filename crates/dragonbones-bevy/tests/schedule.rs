@@ -176,7 +176,8 @@ fn instance(app: &App, root: Entity) -> (ArmatureIdx, Vec<Entity>) {
 #[test]
 fn root_motion_keeps_slot_local_offsets_after_propagation() {
     let mut app = test_app();
-    let (skeleton, atlas) = install_assets(&mut app, "Dragon_ske.json", "Dragon_tex.json");
+    let (skeleton, atlas) =
+        install_assets(&mut app, "Dragon/Dragon_ske.json", "Dragon/Dragon_tex.json");
     let root = spawn_armature(
         &mut app,
         &skeleton,
@@ -264,8 +265,11 @@ fn root_motion_keeps_slot_local_offsets_after_propagation() {
 #[test]
 fn skinned_slots_follow_the_root_affine_only() {
     let mut app = test_app();
-    let (skeleton, atlas) =
-        install_assets(&mut app, "Rooster_Ani_ske.json", "Rooster_Ani_tex.json");
+    let (skeleton, atlas) = install_assets(
+        &mut app,
+        "Rooster_Ani/Rooster_Ani_ske.json",
+        "Rooster_Ani/Rooster_Ani_tex.json",
+    );
     let root = spawn_armature(
         &mut app,
         &skeleton,
@@ -322,7 +326,8 @@ fn sync_writes_are_visible_to_systems_ordered_after_it() {
         probe_slot_globals.after(DragonBonesSystems::SyncTransforms),
     );
 
-    let (skeleton, atlas) = install_assets(&mut app, "Dragon_ske.json", "Dragon_tex.json");
+    let (skeleton, atlas) =
+        install_assets(&mut app, "Dragon/Dragon_ske.json", "Dragon/Dragon_tex.json");
     let root = spawn_armature(
         &mut app,
         &skeleton,

@@ -146,7 +146,23 @@ fn geom_from_matrix_matches_js() {
         t.from_matrix(&matrix_from(&case["m"]));
         let got = transform_to_arr(&t);
         let want = f64s(&case["expect"]);
-        assert_close(&got, &want, &format!("fromMatrix[{i}]"));
+        // 退化矩阵（行列式 0）官方 TS 产 NaN；本库有意改为确定性回退（有限值），
+        // 见 docs/model_mapping.md D-6.18。NaN 哨兵位只要求 Rust 侧有限。
+        for (k, (g, w)) in got.iter().zip(&want).enumerate() {
+            if w.is_nan() {
+                assert!(
+                    g.is_finite(),
+                    "fromMatrix[{i}][{k}]: 官方 NaN 位应回退为有限值，got {g}"
+                );
+                continue;
+            }
+            let tol = 1e-9 * (1.0 + w.abs());
+            assert!(
+                (g - w).abs() <= tol,
+                "fromMatrix[{i}][{k}]: got {g}, want {w} (diff {})",
+                (g - w).abs()
+            );
+        }
     }
 }
 

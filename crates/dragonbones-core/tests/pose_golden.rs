@@ -28,7 +28,7 @@
 
 mod common;
 
-use common::ir_snapshot::{asset_root, read_json, tex_stem};
+use common::ir_snapshot::{read_json, rig_dir, tex_stem};
 use dragonbones_core::armature::NullArmatureProxy;
 use dragonbones_core::factory::BaseFactory;
 use serde_json::Value;
@@ -297,8 +297,8 @@ fn check_pose(name: &str) {
     let ske_stem = ske_file
         .strip_suffix(".json")
         .unwrap_or_else(|| panic!("{name}: meta.skeFile 应以 .json 结尾（{ske_file}）"));
-    let ske = read_json(&asset_root().join(ske_file));
-    let tex_path = asset_root().join(format!("{}.json", tex_stem(ske_stem)));
+    let ske = read_json(&rig_dir(ske_file).join(ske_file));
+    let tex_path = rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem)));
     let tex = read_json(&tex_path);
 
     // ---- 3. factory 流程（posedump 93-104 同序）----

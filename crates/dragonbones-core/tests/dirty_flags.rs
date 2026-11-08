@@ -9,8 +9,8 @@ use std::path::Path;
 
 fn build() -> (BaseFactory, dragonbones_core::armature::ArmatureIdx) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
-    let ske = read_value(&root.join("assets/Dragon_ske.json"));
-    let tex = read_value(&root.join("assets/Dragon_tex.json"));
+    let ske = read_value(&root.join("assets/Dragon/Dragon_ske.json"));
+    let tex = read_value(&root.join("assets/Dragon/Dragon_tex.json"));
     let mut factory = BaseFactory::new();
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));

@@ -44,7 +44,7 @@ fn texture(name: &str) -> TextureData {
 /// 返回 `(factory, 槽名, displayIndex, armature)`。
 fn build_with_two_atlases() -> (BaseFactory, String, i32, ArmatureIdx) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
-    let ske = read_value(&root.join("assets/Dragon_ske.json"));
+    let ske = read_value(&root.join("assets/Dragon/Dragon_ske.json"));
     let mut factory = BaseFactory::new();
     assert!(factory.parse_dragon_bones_data(&ske, KEY).is_some());
 

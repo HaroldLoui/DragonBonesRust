@@ -16,7 +16,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 fn rooster_skeleton() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/Rooster_Ani_ske.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/Rooster_Ani/Rooster_Ani_ske.json");
     let text = std::fs::read_to_string(path).expect("read Rooster_Ani_ske.json");
     serde_json::from_str(&text).expect("parse Rooster_Ani_ske.json")
 }

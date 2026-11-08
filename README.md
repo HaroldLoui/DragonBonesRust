@@ -14,7 +14,7 @@
 |---|---|
 | `dragonbones-core` | 阶段 0–6 已完成：geom/model/parser/runtime/animation/constraints/cache，JSON 与 dbbin 两条数据路径，JS 黄金数据差分 |
 | `dragonbones-bevy` | Bevy 0.20 适配层 MVP：资源加载、armature/slot 实体、`GlobalTransform` 直写、image/mesh/蒙皮/FFD、颜色、z 排序、时间驱动；despawn → dispose 生命周期、按 atlas 共享材质 + 顶点色、O(1) slot 索引 |
-| `dragonbones-demo` | 可运行 demo，支持 6 个 rig，UI 中切换动画组 |
+| `dragonbones-demo` | 可运行 demo：启动时自动扫描 `assets/` 下全部 rig，UI 面板中切换 rig 与动画组 |
 
 已验证素材：
 
@@ -23,6 +23,13 @@
 - Rooster_Ani
 - Surface_P1_4
 - 龙（中文文件名）
+- PvZ2 Gardendless（`.Art` 上游，21 个 rig）：Peashooter / Sunflower / Wallnut /
+  GatlingPea / Torchwood / BasicZombie / Gargantuar / CrazyDave / ZombossHead /
+  Shovel / DinoRaptor / AquaVine / ElectricPea / Chomper / Repeater / Cactus /
+  Marigold / MelonPult / BalloonZombie / DarkKingZombie / GloomShroom
+
+> 素材来源、`pvzge_web` 仓库删除后的替代渠道、以及如何再导入更多 rig，见
+> [docs/assets.md](docs/assets.md)。
 
 > 版本：本地开发使用 **Rust 1.99.1**（已固定到 `rust-toolchain.toml`）、**Bevy 0.20.0**。
 >
@@ -41,29 +48,37 @@ git submodule update --init --recursive
 # 运行全部测试（core 的黄金数据 + Bevy 适配层测试）
 cargo test --workspace
 
-# 列出 demo 可选的 rig
+# 列出 demo 自动扫描到的 rig（按加载顺序）
 cargo run -p dragonbones-demo -- --list
 
-# 运行默认 Dragon
+# 直接运行：加载 assets/ 下全部 rig，默认展示加载顺序第一个
 cargo run -p dragonbones-demo
 
-# 运行指定 rig
-cargo run -p dragonbones-demo -- rooster
+# 指定初始展示的 rig（只改初始选中项，加载顺序不变）
+cargo run -p dragonbones-demo -- PlantAnimate
 cargo run -p dragonbones-demo -- --demo plant
 ```
 
 运行 demo 后：
 
+- 右侧面板：点击按钮切换 rig
+- `Up` / `Down`：切换 rig
 - `1` ~ `9`：选择当前 rig 的动画
 - `Left` / `Right`：在动画列表中循环切换
-- 左上角 Bevy UI 覆盖层显示动画组和当前选中项
-- 动画组从 skeleton JSON 动态读取，不是硬编码
+- 左上角 HUD 显示当前 rig / 动画，窗口标题同步
+- rig 列表与动画组都从 skeleton JSON 动态读取：`assets/<dir>/<dir>_ske.json` 会全部自动加载，新增素材放进 `assets/` 即出现在面板里
 
-可用 rig：
+可用 rig（目录名即名称，按加载顺序）：
 
 ```text
-dragon (默认) | dragon_blend | plant | rooster | long | surface
+AquaVine | BalloonZombie | BasicZombie | Cactus | Chomper | CrazyDave
+DarkKingZombie | DinoRaptor | Dragon | Dragon_Blend | ElectricPea | Gargantuar
+GatlingPea | GloomShroom | Marigold | MelonPult | Peashooter | PlantAnimate
+Repeater | Rooster_Ani | Rooster_Blend | Rooster_P1 | Shovel | Sunflower
+Surface_P1_4 | Torchwood | Wallnut | ZombossHead | 龙
 ```
+
+别名仍可用：`plant`（PlantAnimate）、`rooster`（Rooster_Ani）、`long`（龙）、`surface`（Surface_P1_4）。
 
 ## 工作区
 
@@ -72,7 +87,7 @@ crates/
   dragonbones-core/    # 纯逻辑 core：geom/model/parser/armature/animation/factory
   dragonbones-bevy/    # Bevy 0.20 适配层
   dragonbones-demo/    # Bevy demo
-assets/                # DragonBones 素材（_ske.json / _tex.json / _tex.png）
+assets/                # DragonBones 素材，每个 rig 一个目录：assets/<rig>/<rig>_{ske,tex}.json + _tex.png
 testdata/              # JS 参考实现生成的黄金数据
 docs/                  # 需求、阶段指南、模型映射、设计文档
 DragonBonesJS/         # 官方 TS 参考运行时（git submodule，pinned commit）
@@ -126,7 +141,8 @@ TransformSystems::Propagate
 - Surface mesh 逐顶点变形（父骨为 Surface 的 mesh display，按 Surface 分片仿射矩阵 warp）
 - child armature 子骨架 display（嵌套 root 实体、随父 slot 世界矩阵、可见性沿父链、despawn 递归回收）
 - Bevy UI 动画列表 + 键盘切换
-- 8 个素材中的主要 rig 目视验证（6 个有 demo 入口）
+- 29 个素材：全部通过 `assets_smoke`（解析/装配/推进）与 `ir_binary`（对官方 TS 运行时
+  `data.binary` 字节对拍）；27 个 demo 入口中，原 6 个已目视验证，新增 21 个 PvZGE 素材已接入 demo
 
 待做（后续打磨）：
 
@@ -162,6 +178,7 @@ cargo bench -p dragonbones-bevy   # 1/10/100 armature 的 sync（静态 vs 动�
 
 ## 文档
 
+- [素材来源与导入流程](docs/assets.md)
 - [需求与阶段规划](docs/requirements.md)
 - [TS → Rust 模型映射](docs/model_mapping.md)
 - [阶段 0](docs/guide/00-stage0.md) / [1](docs/guide/01-stage1.md) / [2](docs/guide/02-stage2.md) / [3](docs/guide/03-stage3.md) / [4](docs/guide/04-stage4.md) / [5](docs/guide/05-stage5.md) / [6](docs/guide/06-stage6.md)
@@ -176,4 +193,6 @@ cargo bench -p dragonbones-bevy   # 1/10/100 armature 的 sync（静态 vs 动�
 ## 致谢
 
 - [DragonBones](https://github.com/DragonBones/DragonBonesJS) 官方运行时与素材
+- [PvZ2 Gardendless 素材（PVZ2-Gardendless-Plus-Team .Art）](https://github.com/PVZ2-Gardendless-Plus-Team/PlantsVsZombies2GardendlessPlus.Art)
+  —— 原 `Gzh0821/pvzge_web` 的上游，素材版权归 PopCap / EA，仅用于开发参考
 - 各素材原作者（demo 内保留版权/作者文字）

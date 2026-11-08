@@ -13,8 +13,8 @@ use std::sync::Arc;
 #[test]
 fn dragon_walk_cache_rate_matches_js() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
-    let ske = read_value(&root.join("assets/Dragon_ske.json"));
-    let tex = read_value(&root.join("assets/Dragon_tex.json"));
+    let ske = read_value(&root.join("assets/Dragon/Dragon_ske.json"));
+    let tex = read_value(&root.join("assets/Dragon/Dragon_tex.json"));
     let golden = read_value(&root.join("testdata/golden_cache/dragon_walk.json"));
 
     let mut factory = BaseFactory::new();
@@ -77,8 +77,8 @@ fn dragon_walk_cache_rate_matches_js() {
 #[test]
 fn cache_rate_is_inherited_by_later_build() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
-    let ske = read_value(&root.join("assets/Dragon_ske.json"));
-    let tex = read_value(&root.join("assets/Dragon_tex.json"));
+    let ske = read_value(&root.join("assets/Dragon/Dragon_ske.json"));
+    let tex = read_value(&root.join("assets/Dragon/Dragon_tex.json"));
     let mut factory = BaseFactory::new();
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));
@@ -114,8 +114,8 @@ const CHILD_ARMATURE: &str = "ChildA";
 /// 只 parse（不 build）的 Dragon 工厂：`Arc` 独占于 `data_map`，供子骨架注入。
 fn dragon_factory() -> BaseFactory {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
-    let ske = read_value(&root.join("assets/Dragon_ske.json"));
-    let tex = read_value(&root.join("assets/Dragon_tex.json"));
+    let ske = read_value(&root.join("assets/Dragon/Dragon_ske.json"));
+    let tex = read_value(&root.join("assets/Dragon/Dragon_tex.json"));
     let mut factory = BaseFactory::new();
     assert!(factory.parse_dragon_bones_data(&ske, "Dragon").is_some());
     assert!(factory.parse_texture_atlas_data(&tex, "Dragon"));

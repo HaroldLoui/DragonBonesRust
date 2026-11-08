@@ -34,11 +34,11 @@ fn test_app() -> App {
 fn install_dragon_assets(app: &mut App) -> (Handle<SkeletonAsset>, Handle<AtlasAsset>) {
     let dir = assets_dir();
     let skeleton_json: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("Dragon_ske.json")).expect("read skeleton"),
+        &std::fs::read_to_string(dir.join("Dragon/Dragon_ske.json")).expect("read skeleton"),
     )
     .expect("parse skeleton");
     let atlas_json: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("Dragon_tex.json")).expect("read atlas"),
+        &std::fs::read_to_string(dir.join("Dragon/Dragon_tex.json")).expect("read atlas"),
     )
     .expect("parse atlas");
 

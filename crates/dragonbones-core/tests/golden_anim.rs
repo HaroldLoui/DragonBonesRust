@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::ir_snapshot::{asset_root, tex_stem};
+use common::ir_snapshot::{rig_dir, tex_stem};
 use common::{EventLog, RecordingProxy};
 use common::{all_golden_files, read_value};
 use dragonbones_core::event::EventObject;
@@ -66,8 +66,8 @@ fn run_shoot_listener_probe(with_probes: bool) -> Vec<EventObject> {
     let ske_file = golden["meta"]["skeFile"].as_str().expect("ske file");
     let armature_name = golden["meta"]["armature"].as_str().expect("armature name");
     let ske_stem = ske_file.strip_suffix(".json").expect("ske suffix");
-    let ske = common::read_value(&asset_root().join(ske_file));
-    let tex = common::read_value(&asset_root().join(format!("{}.json", tex_stem(ske_stem))));
+    let ske = common::read_value(&rig_dir(ske_file).join(ske_file));
+    let tex = common::read_value(&rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem))));
     let mut factory = BaseFactory::new();
     factory
         .parse_dragon_bones_data(&ske, ske_stem)
@@ -118,8 +118,8 @@ fn run_animation_golden(golden_path: &Path) {
     let dt = meta["dt"].as_f64().expect("frame dt");
     let frames = golden["frames"].as_array().expect("golden frame list");
 
-    let ske = common::read_value(&asset_root().join(ske_file));
-    let tex_path = asset_root().join(format!("{}.json", tex_stem(ske_stem)));
+    let ske = common::read_value(&rig_dir(ske_file).join(ske_file));
+    let tex_path = rig_dir(ske_stem).join(format!("{}.json", tex_stem(ske_stem)));
     let tex = common::read_value(&tex_path);
     let mut factory = BaseFactory::new();
     factory

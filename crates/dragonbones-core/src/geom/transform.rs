@@ -62,6 +62,21 @@ impl Transform {
 
         self.x = m.tx;
         self.y = m.ty;
+
+        // 退化矩阵保护（有意偏离 TS `Transform.fromMatrix`）：当
+        // `a*d - b*c == 0` 时基向量线性相关，`atan(-c/d)` 在 `c == d == 0`
+        // （典型来源：骨骼 scaleY 过零后的 IK 约束重算）处得到 `NaN`，
+        // 随后 `toMatrix` 会把 NaN 写回矩阵并污染整个全局变换。TS 在
+        // 该数据下同样产生 NaN（`Math.atan(0 / 0)`）；本库选择确定性回退：
+        // 保留矩阵的 a/b 列决定 rotation/scaleX，令 scaleY = 0、skew = 0，
+        // 保证 `toMatrix` 回写后矩阵有限。详见 docs/model_mapping.md 偏差表。
+        if m.a * m.d - m.b * m.c == 0.0 {
+            self.rotation = f64::atan2(m.b, m.a);
+            self.scale_x = f64::hypot(m.a, m.b);
+            self.scale_y = 0.0;
+            self.skew = 0.0;
+            return;
+        }
         self.rotation = f64::atan(m.b / m.a);
         let mut skew_x = f64::atan(-m.c / m.d);
 
