@@ -31,3 +31,11 @@ harness = false
 [[bench]]
 name = "advance"
 harness = false
+
+[[bench]]
+name = "baseline"
+harness = false
+
+[[bench]]
+name = "allocations"
+harness = false

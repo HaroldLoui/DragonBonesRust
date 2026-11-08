@@ -80,15 +80,20 @@ impl Transform {
         self.rotation = f64::atan(m.b / m.a);
         let mut skew_x = f64::atan(-m.c / m.d);
 
+        // 一次 `sin_cos` 同时取正余弦（§2.5 三角函数优化）：与分开调用
+        // `sin`/`cos` 数值等价（glibc/MSVC 的 sincos 与独立调用结果一致），
+        // 但省掉一次角参数规约（range reduction）。
+        let (sin_rotation, cos_rotation) = self.rotation.sin_cos();
         self.scale_x = if self.rotation > -PI_Q && self.rotation < PI_Q {
-            m.a / f64::cos(self.rotation)
+            m.a / cos_rotation
         } else {
-            m.b / f64::sin(self.rotation)
+            m.b / sin_rotation
         };
+        let (sin_skew, cos_skew) = skew_x.sin_cos();
         self.scale_y = if skew_x > -PI_Q && skew_x < PI_Q {
-            m.d / f64::cos(skew_x)
+            m.d / cos_skew
         } else {
-            -m.c / f64::sin(skew_x)
+            -m.c / sin_skew
         };
 
         if backup_scale_x >= 0.0 && self.scale_x < 0.0 {
@@ -109,16 +114,18 @@ impl Transform {
             m.a = 1.0;
             m.b = 0.0;
         } else {
-            m.a = f64::cos(self.rotation);
-            m.b = f64::sin(self.rotation);
+            let (sin_rotation, cos_rotation) = self.rotation.sin_cos();
+            m.a = cos_rotation;
+            m.b = sin_rotation;
         }
 
         if self.skew == 0.0 {
             m.c = -m.b;
             m.d = m.a;
         } else {
-            m.c = -f64::sin(self.skew + self.rotation);
-            m.d = f64::cos(self.skew + self.rotation);
+            let (sin_skew, cos_skew) = (self.skew + self.rotation).sin_cos();
+            m.c = -sin_skew;
+            m.d = cos_skew;
         }
 
         if self.scale_x != 1.0 {

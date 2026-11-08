@@ -15,7 +15,7 @@
 //! - [`BaseFactory::build_armature`]：701-716（F3.11 收尾 `invalidUpdate` + `advanceTime(0.0)`）
 
 use crate::animation::world_clock::{
-    AnimatableHandle, ClockArena, ClockError, ClockId, WorldClock, wall_clock_seconds,
+    AnimatableHandle, ClockArena, ClockError, ClockId, MemberToken, WorldClock, wall_clock_seconds,
 };
 use crate::armature::{
     Armature, ArmatureIdx, ArmatureProxy, Bone, Constraint, DisplayHandle, NullArmatureProxy,
@@ -102,6 +102,11 @@ pub struct BaseFactory {
     pending_events: VecDeque<EventObject>,
     /// Objects to recycle at the start of the next global advance (JS `_objects`).
     pending_recycles: Vec<PendingRecycle>,
+    /// Scratch recursion stack for nested-clock traversal. Kept across frames so
+    /// steady-state `advance_time` does not allocate for clock paths.
+    clock_path_scratch: Vec<ClockId>,
+    /// Scratch member snapshot for clock traversal (allocation-free steady state).
+    clock_members_scratch: Vec<(usize, MemberToken)>,
     /// Global event manager (JS `_eventManager`); SOUND double-dispatch target.
     event_manager: Option<Box<dyn EventDispatcher>>,
     /// 对齐 `_dataParser`（TS:57；TS 构造可注入 DataParser，Rust 恒 `ObjectDataParser`）。
@@ -145,6 +150,8 @@ impl Default for BaseFactory {
             root_clock,
             pending_events: VecDeque::new(),
             pending_recycles: Vec::new(),
+            clock_path_scratch: Vec::new(),
+            clock_members_scratch: Vec::new(),
             event_manager: None,
             parser: ObjectDataParser::default(),
             cache_rates: HashMap::new(),
@@ -1798,8 +1805,11 @@ impl BaseFactory {
     /// [`Self::advance_time`].
     pub fn advance_clock(&mut self, clock: ClockId, passed_time: f64) -> Result<(), ClockError> {
         let mut now = wall_clock_seconds;
-        let mut clock_path = Vec::new();
-        self.advance_clock_with(clock, passed_time, &mut now, &mut clock_path)
+        let mut clock_path = std::mem::take(&mut self.clock_path_scratch);
+        clock_path.clear();
+        let result = self.advance_clock_with(clock, passed_time, &mut now, &mut clock_path);
+        self.clock_path_scratch = clock_path;
+        result
     }
 
     fn advance_time_with_source(&mut self, passed_time: f64, now: &mut impl FnMut() -> f64) {
@@ -1807,12 +1817,14 @@ impl BaseFactory {
         self.flush_recycles();
 
         // ② JS :313
-        let mut clock_path = Vec::new();
+        let mut clock_path = std::mem::take(&mut self.clock_path_scratch);
+        clock_path.clear();
         if let Err(error) =
             self.advance_clock_with(self.root_clock, passed_time, now, &mut clock_path)
         {
             log::warn!("root clock advance stopped: {error}");
         }
+        self.clock_path_scratch = clock_path;
 
         // ③ JS :315-331: dispatch this frame's events (after the clock).
         self.dispatch_events();
@@ -1867,13 +1879,14 @@ impl BaseFactory {
         member_time: f64,
         mut advance: impl FnMut(&mut Self, AnimatableHandle, f64),
     ) -> Result<(), ClockError> {
-        let snapshot = self
-            .clocks
-            .get(clock_id)
-            .ok_or(ClockError::InvalidClockId)?
-            .member_snapshot();
+        let mut snapshot = std::mem::take(&mut self.clock_members_scratch);
+        let Some(clock) = self.clocks.get(clock_id) else {
+            self.clock_members_scratch = snapshot;
+            return Err(ClockError::InvalidClockId);
+        };
+        clock.member_snapshot_into(&mut snapshot);
 
-        for (index, token) in snapshot {
+        for &(index, token) in &snapshot {
             let handle = self
                 .clocks
                 .get(clock_id)
@@ -1886,6 +1899,7 @@ impl BaseFactory {
         if let Some(clock) = self.clocks.get_mut(clock_id) {
             clock.compact();
         }
+        self.clock_members_scratch = snapshot;
         Ok(())
     }
 

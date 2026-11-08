@@ -11,10 +11,14 @@ pub enum BlendStateKind {
 }
 
 /// Lookup identity only. It is never used to determine update order.
+///
+/// `target_name` 用 `Arc<str>` 而非 `String`：每帧 `update_groups` 会对每条
+/// bone/slot timeline 克隆 key（仅作为 HashMap 查找身份），`String` 克隆会在
+/// 动画推进热路径上产生每帧数十次分配。语义不变（Hash/Eq 仍按 str）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlendStateKey {
     pub kind: BlendStateKind,
-    pub target_name: String,
+    pub target_name: std::sync::Arc<str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,15 +147,15 @@ mod tests {
     fn same_target_name_with_different_kind_uses_distinct_budget_entries() {
         let transform = BlendStateKey {
             kind: BlendStateKind::BoneTransform,
-            target_name: "root".to_owned(),
+            target_name: "root".into(),
         };
         let alpha = BlendStateKey {
             kind: BlendStateKind::BoneAlpha,
-            target_name: "root".to_owned(),
+            target_name: "root".into(),
         };
         let z_index = BlendStateKey {
             kind: BlendStateKind::SlotZIndex,
-            target_name: "root".to_owned(),
+            target_name: "root".into(),
         };
         assert_ne!(transform, alpha);
         assert_ne!(alpha, z_index);

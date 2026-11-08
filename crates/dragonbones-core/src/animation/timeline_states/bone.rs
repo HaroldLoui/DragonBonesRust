@@ -264,7 +264,7 @@ mod tests {
         approx(timeline.results[0], 1.5);
         timeline.blend_key = Some(crate::animation::blend_state::BlendStateKey {
             kind: crate::animation::blend_state::BlendStateKind::BoneAlpha,
-            target_name: "bone".to_owned(),
+            target_name: "bone".into(),
         });
 
         let mut fixture = CtxFixture::new(ArmatureData::default());

@@ -18,13 +18,14 @@ pub(crate) fn update_action_timeline(
     if timeline.source.animation_data().is_none() {
         return;
     }
-    let Some(actions) = timeline
-        .source
-        .armature_data()
-        .map(|armature| armature.actions.clone())
-    else {
+    // Borrow the action table from the (shared) animation source instead of
+    // cloning it every frame. `data` is an `Arc`, so this is a refcount bump,
+    // not an allocation; the resulting borrow does not depend on `timeline`.
+    let data = timeline.source.data.clone();
+    let Some(armature) = data.armatures.get(timeline.source.owner_armature.as_str()) else {
         return;
     };
+    let actions = armature.actions.as_slice();
 
     let previous_state = timeline.base.play_state;
     let previous_play_times = timeline.base.current_play_times;
@@ -118,7 +119,7 @@ pub(crate) fn update_action_timeline(
                     if frame_in_play_interval(timeline, crossed_frame_index) {
                         cross_frame(
                             timeline,
-                            &actions,
+                            actions,
                             state,
                             context,
                             runtime,
@@ -168,7 +169,7 @@ pub(crate) fn update_action_timeline(
                     if frame_in_play_interval(timeline, crossed_frame_index) {
                         cross_frame(
                             timeline,
-                            &actions,
+                            actions,
                             state,
                             context,
                             runtime,
@@ -193,13 +194,13 @@ pub(crate) fn update_action_timeline(
             };
             if timeline.base.current_play_times == previous_play_times {
                 if previous_time <= position {
-                    cross_frame(timeline, &actions, state, context, runtime, 0);
+                    cross_frame(timeline, actions, state, context, runtime, 0);
                 }
             } else if state.position <= position {
                 if !is_reverse && loop_complete_event.is_some() {
                     context.buffer_lifecycle_event(runtime, loop_complete_event.take().unwrap());
                 }
-                cross_frame(timeline, &actions, state, context, runtime, 0);
+                cross_frame(timeline, actions, state, context, runtime, 0);
             }
         }
     }
