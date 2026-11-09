@@ -5,13 +5,12 @@ use crate::model::{AnimationConfig, AnimationData};
 use std::collections::HashSet;
 
 use super::AnimationUpdateCtx;
-use super::blend_state::{BlendState, BlendStateKey};
+use super::blend_state::BlendStates;
 use super::state_id::StateId;
 use super::timeline_state::{ActionTimelineTime, TimelinePlayState};
 use super::timeline_states::TimelineInstance;
 use crate::armature::RuntimeCtx;
 use crate::armature::{ArmatureIdx, Bone};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i8)]
@@ -469,7 +468,7 @@ impl AnimationState {
         context: &mut AnimationUpdateCtx<'_>,
         runtime: &mut RuntimeCtx<'_>,
         cache_frame_rate: f64,
-        blend_states: &mut HashMap<BlendStateKey, BlendState>,
+        blend_states: &mut BlendStates,
     ) -> Vec<FadeEvent> {
         let fade_events = self.advance_time(passed_time, parent_weight_result);
         let event_active = self.parent.is_none() && self.action_enabled;
@@ -1113,6 +1112,7 @@ mod tests {
     /// 全部移除，普通动画 timeline 保留。
     #[test]
     fn reset_to_pose_resets_uncovered_bone_and_slot_then_removes_pose_axes() {
+        use crate::animation::blend_state::BlendStates;
         use crate::animation::timeline_states::rebuild::rebuild;
         use crate::animation::timeline_states::test_support::{
             ARMATURE, CtxFixture, build_data, make_state, make_timeline, timeline_data, timeline_ir,
@@ -1122,7 +1122,6 @@ mod tests {
         use crate::core::enums::TimelineType;
         use crate::geom::Transform;
         use crate::model::{AnimationData, ArmatureData, BoneData, SlotData};
-        use std::collections::HashMap;
 
         let ir = timeline_ir(24.0, 1.0, &[0], &[1], 0, &[0.0, 0.0], &[]);
         let mut animation = AnimationData {
@@ -1182,7 +1181,7 @@ mod tests {
         fixture.bones[0].animation_pose.x = 5.0;
         fixture.bones[1].animation_pose.x = 7.0;
 
-        let mut blend_states = HashMap::new();
+        let mut blend_states = BlendStates::default();
         fixture.with_context(|context| rebuild(&mut state, context, &mut blend_states));
 
         let uncovered_pose = state

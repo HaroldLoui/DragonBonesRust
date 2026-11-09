@@ -1,10 +1,10 @@
 //! AnimationState timeline construction and target refresh.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::animation::AnimationUpdateCtx;
 use crate::animation::animation_state::{AnimationState, TimelineDirty, TimelineGroup};
-use crate::animation::blend_state::{BlendState, BlendStateKey, BlendStateKind};
+use crate::animation::blend_state::{BlendStateKey, BlendStateKind, BlendStates};
 use crate::animation::timeline_states::{
     AnimationTimelineSource, TimelineInstance, TimelineTarget,
 };
@@ -16,7 +16,7 @@ use crate::model::{AnimationData, ArmatureData, TimelineData};
 pub(crate) fn rebuild(
     state: &mut AnimationState,
     context: &mut AnimationUpdateCtx<'_>,
-    blend_states: &mut HashMap<BlendStateKey, BlendState>,
+    blend_states: &mut BlendStates,
 ) {
     let Some(source) = state
         .action_timeline
@@ -135,7 +135,7 @@ fn create_bone_axes(
     state: &mut AnimationState,
     source: &AnimationTimelineSource,
     host_data: &ArmatureData,
-    blend_states: &mut HashMap<BlendStateKey, BlendState>,
+    blend_states: &mut BlendStates,
     animation_data: &AnimationData,
     bone: &Bone,
 ) {
@@ -213,7 +213,7 @@ fn create_slot_axes(
     state: &mut AnimationState,
     source: &AnimationTimelineSource,
     host_data: &ArmatureData,
-    blend_states: &mut HashMap<BlendStateKey, BlendState>,
+    blend_states: &mut BlendStates,
     animation_data: &AnimationData,
     slot: &mut Slot,
 ) {
@@ -393,7 +393,7 @@ fn create_slot_axes(
 fn refresh_targets(
     state: &mut AnimationState,
     context: &mut AnimationUpdateCtx<'_>,
-    blend_states: &mut HashMap<BlendStateKey, BlendState>,
+    blend_states: &mut BlendStates,
     source: &AnimationTimelineSource,
     animation_data: &AnimationData,
     host_data: &ArmatureData,
@@ -551,7 +551,7 @@ fn deform_geometry_offset(
 mod tests {
     use super::rebuild;
     use crate::animation::animation_state::{AnimationState, TimelineDirty};
-    use crate::animation::blend_state::{BlendState, BlendStateKey};
+    use crate::animation::blend_state::BlendStates;
     use crate::animation::timeline_states::TimelineTarget;
     use crate::animation::timeline_states::test_support::{
         ARMATURE, CtxFixture, empty_data, make_state, make_timeline,
@@ -559,7 +559,6 @@ mod tests {
     use crate::armature::{ArmatureIdx, Bone, BoneIdx, ConstraintIdx, DisplayFrame, Slot, SlotIdx};
     use crate::core::enums::TimelineType;
     use crate::model::{DisplayData, DisplayKind, GeometryData};
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn state_with_action(
@@ -599,7 +598,7 @@ mod tests {
         state.timeline_dirty = TimelineDirty::RefreshTargets;
 
         let mut fixture = CtxFixture::new(host(&data));
-        let mut blend_states: HashMap<BlendStateKey, BlendState> = HashMap::new();
+        let mut blend_states = BlendStates::default();
         fixture.with_context(|context| rebuild(&mut state, context, &mut blend_states));
         assert_eq!(state.constraint_timelines.len(), 1);
         assert_eq!(state.constraint_timelines[0].id, timeline_id);
@@ -645,7 +644,7 @@ mod tests {
             ..Slot::default()
         });
 
-        let mut blend_states: HashMap<BlendStateKey, BlendState> = HashMap::new();
+        let mut blend_states = BlendStates::default();
         fixture.with_context(|context| rebuild(&mut state, context, &mut blend_states));
 
         let deform = state

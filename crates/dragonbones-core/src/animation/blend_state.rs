@@ -21,6 +21,11 @@ pub struct BlendStateKey {
     pub target_name: std::sync::Arc<str>,
 }
 
+/// 热路径逐帧查表用的 `BlendState` 容器：`rustc-hash` 的 FxHash 比默认
+/// SipHash 快，且本表只做 key 查找与逐值重置（`reset_blend_states` 的
+/// 迭代顺序不影响数值语义），不会改变任何动画结果。
+pub type BlendStates = rustc_hash::FxHashMap<BlendStateKey, BlendState>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlendState {
     pub dirty: u32,
@@ -89,8 +94,7 @@ impl BlendState {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlendState, BlendStateKey, BlendStateKind};
-    use std::collections::HashMap;
+    use super::{BlendState, BlendStateKey, BlendStateKind, BlendStates};
 
     #[test]
     fn first_writer_gets_full_budget_and_same_layer_accumulates() {
@@ -160,7 +164,7 @@ mod tests {
         assert_ne!(transform, alpha);
         assert_ne!(alpha, z_index);
 
-        let mut states: HashMap<BlendStateKey, BlendState> = HashMap::new();
+        let mut states = BlendStates::default();
         states.entry(transform.clone()).or_default().update(0, 0.4);
         states.entry(alpha.clone()).or_default().update(1, 0.8);
         states.entry(z_index.clone()).or_default().update(2, 0.2);
