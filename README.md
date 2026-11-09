@@ -59,13 +59,14 @@ cargo run -p dragonbones-demo -- PlantAnimate
 cargo run -p dragonbones-demo -- --demo plant
 ```
 
-运行 demo 后：
+运行 demo 后是预览器，左侧是动画列表，右侧是 rig 列表，左下是播放控制与进度条：
 
 - 右侧面板：点击按钮切换 rig
-- `Up` / `Down`：切换 rig
-- `1` ~ `9`：选择当前 rig 的动画
-- `Left` / `Right`：在动画列表中循环切换
-- 左上角 HUD 显示当前 rig / 动画，窗口标题同步
+- 左侧动画列表：点击动画名直接播放
+- 左下控制条：`Resume`/`Pause` 暂停恢复、`-`/`+` 调速（0.125x–8x）、`Loop`/`Once` 切循环、`F1` 开关骨骼调试、`x9` 叠加 8 个实例压测
+- 进度条：点击任意位置定位到该时间点（暂停状态下保持暂停）
+- 状态行：FPS / 速度 / 循环 / 播放状态 / 骨骼数 / 调试 / 压测
+- 快捷键：`Space` 暂停恢复，`[`/`]` 或 `-`/`+` 调速，`L` 切循环，`F1` 骨骼调试，`M` 压测，`Up`/`Down` 切 rig，`1`–`9` 与 `Left`/`Right` 切动画
 - rig 列表与动画组都从 skeleton JSON 动态读取：`assets/<dir>/<dir>_ske.json` 会全部自动加载，新增素材放进 `assets/` 即出现在面板里
 
 可用 rig（目录名即名称，按加载顺序）：

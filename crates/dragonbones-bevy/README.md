@@ -272,9 +272,12 @@ cargo run -p dragonbones-demo -- --list           # list rigs in load order
 While the demo runs:
 
 - click the buttons in the right-hand panel to switch rigs
-- press `Up` / `Down` to switch rigs
-- press `1`-`9` to select an animation
-- press `Left` / `Right` to cycle through the current rig's animations
+- click an animation in the left-hand list to play it
+- use the control bar to pause/resume, change speed (0.125x-8x), toggle loop,
+  toggle bone gizmos, or spawn 8 extra instances for a quick stress check
+- click anywhere on the timeline to seek to that time (stays paused when paused)
+- keyboard: `Space` pause, `[`/`]` speed, `L` loop, `F1` gizmos, `M` stress,
+  `Up`/`Down` rigs, `1`-`9` and `Left`/`Right` animations
 
 The animation names and the rig list are read from each rig's skeleton JSON;
 discovery order is the directory-name order (case-insensitive).

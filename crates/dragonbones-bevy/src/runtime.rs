@@ -137,6 +137,20 @@ impl DragonBonesRuntime {
         self.bindings.len()
     }
 
+    /// Immutable view of a built armature, for debug overlays and preview tools.
+    ///
+    /// The adapter normally owns the factory internally; this accessor exposes
+    /// the read-only armature state (bones, slots, animation states) without
+    /// letting callers mutate it. Prefer the `DragonBonesCommand` path for
+    /// playback control.
+    #[must_use]
+    pub fn armature(&self, idx: ArmatureIdx) -> Option<&Armature> {
+        self.factory
+            .armatures
+            .get(idx.index())
+            .and_then(Option::as_ref)
+    }
+
     fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         *self
             .data_refs
