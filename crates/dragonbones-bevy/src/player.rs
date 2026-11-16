@@ -19,6 +19,8 @@
 //! before the frame's `advance_time`, so a `Play` starts animating in the same
 //! frame it was requested.
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use dragonbones_core::animation::StateId;
 use dragonbones_core::armature::Armature;
@@ -26,7 +28,7 @@ use dragonbones_core::core::enums::AnimationFadeOutMode;
 use dragonbones_core::geom::ColorTransform;
 use dragonbones_core::model::AnimationConfig;
 
-use crate::asset::AtlasAsset;
+use crate::asset::{AtlasAsset, SkeletonAsset};
 use crate::runtime::{DragonBonesInstance, DragonBonesPlaybackState, DragonBonesRuntime};
 
 /// Configuration for starting an animation with fade/seek/speed options.
@@ -147,6 +149,14 @@ pub enum DragonBonesAction {
     /// Replace the armature's skin with another skin from the same skeleton data
     /// (A1: same atlas only; a skin with armature displays is rejected).
     ReplaceSkin { skin: String },
+    /// Replace the armature's skin with a skin from another skeleton/data and
+    /// atlas set.
+    ReplaceSkinFrom {
+        source_armature: String,
+        skin: String,
+        skeleton: Handle<SkeletonAsset>,
+        atlases: Vec<Handle<AtlasAsset>>,
+    },
     /// Replace one slot's display with a named display from the default skin, or
     /// clear it with `None`.
     ReplaceDisplay {
@@ -346,6 +356,31 @@ impl DragonBonesCommand {
         Self {
             armature,
             action: DragonBonesAction::ReplaceAtlas { page, atlas },
+        }
+    }
+
+    /// Replaces the armature's skin with a skin from another skeleton/data.
+    ///
+    /// `source_armature` is the armature name in the source skeleton that owns
+    /// `skin`. The source atlas handles must cover every texture used by that
+    /// skin; they are registered under a per-command atlas key and stay alive
+    /// with the target armature.
+    #[must_use]
+    pub fn replace_skin_from(
+        armature: Entity,
+        source_armature: impl Into<String>,
+        skin: impl Into<String>,
+        skeleton: Handle<SkeletonAsset>,
+        atlases: Vec<Handle<AtlasAsset>>,
+    ) -> Self {
+        Self {
+            armature,
+            action: DragonBonesAction::ReplaceSkinFrom {
+                source_armature: source_armature.into(),
+                skin: skin.into(),
+                skeleton,
+                atlases,
+            },
         }
     }
 
@@ -628,6 +663,7 @@ fn apply(
         // `apply_dragonbones_commands`; `apply` only sees animation actions.
         DragonBonesAction::ReplaceAtlas { .. }
         | DragonBonesAction::ReplaceSkin { .. }
+        | DragonBonesAction::ReplaceSkinFrom { .. }
         | DragonBonesAction::ReplaceDisplay { .. } => {
             Err("content commands must be applied through the factory".to_owned())
         }
@@ -641,6 +677,7 @@ pub(crate) fn apply_dragonbones_commands(
     mut instances: Query<(&DragonBonesInstance, Option<&mut DragonBonesPlaybackState>)>,
     mut runtime: NonSendMut<DragonBonesRuntime>,
     atlases: Res<Assets<AtlasAsset>>,
+    skeletons: Res<Assets<SkeletonAsset>>,
 ) {
     for command in commands.read() {
         let Ok((instance, mut playback)) = instances.get_mut(command.armature) else {
@@ -660,6 +697,21 @@ pub(crate) fn apply_dragonbones_commands(
             DragonBonesAction::ReplaceSkin { skin } => {
                 apply_replace_skin(&mut runtime, instance, skin)
             }
+            DragonBonesAction::ReplaceSkinFrom {
+                source_armature,
+                skin,
+                skeleton,
+                atlases: source_atlases,
+            } => apply_replace_skin_from(
+                &mut runtime,
+                instance,
+                source_armature,
+                skin,
+                skeleton,
+                source_atlases,
+                &skeletons,
+                &atlases,
+            ),
             DragonBonesAction::ReplaceDisplay { slot, display } => {
                 apply_replace_display(&mut runtime, instance, slot, display.as_deref())
             }
@@ -762,11 +814,107 @@ fn apply_replace_atlas(
         }
         runtime.factory.advance_one(*armature, 0.0);
         if let Some(binding) = runtime.bindings.get_mut(armature)
-            && let Some(existing) = binding.atlas_pages.get_mut(page)
+            && let Some(existing) = binding
+                .atlas_sets
+                .get_mut(&atlas_key)
+                .and_then(|pages| pages.get_mut(page))
         {
             *existing = (asset.texture.clone(), size);
         }
     }
+    Ok(())
+}
+
+/// Cross-data skin replacement: registers the source skeleton/atlas under
+/// per-command factory keys, records the page mapping on the binding, then calls
+/// the core `replace_skin_with_atlas` variant.
+#[allow(clippy::too_many_arguments)]
+fn apply_replace_skin_from(
+    runtime: &mut DragonBonesRuntime,
+    instance: &DragonBonesInstance,
+    source_armature: &str,
+    skin_name: &str,
+    skeleton_handle: &Handle<crate::asset::SkeletonAsset>,
+    atlas_handles: &[Handle<AtlasAsset>],
+    skeletons: &Assets<crate::asset::SkeletonAsset>,
+    atlases: &Assets<AtlasAsset>,
+) -> Result<(), String> {
+    let source = skeletons
+        .get(skeleton_handle)
+        .ok_or_else(|| format!("source skeleton {skeleton_handle:?} is not loaded"))?;
+    let skin = source
+        .data
+        .armatures
+        .get(source_armature)
+        .and_then(|armature| armature.get_skin(skin_name))
+        .cloned()
+        .ok_or_else(|| {
+            format!("skin `{skin_name}` not found in source armature `{source_armature}`")
+        })?;
+
+    let source_db_key = format!("{}::{:?}", source.data.name, skeleton_handle.id());
+    let mut source_atlas_key = source_db_key.clone();
+    let mut pages = Vec::with_capacity(atlas_handles.len());
+    let mut atlas_datas = Vec::with_capacity(atlas_handles.len());
+    for handle in atlas_handles {
+        let page = atlases
+            .get(handle)
+            .ok_or_else(|| format!("source atlas {handle:?} is not loaded"))?;
+        source_atlas_key.push_str(&format!("::{:?}", handle.id()));
+        pages.push((
+            page.texture.clone(),
+            UVec2::new(
+                page.data.width.max(1.0) as u32,
+                page.data.height.max(1.0) as u32,
+            ),
+        ));
+        atlas_datas.push(page.data.clone());
+    }
+    if pages.is_empty() {
+        return Err("cross-data skin replacement needs at least one atlas".to_owned());
+    }
+
+    runtime
+        .factory
+        .data_map
+        .entry(source_db_key.clone())
+        .or_insert_with(|| Arc::clone(&source.data));
+    let list = runtime
+        .factory
+        .atlas_map
+        .entry(source_atlas_key.clone())
+        .or_default();
+    for data in atlas_datas {
+        if !list.contains(&data) {
+            list.push(data);
+        }
+    }
+    {
+        let binding = runtime
+            .bindings
+            .get_mut(&instance.armature)
+            .ok_or_else(|| format!("armature {:?} has no adapter binding", instance.armature))?;
+        binding.atlas_sets.insert(source_atlas_key.clone(), pages);
+        binding
+            .extra_registrations
+            .push((source_db_key.clone(), source_atlas_key.clone()));
+    }
+    runtime.retain_data(&source_db_key, &source_atlas_key);
+
+    if !runtime.factory.replace_skin_with_atlas(
+        instance.armature,
+        &source_db_key,
+        &source_atlas_key,
+        &skin,
+        true,
+        &[],
+    ) {
+        return Err(format!(
+            "cross-data skin `{skin_name}` could not be applied to armature {:?}",
+            instance.armature
+        ));
+    }
+    runtime.factory.advance_one(instance.armature, 0.0);
     Ok(())
 }
 

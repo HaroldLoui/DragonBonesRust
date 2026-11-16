@@ -352,9 +352,12 @@ pub(crate) fn sync_dragonbones(
         if let Some((image, size)) = slot
             .texture_atlas_ref()
             .and_then(|atlas| {
-                bindings
-                    .get(&slot_ref.armature)
-                    .and_then(|binding| binding.atlas_pages.get(atlas.index))
+                bindings.get(&slot_ref.armature).and_then(|binding| {
+                    binding
+                        .atlas_sets
+                        .get(&atlas.name)
+                        .and_then(|pages| pages.get(atlas.index))
+                })
             })
             .map(|(image, size)| (image.clone(), *size))
             && (visual.atlas_image != image || visual.atlas_size != size)

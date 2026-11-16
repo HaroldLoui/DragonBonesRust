@@ -83,8 +83,9 @@ is the armature's world placement; each slot is spawned as a child with a
 - Runtime `replace_texture_data` / `replace_skin` calls are picked up in the same
   frame: the dirty check hashes display-frame content (region, geometry identity,
   pivot, child armature), not just the display index.
-- Runtime content commands: `ReplaceSkin`, `ReplaceDisplay` / `ClearDisplay`, and
-  `ReplaceAtlas` (one atlas page + image, with slot texture/UV refresh).
+- Runtime content commands: `ReplaceSkin`, `ReplaceSkinFrom` (another skeleton's
+  skin + atlases), `ReplaceDisplay` / `ClearDisplay`, and `ReplaceAtlas` (one
+  atlas page + image, with slot texture/UV refresh).
 - Playback commands: `Seek` / `SeekProgress`, `SetLoop`, `SetLayer`, `SetGroup`,
   `FadeIn` / `FadeOut`; `PlayConfig` inherits the armature speed when
   `with_time_scale` is not set.

@@ -324,7 +324,7 @@
 | 方案 | 状态 | 已落地内容 |
 |---|---|---|
 | A1 | ✅ | core `replace_display` / `replace_slot_display` / `replace_skin` 现在解析并写回 `texture_data`（含帧级图集归属）；Bevy `ReplaceSkin` / `ReplaceDisplay` / `ClearDisplay` 命令（同图集贴图热替换由 A2 的 `ReplaceAtlas` 覆盖）；demo `F2` 循环多帧 slot 显示 |
-| A2 | ✅ | `TextureAtlasRef`（cache key + page index）随 `DisplayFrame` 保存；`DragonBonesExtraAtlases` 多 tex.json 注册；逐 slot 图集 image / 尺寸 / 材质；`update_texture_atlases`、`get_*`、`remove_*`、`clear_data`；`ReplaceAtlas` 运行时换页并刷新 slot 纹理 |
+| A2 | ✅ | `TextureAtlasRef`（cache key + page index）随 `DisplayFrame` 保存；`DragonBonesExtraAtlases` 多 tex.json 注册；逐 slot 图集 image / 尺寸 / 材质；`update_texture_atlases`、`get_*`、`remove_*`、`clear_data`；`ReplaceAtlas` 运行时换页并刷新 slot 纹理；`ReplaceSkinFrom` 支持跨 data 皮肤（source skeleton + atlas 集） |
 | B | ✅ | `AnimationState::seek_to` + `Animation::seek`；Bevy `Seek` / `SeekProgress` / `SetLoop` / `SetLayer` / `SetGroup` / `FadeIn` / `FadeOut` / `SetSlotTint` / `SetSlotVisible` / `SetArmatureAlpha` / `SetFlip`；`PlayConfig::time_scale` 改为 `Option`（未设置时继承 playback state） |
 | C | 🟡 | C2 已完成：`DragonBonesRuntime::bone_transform` 只读查询 + `DragonBonesBoneAttachment` 附件同步（不依赖 Bevy 层级传播）；C1“每根 bone 一个实体”暂缓（C2 覆盖常规特效/武器挂点） |
 | D | ✅ | `BaseFactory::proxy_factory` 注入子骨架 proxy；adapter 子骨架共享根事件队列；`DragonBonesEvent.armature` 携带子骨架索引 |
@@ -336,5 +336,5 @@
 - `cargo clippy --workspace --all-targets -- -D warnings`：全绿。
 - `cargo fmt --all --check`：全绿。
 - 语料审计：536/536 通过，JS 对拍 39 一致 / 0 不一致（`DB_CORPUS_PARITY=40`）。
-- 新增测试：`tests/replace.rs`（core 纹理刷新）、`tests/atlas_ref.rs`、`tests/seek.rs`、`tests/proxy_factory.rs`、`tests/replace_commands.rs`、`tests/multi_atlas.rs`、`tests/bone_attachment.rs`、`tests/color_offset.rs`、`tests/sorting.rs`。
-- 未做：GPU 截图/着色器实机验证（headless 测试只覆盖数据与 material asset；`color_offset` 的 WESL uniform 需在 demo 窗口确认）、C1、blend 长尾、贴图热重载、跨 data 的完整皮肤替换。
+- 新增测试：`tests/replace.rs`（core 纹理刷新）、`tests/atlas_ref.rs`、`tests/seek.rs`、`tests/proxy_factory.rs`、`tests/replace_commands.rs`、`tests/multi_atlas.rs`、`tests/bone_attachment.rs`、`tests/color_offset.rs`、`tests/sorting.rs`、`tests/cross_data_skin.rs`。
+- 未做：C1（按 §3.4 策略暂缓）、blend 长尾、贴图热重载、GPU 截图基线对比。color offset 的 WESL 路径已由 demo `F3` 实机确认，headless 测试覆盖 material asset 数据路径。

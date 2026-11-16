@@ -49,9 +49,13 @@ pub(crate) struct ArmatureBinding {
     pub(crate) materials: HashSet<MaterialKey>,
     pub(crate) dragon_bones_key: String,
     pub(crate) atlas_key: String,
-    /// Atlas pages in registration order; a slot's `TextureAtlasRef.index`
-    /// selects one of these.
-    pub(crate) atlas_pages: Vec<(Handle<Image>, UVec2)>,
+    /// Atlas pages per factory atlas key. The primary build key maps to the
+    /// pages passed to `spawn_armature_slots`; cross-data skin replacement adds
+    /// further keys here.
+    pub(crate) atlas_sets: HashMap<String, Vec<(Handle<Image>, UVec2)>>,
+    /// Extra `(data, atlas)` registrations made by cross-data skin replacement;
+    /// released with the armature.
+    pub(crate) extra_registrations: Vec<(String, String)>,
     /// Per-slot materials created for non-zero color offsets (not shared, so
     /// they are not in `materials`).
     pub(crate) dynamic_materials: Vec<Handle<DragonBonesMaterial>>,
@@ -214,7 +218,7 @@ impl DragonBonesRuntime {
         Some(matrix_to_affine3a(&bone.base.global_transform_matrix, 0.0))
     }
 
-    fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
+    pub(crate) fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         *self
             .data_refs
             .entry(dragon_bones_key.to_owned())
@@ -511,6 +515,9 @@ fn cleanup_armatures(
             for material in &binding.dynamic_materials {
                 materials.remove(material.id());
             }
+            for (data_key, atlas_key) in &binding.extra_registrations {
+                runtime.release_data(data_key, atlas_key);
+            }
             runtime.release_data(&binding.dragon_bones_key, &binding.atlas_key);
 
             if binding.parent.is_none() {
@@ -739,8 +746,9 @@ fn spawn_child_armatures(
                 materials: spawned.material_keys,
                 dynamic_materials: spawned.dynamic_materials,
                 dragon_bones_key: db_key,
+                atlas_sets: HashMap::from([(atlas_key.clone(), atlas_pages.to_vec())]),
+                extra_registrations: Vec::new(),
                 atlas_key,
-                atlas_pages: atlas_pages.to_vec(),
                 last_root: None,
                 last_pose: None,
                 parent: Some(parent_armature),
@@ -1011,8 +1019,9 @@ fn setup_armatures(
                 materials: spawned.material_keys,
                 dynamic_materials: spawned.dynamic_materials,
                 dragon_bones_key: db_key,
+                atlas_sets: HashMap::from([(atlas_key.clone(), atlas_pages.clone())]),
+                extra_registrations: Vec::new(),
                 atlas_key,
-                atlas_pages: atlas_pages.clone(),
                 last_root: None,
                 last_pose: None,
                 parent: None,

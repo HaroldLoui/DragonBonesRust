@@ -1206,11 +1206,13 @@ impl BaseFactory {
         &self,
         armature_idx: ArmatureIdx,
         display: &DisplayData,
+        atlas_name: Option<&str>,
     ) -> Option<(TextureData, f64, TextureAtlasRef)> {
-        let atlas_name = self.armature(armature_idx).texture_atlas_name.clone();
+        let stored = self.armature(armature_idx).texture_atlas_name.clone();
+        let atlas_name = atlas_name.unwrap_or(&stored);
         match display.kind {
             DisplayKind::Image { .. } | DisplayKind::Mesh { .. } => {
-                self._get_texture_data(&atlas_name, &display.path)
+                self._get_texture_data(atlas_name, &display.path)
             }
             _ => None,
         }
@@ -1238,7 +1240,7 @@ impl BaseFactory {
         // 先解析纹理（不可变借用），再做槽的可变借用。
         let resolved = display_data
             .as_ref()
-            .and_then(|display| self.resolve_display_texture(armature_idx, display));
+            .and_then(|display| self.resolve_display_texture(armature_idx, display, None));
 
         let armature = self.armature_mut(armature_idx);
         let Some(slot) = armature.slots.iter_mut().find(|slot| slot.idx == slot_idx) else {
@@ -1348,11 +1350,38 @@ impl BaseFactory {
         }
     }
 
-    /// 对齐 `BaseFactory.replaceSkin`（BaseFactory.ts:860-900）。
+    /// 对齐 `BaseFactory.replaceSkin`（BaseFactory.ts:860-900）——纹理从
+    /// armature 构建时的图集 key 解析。
     pub fn replace_skin(
         &mut self,
         armature_idx: ArmatureIdx,
         db_name: &str,
+        skin: &SkinData,
+        is_override: bool,
+        exclude: &[&str],
+    ) -> bool {
+        let atlas_name = self.armature(armature_idx).texture_atlas_name.clone();
+        self.replace_skin_with_atlas(
+            armature_idx,
+            db_name,
+            &atlas_name,
+            skin,
+            is_override,
+            exclude,
+        )
+    }
+
+    /// 跨 data 换装：显式指定皮肤所属的 data key 与图集 key。
+    ///
+    /// 用于皮肤来自另一份 `DragonBonesData` / `_tex.json` 的场景；调用方需先把
+    /// source data 与 atlas 注册到 `data_map` / `atlas_map`，并把图集页加入
+    /// 适配层的 page 映射。`is_override` 通常传 `true`（没有同 data 的默认
+    /// 皮肤可回退）。
+    pub fn replace_skin_with_atlas(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        db_name: &str,
+        atlas_name: &str,
         skin: &SkinData,
         is_override: bool,
         exclude: &[&str],
@@ -1409,9 +1438,9 @@ impl BaseFactory {
                 let textures: Vec<Option<(TextureData, f64, TextureAtlasRef)>> = displays
                     .iter()
                     .map(|display| {
-                        display
-                            .as_ref()
-                            .and_then(|display| self.resolve_display_texture(armature_idx, display))
+                        display.as_ref().and_then(|display| {
+                            self.resolve_display_texture(armature_idx, display, Some(atlas_name))
+                        })
                     })
                     .collect();
                 let armature = self.armature_mut(armature_idx);
