@@ -63,10 +63,10 @@ cargo run -p dragonbones-demo -- --demo plant
 
 - 右侧面板：点击按钮切换 rig
 - 左侧动画列表：点击动画名直接播放
-- 左下控制条：`Resume`/`Pause` 暂停恢复、`-`/`+` 调速（0.125x–8x）、`Loop`/`Once` 切循环、`F1` 开关骨骼调试、`F2` 循环多帧 slot 显示、`x9` 叠加 8 个实例压测
+- 左下控制条：`Resume`/`Pause` 暂停恢复、`-`/`+` 调速（0.125x–8x）、`Loop`/`Once` 切循环、`F1` 开关骨骼调试、`F2` 循环多帧 slot 显示、`F3` 白色 color-offset 闪烁、`x9` 叠加 8 个实例压测
 - 进度条：点击任意位置定位到该时间点（暂停状态下保持暂停）
 - 状态行：FPS / 速度 / 循环 / 播放状态 / 骨骼数 / 调试 / 压测
-- 快捷键：`Space` 暂停恢复，`[`/`]` 或 `-`/`+` 调速，`L` 切循环，`F1` 骨骼调试，`F2` 换显示，`M` 压测，`Up`/`Down` 切 rig，`1`–`9` 与 `Left`/`Right` 切动画
+- 快捷键：`Space` 暂停恢复，`[`/`]` 或 `-`/`+` 调速，`L` 切循环，`F1` 骨骼调试，`F2` 换显示，`F3` color-offset 闪烁，`M` 压测，`Up`/`Down` 切 rig，`1`–`9` 与 `Left`/`Right` 切动画
 - rig 列表与动画组都从 skeleton JSON 动态读取：`assets/<dir>/<dir>_ske.json` 会全部自动加载，新增素材放进 `assets/` 即出现在面板里
 
 可用 rig（目录名即名称，按加载顺序）：

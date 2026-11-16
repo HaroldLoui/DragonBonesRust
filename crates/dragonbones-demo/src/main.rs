@@ -25,8 +25,8 @@ use dragonbones_bevy::prelude::*;
 /// lists the current rig's animations and plays whichever one you click; below
 /// it are preview controls with a clickable seek bar. Space pauses, 1-9 and
 /// Left/Right cycle animations, `[`/`]` change speed, F1 toggles the bone
-/// gizmos, F2 cycles the first multi-frame slot's display, and M adds eight
-/// extra instances of the current rig.
+/// gizmos, F2 cycles the first multi-frame slot's display, F3 toggles a white
+/// color-offset flash, and M adds eight extra instances of the current rig.
 fn main() {
     let rigs = match parse_cli() {
         Cli::Help => {
@@ -460,6 +460,8 @@ struct Previewer {
     looping: bool,
     debug_overlay: bool,
     stress: bool,
+    /// F3: apply a white color offset to every slot (hit-flash demo).
+    flash: bool,
     /// Smoothed frames per second, purely for the status line.
     fps: f32,
 }
@@ -472,6 +474,7 @@ impl Default for Previewer {
             looping: true,
             debug_overlay: false,
             stress: false,
+            flash: false,
             fps: 0.0,
         }
     }
@@ -1409,8 +1412,48 @@ fn handle_content_keys(
     runtime: NonSend<DragonBonesRuntime>,
     main: Query<Entity, With<MainRig>>,
     instances: Query<&DragonBonesInstance>,
+    mut preview: ResMut<Previewer>,
     mut commands: MessageWriter<DragonBonesCommand>,
 ) {
+    if keys.just_pressed(KeyCode::F3) {
+        let Ok(root) = main.single() else {
+            return;
+        };
+        let Ok(instance) = instances.get(root) else {
+            return;
+        };
+        let Some(armature) = runtime.armature(instance.armature) else {
+            return;
+        };
+        preview.flash = !preview.flash;
+        for slot in &armature.slots {
+            let mut color = slot.color_transform;
+            if preview.flash {
+                // Additive white flash; offsets are applied by the material
+                // uniform, so this exercises the E color-offset path.
+                color.red_offset = 0.55;
+                color.green_offset = 0.55;
+                color.blue_offset = 0.55;
+                color.alpha_offset = 0.0;
+            } else {
+                color.red_offset = 0.0;
+                color.green_offset = 0.0;
+                color.blue_offset = 0.0;
+                color.alpha_offset = 0.0;
+            }
+            commands.write(DragonBonesCommand::set_slot_tint(
+                root,
+                slot.slot_name.clone(),
+                color,
+            ));
+        }
+        info!(
+            "content: color offset flash {}",
+            if preview.flash { "on" } else { "off" }
+        );
+        return;
+    }
+
     if !keys.just_pressed(KeyCode::F2) {
         return;
     }
@@ -1821,12 +1864,13 @@ fn update_preview_status(
         .and_then(|instance| runtime.armature(instance.armature))
         .map_or(0, |armature| armature.bones.len());
     let status = format!(
-        "fps {:.0} | speed {:.3}x | loop {} | {} | bones {bones} | gizmos {} | stress {}",
+        "fps {:.0} | speed {:.3}x | loop {} | {} | bones {bones} | gizmos {} | flash {} | stress {}",
         preview.fps,
         preview.speed,
         if preview.looping { "on" } else { "off" },
         if preview.paused { "paused" } else { "playing" },
         if preview.debug_overlay { "on" } else { "off" },
+        if preview.flash { "on" } else { "off" },
         if preview.stress { "on" } else { "off" },
     );
     for mut text in &mut texts {
