@@ -382,3 +382,123 @@ fn other_replace_negative_and_out_of_range_indices() {
         Some(raw_display)
     );
 }
+
+/// Build the real Wallnut rig, whose `body_front` slot has four baked display frames
+/// with different atlas regions (`front0..front3`). This is the regression fixture
+/// for "replace_* must refresh texture_data, not only display data".
+fn build_wallnut() -> (BaseFactory, ArmatureIdx) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/Wallnut");
+    let ske = read_value(&root.join("Wallnut_ske.json"));
+    let tex = read_value(&root.join("Wallnut_tex.json"));
+    let mut factory = BaseFactory::new();
+    assert!(factory.parse_dragon_bones_data(&ske, "Wallnut").is_some());
+    assert!(factory.parse_texture_atlas_data(&tex, "Wallnut"));
+    let armature = factory
+        .build_armature(
+            "Wall-nut",
+            "Wallnut",
+            "",
+            "Wallnut",
+            Box::new(NullArmatureProxy::new()),
+        )
+        .expect("Wallnut build");
+    factory
+        .attach_armature(factory.root_clock(), armature)
+        .expect("attach");
+    factory.advance_one(armature, 0.0);
+    (factory, armature)
+}
+
+fn body_front_slot(
+    factory: &BaseFactory,
+    armature: ArmatureIdx,
+) -> &dragonbones_core::armature::Slot {
+    factory
+        .armature(armature)
+        .slots
+        .iter()
+        .find(|slot| slot.slot_name == "body_front")
+        .expect("body_front slot")
+}
+
+#[test]
+fn replace_display_refreshes_texture_data() {
+    let (mut factory, armature) = build_wallnut();
+    let slot_idx = body_front_slot(&factory, armature).idx;
+    let display = body_front_slot(&factory, armature).display_frames[1]
+        .raw_display_data
+        .clone()
+        .expect("frame 1 raw display");
+    assert_eq!(
+        body_front_slot(&factory, armature)
+            .texture_data
+            .as_ref()
+            .map(|t| t.name.as_str()),
+        Some("front0")
+    );
+
+    factory.replace_display(armature, slot_idx, Some(display), 0);
+    factory.advance_one(armature, 0.0);
+
+    let slot = body_front_slot(&factory, armature);
+    assert_eq!(slot.display_frame, Some(0));
+    assert_eq!(
+        slot.texture_data.as_ref().map(|t| t.name.as_str()),
+        Some("front3"),
+        "replace_display must resolve the replacement display's TextureData"
+    );
+    assert!(
+        slot.display_frames[0]
+            .texture_data
+            .as_ref()
+            .is_some_and(|texture| texture.name == "front3"),
+        "the frame snapshot must be refreshed as well"
+    );
+}
+
+#[test]
+fn replace_slot_display_refreshes_texture_data() {
+    let (mut factory, armature) = build_wallnut();
+    let slot_idx = body_front_slot(&factory, armature).idx;
+
+    assert!(factory.replace_slot_display(
+        "Wall-nut",
+        "Wallnut",
+        "body_front",
+        "body_front3",
+        armature,
+        slot_idx,
+        0,
+    ));
+    factory.advance_one(armature, 0.0);
+
+    let slot = body_front_slot(&factory, armature);
+    assert_eq!(
+        slot.texture_data.as_ref().map(|t| t.name.as_str()),
+        Some("front3")
+    );
+}
+
+#[test]
+fn replace_skin_refreshes_texture_data() {
+    let (mut factory, armature) = build_wallnut();
+    let display = body_front_slot(&factory, armature).display_frames[1]
+        .raw_display_data
+        .clone()
+        .expect("frame 1 raw display");
+
+    let mut skin = dragonbones_core::model::SkinData {
+        name: "alt".to_owned(),
+        ..Default::default()
+    };
+    skin.add_display("body_front", Some(display));
+    assert!(factory.replace_skin(armature, "Wallnut", &skin, true, &[]));
+    factory.advance_one(armature, 0.0);
+
+    let slot = body_front_slot(&factory, armature);
+    assert_eq!(
+        slot.texture_data.as_ref().map(|t| t.name.as_str()),
+        Some("front3"),
+        "replace_skin must resolve textures for the new skin displays"
+    );
+}

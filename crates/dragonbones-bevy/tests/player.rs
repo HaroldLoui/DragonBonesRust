@@ -341,3 +341,149 @@ fn play_while_paused_starts_frozen_and_resume_restores_the_speed() {
         "resume restores the remembered armature speed, got {walk:?}"
     );
 }
+
+fn current_time(app: &App, root: Entity) -> f64 {
+    let runtime = app
+        .world()
+        .get_non_send::<DragonBonesRuntime>()
+        .expect("runtime resource");
+    let armature = runtime.factory.armatures[armature_index(app, root).index()]
+        .as_ref()
+        .expect("armature alive");
+    armature
+        .animation
+        .last_state()
+        .and_then(|id| armature.animation.state(id))
+        .map_or(0.0, |state| state.current_time())
+}
+
+fn first_slot(app: &App, root: Entity) -> (String, bool, f64) {
+    let runtime = app
+        .world()
+        .get_non_send::<DragonBonesRuntime>()
+        .expect("runtime resource");
+    let armature = runtime.factory.armatures[armature_index(app, root).index()]
+        .as_ref()
+        .expect("armature alive");
+    let slot = armature.slots.first().expect("Dragon has slots");
+    (
+        slot.slot_name.clone(),
+        slot.visible,
+        slot.color_transform.red_multiplier,
+    )
+}
+
+#[test]
+fn seek_command_keeps_speed_and_pause() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "walk");
+    app.update();
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_speed(root, 0.5));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::seek(root, 0.2));
+    app.update();
+
+    assert!(
+        (current_time(&app, root) - 0.2).abs() < 0.05,
+        "seek should land near 0.2s, got {}",
+        current_time(&app, root)
+    );
+    assert!(
+        states(&app, root)
+            .iter()
+            .all(|(_, speed, _)| (*speed - 0.5).abs() < 1e-9),
+        "seek must preserve the playback speed: {:?}",
+        states(&app, root)
+    );
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::pause(root));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::seek(root, 0.1));
+    app.update();
+    assert!(
+        (current_time(&app, root) - 0.1).abs() < 0.05,
+        "paused seek should land near 0.1s, got {}",
+        current_time(&app, root)
+    );
+    assert!(
+        states(&app, root).iter().all(|(_, speed, _)| *speed == 0.0),
+        "paused seek must keep time_scale at 0: {:?}",
+        states(&app, root)
+    );
+}
+
+#[test]
+fn play_config_without_time_scale_inherits_the_set_speed() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "walk");
+    app.update();
+
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_speed(root, 0.5));
+    app.update();
+    app.world_mut()
+        .write_message(DragonBonesCommand::play_config(
+            root,
+            DragonBonesPlayConfig::new("walk"),
+        ));
+    app.update();
+
+    assert!(
+        states(&app, root)
+            .iter()
+            .all(|(_, speed, _)| (*speed - 0.5).abs() < 1e-9),
+        "PlayConfig without with_time_scale must inherit 0.5x: {:?}",
+        states(&app, root)
+    );
+    let playback = app
+        .world()
+        .get::<DragonBonesPlaybackState>(root)
+        .expect("playback state");
+    assert!((playback.time_scale - 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn slot_and_armature_commands_reach_core() {
+    let mut app = test_app();
+    let root = spawn_armature(&mut app, "walk");
+    app.update();
+
+    let (slot, visible_before, _) = first_slot(&app, root);
+    assert!(visible_before);
+    let color = dragonbones_core::geom::ColorTransform {
+        red_multiplier: 0.25,
+        ..Default::default()
+    };
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_slot_tint(root, slot.clone(), color));
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_slot_visible(
+            root,
+            slot.clone(),
+            false,
+        ));
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_armature_alpha(root, 0.5));
+    app.world_mut()
+        .write_message(DragonBonesCommand::set_flip(root, Some(true), None));
+    app.update();
+
+    let (_, visible_after, red_after) = first_slot(&app, root);
+    assert!(!visible_after);
+    assert!((red_after - 0.25).abs() < 1e-9, "tint red={red_after}");
+    let runtime = app
+        .world()
+        .get_non_send::<DragonBonesRuntime>()
+        .expect("runtime resource");
+    let armature = runtime.factory.armatures[armature_index(&app, root).index()]
+        .as_ref()
+        .expect("armature alive");
+    assert!((armature.alpha - 0.5).abs() < 1e-9);
+    assert!(armature.flip_x);
+    assert!(command_errors(&app).is_empty());
+}

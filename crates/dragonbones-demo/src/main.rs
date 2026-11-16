@@ -25,7 +25,8 @@ use dragonbones_bevy::prelude::*;
 /// lists the current rig's animations and plays whichever one you click; below
 /// it are preview controls with a clickable seek bar. Space pauses, 1-9 and
 /// Left/Right cycle animations, `[`/`]` change speed, F1 toggles the bone
-/// gizmos, and M adds eight extra instances of the current rig.
+/// gizmos, F2 cycles the first multi-frame slot's display, and M adds eight
+/// extra instances of the current rig.
 fn main() {
     let rigs = match parse_cli() {
         Cli::Help => {
@@ -113,6 +114,7 @@ fn main() {
                 handle_rig_keys,
                 apply_selection,
                 handle_preview_keys,
+                handle_content_keys,
                 handle_animation_keys,
                 apply_animation_request,
                 sync_animation_panel,
@@ -1200,7 +1202,6 @@ fn on_timeline_click(
     click: On<PointerClick>,
     tracks: Query<(&ComputedNode, &UiGlobalTransform), With<TimelineTrack>>,
     snapshot: Res<TimelineSnapshot>,
-    preview: Res<Previewer>,
     main: Query<Entity, With<MainRig>>,
     mut commands: MessageWriter<DragonBonesCommand>,
 ) {
@@ -1217,16 +1218,7 @@ fn on_timeline_click(
     let left = center.x - computed.size.x / 2.0;
     let fraction = ((click.pointer.position.x - left) / computed.size.x).clamp(0.0, 1.0) as f64;
     let position = fraction * snapshot.total;
-    let play_times = if preview.looping { -1 } else { 1 };
-    commands.write(DragonBonesCommand::play_config(
-        root,
-        DragonBonesPlayConfig::new(snapshot.animation.clone())
-            .with_play_times(play_times)
-            .with_position(position),
-    ));
-    if preview.paused {
-        commands.write(DragonBonesCommand::pause(root));
-    }
+    commands.write(DragonBonesCommand::seek(root, position));
     info!(
         "seek: {} to {position:.2}s ({:.0}%)",
         snapshot.animation,
@@ -1407,6 +1399,53 @@ fn handle_preview_keys(
             "preview: stress {}",
             if preview.stress { "on" } else { "off" }
         );
+    }
+}
+
+/// F2 cycles the first multi-frame slot's display through the runtime replace
+/// command, exercising the same path a game would use for weapon/skin swaps.
+fn handle_content_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    runtime: NonSend<DragonBonesRuntime>,
+    main: Query<Entity, With<MainRig>>,
+    instances: Query<&DragonBonesInstance>,
+    mut commands: MessageWriter<DragonBonesCommand>,
+) {
+    if !keys.just_pressed(KeyCode::F2) {
+        return;
+    }
+    let Ok(root) = main.single() else {
+        return;
+    };
+    let Ok(instance) = instances.get(root) else {
+        return;
+    };
+    let Some(armature) = runtime.armature(instance.armature) else {
+        return;
+    };
+    for slot in &armature.slots {
+        if slot.display_frames.len() < 2 {
+            continue;
+        }
+        let current = slot.display_index.max(0) as usize % slot.display_frames.len();
+        let next = (current + 1) % slot.display_frames.len();
+        let Some(display_data) = slot.display_frames[next]
+            .raw_display_data
+            .as_ref()
+            .or(slot.display_frames[next].display_data.as_ref())
+        else {
+            continue;
+        };
+        commands.write(DragonBonesCommand::replace_display(
+            root,
+            slot.slot_name.clone(),
+            display_data.name.clone(),
+        ));
+        info!(
+            "content: slot `{}` display {} -> {}",
+            slot.slot_name, current, display_data.name
+        );
+        return;
     }
 }
 

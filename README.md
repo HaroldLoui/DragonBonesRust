@@ -13,7 +13,7 @@
 | 部分 | 状态 |
 |---|---|
 | `dragonbones-core` | 阶段 0–6 已完成：geom/model/parser/runtime/animation/constraints/cache，JSON 与 dbbin 两条数据路径，JS 黄金数据差分 |
-| `dragonbones-bevy` | Bevy 0.20 适配层 MVP：资源加载、armature/slot 实体、`GlobalTransform` 直写、image/mesh/蒙皮/FFD、颜色、z 排序、时间驱动；despawn → dispose 生命周期、按 atlas 共享材质 + 顶点色、O(1) slot 索引 |
+| `dragonbones-bevy` | Bevy 0.20 适配层：资源加载、armature/slot 实体、`GlobalTransform` 直写、image/mesh/蒙皮/FFD、颜色与 offset、z 排序、时间驱动；运行时换装/换显示/换图集、seek/loop/layer/fade、slot tint/visible、armature alpha/flip、child armature 事件、bone attachment、多 atlas、跨骨架 z 分带；despawn → dispose 生命周期、按 atlas 共享材质 + 顶点色 |
 | `dragonbones-demo` | 可运行 demo：启动时自动扫描 `assets/` 下全部 rig，UI 面板中切换 rig 与动画组 |
 
 已验证素材：
@@ -63,10 +63,10 @@ cargo run -p dragonbones-demo -- --demo plant
 
 - 右侧面板：点击按钮切换 rig
 - 左侧动画列表：点击动画名直接播放
-- 左下控制条：`Resume`/`Pause` 暂停恢复、`-`/`+` 调速（0.125x–8x）、`Loop`/`Once` 切循环、`F1` 开关骨骼调试、`x9` 叠加 8 个实例压测
+- 左下控制条：`Resume`/`Pause` 暂停恢复、`-`/`+` 调速（0.125x–8x）、`Loop`/`Once` 切循环、`F1` 开关骨骼调试、`F2` 循环多帧 slot 显示、`x9` 叠加 8 个实例压测
 - 进度条：点击任意位置定位到该时间点（暂停状态下保持暂停）
 - 状态行：FPS / 速度 / 循环 / 播放状态 / 骨骼数 / 调试 / 压测
-- 快捷键：`Space` 暂停恢复，`[`/`]` 或 `-`/`+` 调速，`L` 切循环，`F1` 骨骼调试，`M` 压测，`Up`/`Down` 切 rig，`1`–`9` 与 `Left`/`Right` 切动画
+- 快捷键：`Space` 暂停恢复，`[`/`]` 或 `-`/`+` 调速，`L` 切循环，`F1` 骨骼调试，`F2` 换显示，`M` 压测，`Up`/`Down` 切 rig，`1`–`9` 与 `Left`/`Right` 切动画
 - rig 列表与动画组都从 skeleton JSON 动态读取：`assets/<dir>/<dir>_ske.json` 会全部自动加载，新增素材放进 `assets/` 即出现在面板里
 
 可用 rig（目录名即名称，按加载顺序）：

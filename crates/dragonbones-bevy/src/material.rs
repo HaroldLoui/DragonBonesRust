@@ -52,6 +52,11 @@ pub struct DragonBonesMaterial {
     pub texture: Handle<Image>,
     /// Fixed-function blend mode of this material (also the pipeline key).
     pub blend: DragonBonesBlend,
+    /// Per-material color offset added after the texture * vertex tint.
+    /// Shared materials keep `Vec4::ZERO`; slots with a non-zero DragonBones
+    /// color offset get a dedicated material instead (see `sync.rs`).
+    #[uniform(2)]
+    pub color_offset: Vec4,
 }
 
 impl From<&DragonBonesMaterial> for DragonBonesBlend {
@@ -138,6 +143,7 @@ impl DragonBonesMaterials {
         let handle = materials.add(DragonBonesMaterial {
             texture: image.clone(),
             blend,
+            color_offset: Vec4::ZERO,
         });
         self.materials.insert(
             key,

@@ -229,6 +229,21 @@ impl Animation {
         self.states.get_mut(id)
     }
 
+    /// Seeks the newest active state matching `animation_name` (and `layer`, when
+    /// non-negative) to `time`, without restarting it or dispatching skipped frames.
+    ///
+    /// Returns the state id on success. The next `advance_time` evaluates the
+    /// target frame directly; a paused state remains paused.
+    pub fn seek(&mut self, animation_name: &str, layer: i32, time: f64) -> Option<StateId> {
+        let id = self.get_state(animation_name, layer)?;
+        self.state_mut(id)?.seek_to(time);
+        // Force the next advance to rebuild the armature's cached frame cursor;
+        // otherwise the cache-frame early-out can keep the old pose.
+        self.cache_frame_invalidated = true;
+        self.animation_dirty = true;
+        Some(id)
+    }
+
     pub fn states(&self) -> impl DoubleEndedIterator<Item = (StateId, &AnimationState)> {
         self.play_order
             .iter()

@@ -17,8 +17,8 @@ use bevy::prelude::*;
 use bevy::time::Virtual;
 use bevy::transform::TransformPlugin;
 use dragonbones_bevy::{
-    AtlasAsset, DragonBonesArmature, DragonBonesChildArmature, DragonBonesInstance,
-    DragonBonesPlugin, DragonBonesRuntime, SkeletonAsset,
+    AtlasAsset, DragonBonesArmature, DragonBonesChildArmature, DragonBonesEvent,
+    DragonBonesInstance, DragonBonesPlugin, DragonBonesRuntime, DragonBonesSystems, SkeletonAsset,
 };
 use dragonbones_core::model::TextureAtlasData;
 use dragonbones_core::parser::ObjectDataParser;
@@ -174,6 +174,19 @@ fn atlas_json() -> Value {
     })
 }
 
+#[derive(Resource, Default)]
+struct Collected(Vec<DragonBonesEvent>);
+
+fn collect_events(mut reader: MessageReader<DragonBonesEvent>, mut collected: ResMut<Collected>) {
+    for event in reader.read() {
+        collected.0.push(event.clone());
+    }
+}
+
+fn take_events(app: &mut App) -> Vec<DragonBonesEvent> {
+    std::mem::take(&mut app.world_mut().resource_mut::<Collected>().0)
+}
+
 fn app_with_child_rig() -> (App, Entity) {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
@@ -183,6 +196,8 @@ fn app_with_child_rig() -> (App, Entity) {
         // GlobalTransform (the adapter reads the root GT).
         .add_plugins(TransformPlugin)
         .add_plugins(DragonBonesPlugin);
+    app.init_resource::<Collected>();
+    app.add_systems(Update, collect_events.after(DragonBonesSystems::Advance));
 
     let skeleton_data = ObjectDataParser::default()
         .parse_dragon_bones_data(&skeleton_json(), 1.0)
@@ -317,6 +332,8 @@ fn app_with_dual_display_rig() -> (App, Entity) {
         .init_asset::<Mesh>()
         .add_plugins(TransformPlugin)
         .add_plugins(DragonBonesPlugin);
+    app.init_resource::<Collected>();
+    app.add_systems(Update, collect_events.after(DragonBonesSystems::Advance));
 
     let skeleton_data = ObjectDataParser::default()
         .parse_dragon_bones_data(&dual_display_skeleton_json(), 1.0)
@@ -502,4 +519,53 @@ fn despawning_the_child_root_alone_releases_its_subtree_and_keeps_the_parent() {
     app.world_mut().entity_mut(parent_root).despawn();
     app.update();
     assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+}
+
+#[test]
+fn child_armature_events_are_forwarded() {
+    let (mut app, _) = app_with_child_rig();
+    let (_, _, child) = child_armature_root(&mut app);
+    let _ = take_events(&mut app);
+
+    {
+        let mut runtime = app
+            .world_mut()
+            .get_non_send_mut::<DragonBonesRuntime>()
+            .expect("runtime resource");
+        let armature = runtime.factory.armature_mut(child);
+        armature.animation.stop(None);
+        assert!(
+            armature.animation.play(Some("idle"), 1).is_some(),
+            "child idle animation exists"
+        );
+    }
+    app.world_mut()
+        .resource_mut::<bevy::time::Time>()
+        .advance_by(std::time::Duration::from_secs_f64(1.25));
+    app.update();
+
+    let events = take_events(&mut app);
+    assert!(
+        events.iter().any(|event| event.armature == child),
+        "child events must carry the child armature index: {:?}",
+        events
+            .iter()
+            .map(|event| (event.armature, event.event_type()))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.armature == child
+                && matches!(
+                    event.event_type(),
+                    dragonbones_core::event::EventObject::START
+                        | dragonbones_core::event::EventObject::COMPLETE
+                )
+        }),
+        "child start/complete event must reach Bevy: {:?}",
+        events
+            .iter()
+            .map(|event| (event.armature, event.event_type()))
+            .collect::<Vec<_>>()
+    );
 }
