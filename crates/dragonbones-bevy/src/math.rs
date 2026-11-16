@@ -49,6 +49,24 @@ pub fn slot_color(slot: &Slot) -> Color {
     color_from_transform(&slot.color_transform, slot.base.global_alpha)
 }
 
+/// DragonBones color offset (added after the multiplier). Kept separate from
+/// the vertex color because a per-slot uniform would break material sharing.
+#[must_use]
+pub fn color_offset_from_transform(transform: &ColorTransform) -> Vec4 {
+    Vec4::new(
+        transform.red_offset as f32,
+        transform.green_offset as f32,
+        transform.blue_offset as f32,
+        transform.alpha_offset as f32,
+    )
+}
+
+/// Effective color offset for a slot.
+#[must_use]
+pub fn slot_color_offset(slot: &Slot) -> Vec4 {
+    color_offset_from_transform(&slot.color_transform)
+}
+
 /// Slot draw order is the position in `Armature::slots` after the core's
 /// z-sort. Use a small negative z so Bevy's transparent phase draws earlier
 /// slots first.

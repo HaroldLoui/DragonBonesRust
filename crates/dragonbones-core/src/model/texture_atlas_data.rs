@@ -68,6 +68,18 @@ impl TextureAtlasData {
     }
 }
 
+/// Identifies one atlas page: the factory cache key plus the page index within
+/// that key's `Vec<TextureAtlasData>`.
+///
+/// `TextureData.parent` in TS is the `TextureAtlasData` object; Rust replaces
+/// the object reference with this value (D-1.1), so a slot can tell the adapter
+/// which atlas image its current texture belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TextureAtlasRef {
+    pub name: String,
+    pub index: usize,
+}
+
 /// - 贴图数据（`TextureData.ts`）。
 ///
 /// `parent` 为图集名引用（D-1.1）。

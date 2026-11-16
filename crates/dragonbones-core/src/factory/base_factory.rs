@@ -25,7 +25,7 @@ use crate::core::enums::ConstraintType;
 use crate::event::{EventDispatcher, EventObject};
 use crate::model::{
     ActionData, ArmatureData, DisplayData, DisplayKind, DragonBonesData, SkinData,
-    TextureAtlasData, TextureData,
+    TextureAtlasData, TextureAtlasRef, TextureData,
 };
 use crate::parser::ObjectDataParser;
 use indexmap::IndexMap;
@@ -107,8 +107,11 @@ pub struct BaseFactory {
     clock_path_scratch: Vec<ClockId>,
     /// Scratch member snapshot for clock traversal (allocation-free steady state).
     clock_members_scratch: Vec<(usize, MemberToken)>,
-    /// Global event manager (JS `_eventManager`); SOUND double-dispatch target.
+    /// 全局事件管理器（JS `_eventManager`）；SOUND double-dispatch target.
     event_manager: Option<Box<dyn EventDispatcher>>,
+    /// 子骨架 proxy 工厂。未设置时沿用 `NullArmatureProxy`（与 jsdump
+    /// `NullFactory._buildArmature` 对齐）；适配层可注入共享事件队列的 proxy。
+    proxy_factory: Option<Box<dyn Fn() -> Box<dyn ArmatureProxy>>>,
     /// 对齐 `_dataParser`（TS:57；TS 构造可注入 DataParser，Rust 恒 `ObjectDataParser`）。
     /// TS 的 `static _objectParser/_binaryParser` 惰性单例（:47-48）→ Rust 每工厂一个
     /// 实例（笔记 A.2-1 允许；JS 共享语义在单工厂场景等价）。
@@ -153,6 +156,7 @@ impl Default for BaseFactory {
             clock_path_scratch: Vec::new(),
             clock_members_scratch: Vec::new(),
             event_manager: None,
+            proxy_factory: None,
             parser: ObjectDataParser::default(),
             cache_rates: HashMap::new(),
         }
@@ -620,24 +624,38 @@ impl BaseFactory {
         &self,
         texture_atlas_name: &str,
         texture_name: &str,
-    ) -> Option<(TextureData, f64)> {
+    ) -> Option<(TextureData, f64, TextureAtlasRef)> {
         // ① :85-92
         if let Some(texture_atlas_list) = self.atlas_map.get(texture_atlas_name) {
-            for texture_atlas_data in texture_atlas_list {
+            for (index, texture_atlas_data) in texture_atlas_list.iter().enumerate() {
                 if let Some(texture_data) = texture_atlas_data.get_texture(texture_name) {
-                    return Some((texture_data.clone(), texture_atlas_data.scale));
+                    return Some((
+                        texture_data.clone(),
+                        texture_atlas_data.scale,
+                        TextureAtlasRef {
+                            name: texture_atlas_name.to_owned(),
+                            index,
+                        },
+                    ));
                 }
             }
         }
 
         // ② :94-105（注释原文：Will be search all data, if the autoSearch is true.）
         if self.auto_search {
-            for texture_atlas_list in self.atlas_map.values() {
-                for texture_atlas_data in texture_atlas_list {
+            for (name, texture_atlas_list) in &self.atlas_map {
+                for (index, texture_atlas_data) in texture_atlas_list.iter().enumerate() {
                     if texture_atlas_data.auto_search
                         && let Some(texture_data) = texture_atlas_data.get_texture(texture_name)
                     {
-                        return Some((texture_data.clone(), texture_atlas_data.scale));
+                        return Some((
+                            texture_data.clone(),
+                            texture_atlas_data.scale,
+                            TextureAtlasRef {
+                                name: name.clone(),
+                                index,
+                            },
+                        ));
                     }
                 }
             }
@@ -802,6 +820,132 @@ impl BaseFactory {
     pub fn get_armature_data(&self, name: &str, dragon_bones_name: &str) -> Option<&ArmatureData> {
         let (data, _data_name) = self.resolve_dragon_bones_data(dragon_bones_name, name)?;
         data.armatures.get(name)
+    }
+
+    /// 对齐 `getDragonBonesData(name)`（BaseFactory.ts:456-458）。
+    #[must_use]
+    pub fn get_dragon_bones_data(&self, name: &str) -> Option<&Arc<DragonBonesData>> {
+        self.data_map.get(name)
+    }
+
+    /// 对齐 `getTextureAtlasData(name)`（BaseFactory.ts:545-547）——同名多 atlas
+    /// 返回整个切片。
+    #[must_use]
+    pub fn get_texture_atlas_data(&self, name: &str) -> Option<&[TextureAtlasData]> {
+        self.atlas_map.get(name).map(Vec::as_slice)
+    }
+
+    /// 对齐 `getAllDragonBonesData()`（BaseFactory.ts:988-990）。
+    #[must_use]
+    pub fn get_all_dragon_bones_data(&self) -> &IndexMap<String, Arc<DragonBonesData>> {
+        &self.data_map
+    }
+
+    /// 对齐 `getAllTextureAtlasData()`（BaseFactory.ts:994-996）。
+    #[must_use]
+    pub fn get_all_texture_atlas_data(&self) -> &IndexMap<String, Vec<TextureAtlasData>> {
+        &self.atlas_map
+    }
+
+    /// 对齐 `updateTextureAtlases(textureAtlases, name)`（BaseFactory.ts:424-433）。
+    ///
+    /// 逐页 `copyFrom` 到已注册的 `TextureAtlasData`；缺少的页保持原值。
+    pub fn update_texture_atlases(&mut self, texture_atlases: &[TextureAtlasData], name: &str) {
+        let Some(existing) = self.atlas_map.get_mut(name) else {
+            return;
+        };
+        for (index, texture_atlas) in existing.iter_mut().enumerate() {
+            if let Some(next) = texture_atlases.get(index) {
+                texture_atlas.copy_from(next);
+            }
+        }
+    }
+
+    /// Looks up a texture on one specific atlas page (not a name-wide search).
+    fn _get_texture_data_from_page(
+        &self,
+        atlas_name: &str,
+        index: usize,
+        texture_name: &str,
+    ) -> Option<(TextureData, f64, TextureAtlasRef)> {
+        let texture_atlas = self.atlas_map.get(atlas_name)?.get(index)?;
+        let texture_data = texture_atlas.get_texture(texture_name)?;
+        Some((
+            texture_data.clone(),
+            texture_atlas.scale,
+            TextureAtlasRef {
+                name: atlas_name.to_owned(),
+                index,
+            },
+        ))
+    }
+
+    /// Re-resolves one slot's current texture from its recorded atlas page.
+    ///
+    /// Used after `update_texture_atlases` / an adapter atlas-page swap so the
+    /// slot's `TextureData` snapshot and `content_revision` follow the new page.
+    pub fn refresh_slot_texture(&mut self, armature_idx: ArmatureIdx, slot_idx: SlotIdx) -> bool {
+        let Some((atlas_name, page, texture_name, frame_index)) = ({
+            let armature = self.armature(armature_idx);
+            armature
+                .slots
+                .iter()
+                .find(|slot| slot.idx == slot_idx)
+                .and_then(|slot| {
+                    let frame_index = slot.display_frame?;
+                    let atlas = slot
+                        .display_frames
+                        .get(frame_index)?
+                        .texture_atlas
+                        .as_ref()?;
+                    let texture = slot
+                        .display_frames
+                        .get(frame_index)?
+                        .texture_data
+                        .as_ref()?;
+                    Some((
+                        atlas.name.clone(),
+                        atlas.index,
+                        texture.name.clone(),
+                        frame_index,
+                    ))
+                })
+        }) else {
+            return false;
+        };
+
+        let resolved = self._get_texture_data_from_page(&atlas_name, page, &texture_name);
+        let armature = self.armature_mut(armature_idx);
+        let Some(slot) = armature.slots.iter_mut().find(|slot| slot.idx == slot_idx) else {
+            return false;
+        };
+        match resolved {
+            Some((texture, scale, atlas)) => slot.replace_texture_data_with_atlas_ref(
+                Some(texture),
+                scale,
+                Some(atlas),
+                frame_index as i32,
+            ),
+            None => slot.replace_texture_data(None, frame_index as i32),
+        }
+        true
+    }
+
+    /// 对齐 `removeDragonBonesData(name, disposeData)`；Rust 用返回值表达
+    /// “数据仍可被调用方持有”（`disposeData` 的池回收无对应物）。
+    pub fn remove_dragon_bones_data(&mut self, name: &str) -> Option<Arc<DragonBonesData>> {
+        self.data_map.shift_remove(name)
+    }
+
+    /// 对齐 `removeTextureAtlasData(name, disposeData)`。
+    pub fn remove_texture_atlas_data(&mut self, name: &str) -> Option<Vec<TextureAtlasData>> {
+        self.atlas_map.shift_remove(name)
+    }
+
+    /// 对齐 `clear(disposeData)`（BaseFactory.ts:647-666）：清空 data/atlas 缓存。
+    pub fn clear_data(&mut self) {
+        self.data_map.clear();
+        self.atlas_map.clear();
     }
 
     // ------------------------------------------------------------------
@@ -1053,6 +1197,27 @@ impl BaseFactory {
     // 阶段 6：replace（P1-5）
     // ------------------------------------------------------------------
 
+    /// 解析一个替换显示对应的 `TextureData`（仅 Image/Mesh 有纹理）。
+    ///
+    /// 纹理查找沿用 build 时的图集 key；TS 在 `_getSlotDisplay` 里通过
+    /// `displayData.parent...name` 反推 data name，Rust 的 data 层不可变，故
+    /// 在 build 时把 key 记到 [`Armature::texture_atlas_name`] 上。
+    fn resolve_display_texture(
+        &self,
+        armature_idx: ArmatureIdx,
+        display: &DisplayData,
+        atlas_name: Option<&str>,
+    ) -> Option<(TextureData, f64, TextureAtlasRef)> {
+        let stored = self.armature(armature_idx).texture_atlas_name.clone();
+        let atlas_name = atlas_name.unwrap_or(&stored);
+        match display.kind {
+            DisplayKind::Image { .. } | DisplayKind::Mesh { .. } => {
+                self._get_texture_data(atlas_name, &display.path)
+            }
+            _ => None,
+        }
+    }
+
     /// 对齐 `BaseFactory.replaceDisplay`（BaseFactory.ts:720-748）。
     pub fn replace_display(
         &mut self,
@@ -1061,9 +1226,25 @@ impl BaseFactory {
         display_data: Option<DisplayData>,
         display_index: i32,
     ) {
+        let _ = self.replace_display_checked(armature_idx, slot_idx, display_data, display_index);
+    }
+
+    /// `replace_display` 的带校验版本：同时刷新帧的 `TextureData`，返回是否命中槽。
+    fn replace_display_checked(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        slot_idx: SlotIdx,
+        display_data: Option<DisplayData>,
+        display_index: i32,
+    ) -> bool {
+        // 先解析纹理（不可变借用），再做槽的可变借用。
+        let resolved = display_data
+            .as_ref()
+            .and_then(|display| self.resolve_display_texture(armature_idx, display, None));
+
         let armature = self.armature_mut(armature_idx);
         let Some(slot) = armature.slots.iter_mut().find(|slot| slot.idx == slot_idx) else {
-            return;
+            return false;
         };
         let mut display_index = display_index;
         if display_index < 0 {
@@ -1072,7 +1253,30 @@ impl BaseFactory {
                 display_index = 0;
             }
         }
+
         slot.replace_display_data(display_data.clone(), display_index);
+        match display_data.as_ref() {
+            Some(display)
+                if matches!(
+                    display.kind,
+                    DisplayKind::Image { .. } | DisplayKind::Mesh { .. }
+                ) =>
+            {
+                match resolved {
+                    Some((texture, atlas_scale, atlas)) => slot
+                        .replace_texture_data_with_atlas_ref(
+                            Some(texture),
+                            atlas_scale,
+                            Some(atlas),
+                            display_index,
+                        ),
+                    None => slot.replace_texture_data(None, display_index),
+                }
+            }
+            // 空显示 / 非贴图显示：清掉旧纹理，避免沿用上一帧的 region。
+            _ => slot.replace_texture_data(None, display_index),
+        }
+
         let handle = display_data
             .as_ref()
             .and_then(|display| match display.kind {
@@ -1083,6 +1287,7 @@ impl BaseFactory {
                 | DisplayKind::Path { .. } => None,
             });
         slot.replace_display(handle, display_index);
+        true
     }
 
     /// 对齐 `BaseFactory.replaceSlotDisplay`（BaseFactory.ts:783-796）。
@@ -1110,8 +1315,7 @@ impl BaseFactory {
         let Some(display) = display else {
             return false;
         };
-        self.replace_display(armature_idx, slot_idx, Some(display), display_index);
-        true
+        self.replace_display_checked(armature_idx, slot_idx, Some(display), display_index)
     }
 
     /// 对齐 `BaseFactory.replaceSlotDisplayList`（BaseFactory.ts:800-821）。
@@ -1146,11 +1350,38 @@ impl BaseFactory {
         }
     }
 
-    /// 对齐 `BaseFactory.replaceSkin`（BaseFactory.ts:860-900）。
+    /// 对齐 `BaseFactory.replaceSkin`（BaseFactory.ts:860-900）——纹理从
+    /// armature 构建时的图集 key 解析。
     pub fn replace_skin(
         &mut self,
         armature_idx: ArmatureIdx,
         db_name: &str,
+        skin: &SkinData,
+        is_override: bool,
+        exclude: &[&str],
+    ) -> bool {
+        let atlas_name = self.armature(armature_idx).texture_atlas_name.clone();
+        self.replace_skin_with_atlas(
+            armature_idx,
+            db_name,
+            &atlas_name,
+            skin,
+            is_override,
+            exclude,
+        )
+    }
+
+    /// 跨 data 换装：显式指定皮肤所属的 data key 与图集 key。
+    ///
+    /// 用于皮肤来自另一份 `DragonBonesData` / `_tex.json` 的场景；调用方需先把
+    /// source data 与 atlas 注册到 `data_map` / `atlas_map`，并把图集页加入
+    /// 适配层的 page 映射。`is_override` 通常传 `true`（没有同 data 的默认
+    /// 皮肤可回退）。
+    pub fn replace_skin_with_atlas(
+        &mut self,
+        armature_idx: ArmatureIdx,
+        db_name: &str,
+        atlas_name: &str,
         skin: &SkinData,
         is_override: bool,
         exclude: &[&str],
@@ -1165,6 +1396,25 @@ impl BaseFactory {
                     .and_then(|name| armature.get_skin(name))
                     .cloned()
             });
+        // A1 只支持贴图 / mesh 显示；子骨架 display 需要运行时 build 子骨架，
+        // 留给 A2。先整体校验，避免部分槽被改写后才失败。
+        for slot_name in skin.displays.keys() {
+            if exclude.contains(&slot_name.as_str()) {
+                continue;
+            }
+            if let Some(displays) = skin.get_displays(slot_name)
+                && displays
+                    .iter()
+                    .flatten()
+                    .any(|display| matches!(display.kind, DisplayKind::Armature { .. }))
+            {
+                log::warn!(
+                    "replace_skin: armature display is not supported yet (slot `{slot_name}`)"
+                );
+                return false;
+            }
+        }
+
         let mut success = false;
         for slot_name in skin.displays.keys() {
             if exclude.contains(&slot_name.as_str()) {
@@ -1183,28 +1433,55 @@ impl BaseFactory {
                             .map(<[Option<DisplayData>]>::to_vec)
                     }
                 });
-            let armature = self.armature_mut(armature_idx);
-            let Some(slot) = armature
-                .slots
-                .iter_mut()
-                .find(|slot| slot.slot_name == *slot_name)
-            else {
-                continue;
-            };
             if let Some(displays) = displays {
+                // 先解析纹理（不可变借用），再拿槽的可变借用。
+                let textures: Vec<Option<(TextureData, f64, TextureAtlasRef)>> = displays
+                    .iter()
+                    .map(|display| {
+                        display.as_ref().and_then(|display| {
+                            self.resolve_display_texture(armature_idx, display, Some(atlas_name))
+                        })
+                    })
+                    .collect();
+                let armature = self.armature_mut(armature_idx);
+                let Some(slot) = armature
+                    .slots
+                    .iter_mut()
+                    .find(|slot| slot.slot_name == *slot_name)
+                else {
+                    continue;
+                };
                 slot.set_display_frame_count(displays.len());
-                for (index, display) in displays.into_iter().enumerate() {
-                    slot.replace_raw_display_data(display.clone(), index as i32);
+                for (index, (display, texture)) in displays.into_iter().zip(textures).enumerate() {
+                    let index = index as i32;
+                    slot.replace_raw_display_data(display.clone(), index);
+                    if let Some((texture, atlas_scale, atlas)) = texture {
+                        slot.replace_texture_data_with_atlas_ref(
+                            Some(texture),
+                            atlas_scale,
+                            Some(atlas),
+                            index,
+                        );
+                    } else {
+                        slot.replace_texture_data(None, index);
+                    }
                     let handle = display.as_ref().and_then(|display| match display.kind {
                         DisplayKind::Image { .. } => Some(slot.raw_display),
                         DisplayKind::Mesh { .. } => Some(slot.mesh_display),
                         _ => None,
                     });
-                    slot.replace_display(handle, index as i32);
+                    slot.replace_display(handle, index);
                 }
                 success = true;
             } else if is_override {
-                slot.set_display_frame_count(0);
+                let armature = self.armature_mut(armature_idx);
+                if let Some(slot) = armature
+                    .slots
+                    .iter_mut()
+                    .find(|slot| slot.slot_name == *slot_name)
+                {
+                    slot.set_display_frame_count(0);
+                }
             }
         }
         success
@@ -1471,11 +1748,12 @@ impl BaseFactory {
                         // Rust 追加“命中图集 scale”随帧登记（TS `_textureData.parent.scale`，
                         // Slot.ts:412；见 `_get_texture_data` 文档）。
                         match resolved {
-                            Some((texture_data, atlas_scale)) => {
+                            Some((texture_data, atlas_scale, atlas)) => {
                                 armature.slots[slot_idx.index()]
-                                    .replace_texture_data_with_atlas_scale(
+                                    .replace_texture_data_with_atlas_ref(
                                         Some(texture_data),
                                         atlas_scale,
+                                        Some(atlas),
                                         index,
                                     );
                             }
@@ -1522,12 +1800,18 @@ impl BaseFactory {
         display_data: &DisplayData,
         parent_idx: ArmatureIdx,
     ) -> Option<ArmatureIdx> {
+        // The factory borrow must end before `build_armature_inner` mutably
+        // borrows `self`.
+        let proxy: Box<dyn ArmatureProxy> = match self.proxy_factory.as_ref() {
+            Some(factory) => factory(),
+            None => Box::new(NullArmatureProxy::new()),
+        };
         self.build_armature_inner(
             &display_data.path,
             &data_package.data_name,
             "",
             &data_package.texture_atlas_name,
-            Box::new(NullArmatureProxy::new()),
+            proxy,
             parent_idx.0,
         )
     }
@@ -1720,6 +2004,8 @@ impl BaseFactory {
             proxy,
             DisplayHandle::Armature(idx),
         );
+        // 记下 build 时的图集 key：运行时 replace_* 解析替换显示的纹理会用到。
+        armature.texture_atlas_name = data_package.texture_atlas_name.clone();
 
         // TS:709-711 固定顺序
         self._build_bones(&data_package, &mut armature);
@@ -1986,6 +2272,20 @@ impl BaseFactory {
 
     pub fn event_manager_mut(&mut self) -> Option<&mut (dyn EventDispatcher + 'static)> {
         self.event_manager.as_deref_mut()
+    }
+
+    /// Installs the proxy factory used for child armatures.
+    ///
+    /// The default is [`NullArmatureProxy`] (the reference `NullFactory`
+    /// behaviour). Adapters that bridge events should install a factory that
+    /// returns their proxy bound to the same event queue as the root armature.
+    pub fn set_proxy_factory(&mut self, factory: impl Fn() -> Box<dyn ArmatureProxy> + 'static) {
+        self.proxy_factory = Some(Box::new(factory));
+    }
+
+    /// Restores the default [`NullArmatureProxy`] child factory.
+    pub fn clear_proxy_factory(&mut self) {
+        self.proxy_factory = None;
     }
 }
 

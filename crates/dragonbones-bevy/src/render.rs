@@ -177,6 +177,11 @@ pub struct DragonBonesSlotVisual {
     /// Last color baked into the mesh's `ATTRIBUTE_COLOR`; the slot only rewrites
     /// vertex colors when this changes.
     pub color: Color,
+    /// Last color offset applied by the slot's material.
+    pub color_offset: Vec4,
+    /// Dedicated material for a non-zero color offset (shared materials always
+    /// carry zero offset). Removed with the armature.
+    pub(crate) offset_material: Option<Handle<DragonBonesMaterial>>,
     pub(crate) weighted: Option<WeightedMeshData>,
     pub(crate) unskinned: Option<UnskinnedMeshData>,
 }
@@ -212,6 +217,8 @@ pub(crate) fn spawn_slot(
     atlas_image: &Handle<Image>,
     atlas_size: UVec2,
     armature_scale: f64,
+    color_offset: Vec4,
+    offset_material: Option<Handle<DragonBonesMaterial>>,
 ) -> (Entity, Handle<Mesh>) {
     let (mesh, kind, weighted, unskinned) =
         build_slot_visual(slot, armature, atlas_size, armature_scale);
@@ -235,6 +242,8 @@ pub(crate) fn spawn_slot(
                 last_display_frame: slot.display_frame,
                 content_hash: crate::hash::slot_visual_hash(slot),
                 color: slot_color(slot),
+                color_offset,
+                offset_material,
                 weighted,
                 unskinned,
             },

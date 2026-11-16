@@ -25,7 +25,8 @@ use dragonbones_bevy::prelude::*;
 /// lists the current rig's animations and plays whichever one you click; below
 /// it are preview controls with a clickable seek bar. Space pauses, 1-9 and
 /// Left/Right cycle animations, `[`/`]` change speed, F1 toggles the bone
-/// gizmos, and M adds eight extra instances of the current rig.
+/// gizmos, F2 cycles the first multi-frame slot's display, F3 toggles a white
+/// color-offset flash, and M adds eight extra instances of the current rig.
 fn main() {
     let rigs = match parse_cli() {
         Cli::Help => {
@@ -113,6 +114,7 @@ fn main() {
                 handle_rig_keys,
                 apply_selection,
                 handle_preview_keys,
+                handle_content_keys,
                 handle_animation_keys,
                 apply_animation_request,
                 sync_animation_panel,
@@ -458,6 +460,8 @@ struct Previewer {
     looping: bool,
     debug_overlay: bool,
     stress: bool,
+    /// F3: apply a white color offset to every slot (hit-flash demo).
+    flash: bool,
     /// Smoothed frames per second, purely for the status line.
     fps: f32,
 }
@@ -470,6 +474,7 @@ impl Default for Previewer {
             looping: true,
             debug_overlay: false,
             stress: false,
+            flash: false,
             fps: 0.0,
         }
     }
@@ -1200,7 +1205,6 @@ fn on_timeline_click(
     click: On<PointerClick>,
     tracks: Query<(&ComputedNode, &UiGlobalTransform), With<TimelineTrack>>,
     snapshot: Res<TimelineSnapshot>,
-    preview: Res<Previewer>,
     main: Query<Entity, With<MainRig>>,
     mut commands: MessageWriter<DragonBonesCommand>,
 ) {
@@ -1217,16 +1221,7 @@ fn on_timeline_click(
     let left = center.x - computed.size.x / 2.0;
     let fraction = ((click.pointer.position.x - left) / computed.size.x).clamp(0.0, 1.0) as f64;
     let position = fraction * snapshot.total;
-    let play_times = if preview.looping { -1 } else { 1 };
-    commands.write(DragonBonesCommand::play_config(
-        root,
-        DragonBonesPlayConfig::new(snapshot.animation.clone())
-            .with_play_times(play_times)
-            .with_position(position),
-    ));
-    if preview.paused {
-        commands.write(DragonBonesCommand::pause(root));
-    }
+    commands.write(DragonBonesCommand::seek(root, position));
     info!(
         "seek: {} to {position:.2}s ({:.0}%)",
         snapshot.animation,
@@ -1407,6 +1402,93 @@ fn handle_preview_keys(
             "preview: stress {}",
             if preview.stress { "on" } else { "off" }
         );
+    }
+}
+
+/// F2 cycles the first multi-frame slot's display through the runtime replace
+/// command, exercising the same path a game would use for weapon/skin swaps.
+fn handle_content_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    runtime: NonSend<DragonBonesRuntime>,
+    main: Query<Entity, With<MainRig>>,
+    instances: Query<&DragonBonesInstance>,
+    mut preview: ResMut<Previewer>,
+    mut commands: MessageWriter<DragonBonesCommand>,
+) {
+    if keys.just_pressed(KeyCode::F3) {
+        let Ok(root) = main.single() else {
+            return;
+        };
+        let Ok(instance) = instances.get(root) else {
+            return;
+        };
+        let Some(armature) = runtime.armature(instance.armature) else {
+            return;
+        };
+        preview.flash = !preview.flash;
+        for slot in &armature.slots {
+            let mut color = slot.color_transform;
+            if preview.flash {
+                // Additive white flash; offsets are applied by the material
+                // uniform, so this exercises the E color-offset path.
+                color.red_offset = 0.55;
+                color.green_offset = 0.55;
+                color.blue_offset = 0.55;
+                color.alpha_offset = 0.0;
+            } else {
+                color.red_offset = 0.0;
+                color.green_offset = 0.0;
+                color.blue_offset = 0.0;
+                color.alpha_offset = 0.0;
+            }
+            commands.write(DragonBonesCommand::set_slot_tint(
+                root,
+                slot.slot_name.clone(),
+                color,
+            ));
+        }
+        info!(
+            "content: color offset flash {}",
+            if preview.flash { "on" } else { "off" }
+        );
+        return;
+    }
+
+    if !keys.just_pressed(KeyCode::F2) {
+        return;
+    }
+    let Ok(root) = main.single() else {
+        return;
+    };
+    let Ok(instance) = instances.get(root) else {
+        return;
+    };
+    let Some(armature) = runtime.armature(instance.armature) else {
+        return;
+    };
+    for slot in &armature.slots {
+        if slot.display_frames.len() < 2 {
+            continue;
+        }
+        let current = slot.display_index.max(0) as usize % slot.display_frames.len();
+        let next = (current + 1) % slot.display_frames.len();
+        let Some(display_data) = slot.display_frames[next]
+            .raw_display_data
+            .as_ref()
+            .or(slot.display_frames[next].display_data.as_ref())
+        else {
+            continue;
+        };
+        commands.write(DragonBonesCommand::replace_display(
+            root,
+            slot.slot_name.clone(),
+            display_data.name.clone(),
+        ));
+        info!(
+            "content: slot `{}` display {} -> {}",
+            slot.slot_name, current, display_data.name
+        );
+        return;
     }
 }
 
@@ -1782,12 +1864,13 @@ fn update_preview_status(
         .and_then(|instance| runtime.armature(instance.armature))
         .map_or(0, |armature| armature.bones.len());
     let status = format!(
-        "fps {:.0} | speed {:.3}x | loop {} | {} | bones {bones} | gizmos {} | stress {}",
+        "fps {:.0} | speed {:.3}x | loop {} | {} | bones {bones} | gizmos {} | flash {} | stress {}",
         preview.fps,
         preview.speed,
         if preview.looping { "on" } else { "off" },
         if preview.paused { "paused" } else { "playing" },
         if preview.debug_overlay { "on" } else { "off" },
+        if preview.flash { "on" } else { "off" },
         if preview.stress { "on" } else { "off" },
     );
     for mut text in &mut texts {

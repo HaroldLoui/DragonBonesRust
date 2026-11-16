@@ -9,14 +9,16 @@ use dragonbones_core::factory::BaseFactory;
 use crate::blend::DragonBonesBlend;
 use crate::hash::{armature_pose_hash, slot_visual_hash};
 use crate::material::{DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
-use crate::math::{matrix_to_affine3a, slot_color, slot_z, write_global_transform};
+use crate::math::{
+    matrix_to_affine3a, slot_color, slot_color_offset, slot_z, write_global_transform,
+};
 use crate::render::{
     DragonBonesSlotVisual, SlotRenderKind, apply_vertex_color, build_slot_visual, slot_deform,
     update_surface_positions, update_unskinned_positions, update_weighted_positions,
 };
 use crate::runtime::{
-    DragonBonesChildArmature, DragonBonesInstance, DragonBonesRuntime, DragonBonesSlot,
-    DragonBonesSyncConfig,
+    DragonBonesBoneAttachment, DragonBonesChildArmature, DragonBonesInstance, DragonBonesRuntime,
+    DragonBonesSlot, DragonBonesSyncConfig,
 };
 
 /// B2 transform/color/visibility sync.
@@ -75,6 +77,7 @@ pub(crate) struct SyncScratch {
 pub(crate) fn sync_dragonbones(
     mut scratch: Local<SyncScratch>,
     config: Res<DragonBonesSyncConfig>,
+    sorting: Res<crate::runtime::DragonBonesSorting>,
     mut runtime: NonSendMut<DragonBonesRuntime>,
     mut roots: Query<
         (
@@ -317,7 +320,13 @@ pub(crate) fn sync_dragonbones(
             SlotRenderKind::ArmatureSpace | SlotRenderKind::Empty => root_affine,
         };
         let mut world = world;
-        world.translation.z = root_affine.translation.z + slot_z(order);
+        let armature_band = bindings
+            .get(&slot_ref.armature)
+            .filter(|binding| binding.parent.is_none())
+            .map_or(0.0, |_| {
+                sorting.armature_z_step * slot_ref.armature.index() as f32
+            });
+        world.translation.z = root_affine.translation.z + armature_band + slot_z(order);
         write_global_transform(&mut global, world);
 
         let parent_visible = armature
@@ -336,6 +345,51 @@ pub(crate) fn sync_dragonbones(
             *visibility = next_visibility;
         }
 
+        // A runtime replace can move the slot to a different atlas page. The
+        // core records the page identity; refresh the slot's image/size before
+        // the mesh rebuild and swap the shared material.
+        let mut atlas_page_changed = false;
+        if let Some((image, size)) = slot
+            .texture_atlas_ref()
+            .and_then(|atlas| {
+                bindings.get(&slot_ref.armature).and_then(|binding| {
+                    binding
+                        .atlas_sets
+                        .get(&atlas.name)
+                        .and_then(|pages| pages.get(atlas.index))
+                })
+            })
+            .map(|(image, size)| (image.clone(), *size))
+            && (visual.atlas_image != image || visual.atlas_size != size)
+        {
+            if let Some(dynamic) = visual.offset_material.clone() {
+                if let Some(mut asset) = materials.get_mut(&dynamic) {
+                    asset.texture = image.clone();
+                }
+                *material = MeshMaterial2d(dynamic);
+            } else {
+                let key = MaterialKey::new(&image, visual.blend);
+                let held = bindings
+                    .get(&slot_ref.armature)
+                    .is_some_and(|binding| binding.materials.contains(&key));
+                let handle = if held {
+                    material_cache.handle(key)
+                } else {
+                    let handle = material_cache.acquire(&image, visual.blend, &mut materials);
+                    if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
+                        binding.materials.insert(key);
+                    }
+                    Some(handle)
+                };
+                if let Some(handle) = handle {
+                    *material = MeshMaterial2d(handle);
+                }
+            }
+            visual.atlas_image = image;
+            visual.atlas_size = size;
+            atlas_page_changed = true;
+        }
+
         // The slot's blend mode is part of the pose hash, so a runtime change
         // marks the armature dirty and lands here: swap to the shared material
         // of the new `(atlas page, blend)` pair. `binding.materials` is updated
@@ -343,23 +397,30 @@ pub(crate) fn sync_dragonbones(
         // frame only acquire the shared material once.
         let blend = DragonBonesBlend::from_core(slot.blend_mode);
         if visual.blend != blend {
-            let key = MaterialKey::new(&visual.atlas_image, blend);
-            let held = bindings
-                .get(&slot_ref.armature)
-                .is_some_and(|binding| binding.materials.contains(&key));
-            let next = if held {
-                material_cache.handle(key)
-            } else {
-                let handle = material_cache.acquire(&visual.atlas_image, blend, &mut materials);
-                if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
-                    binding.materials.insert(key);
+            if let Some(dynamic) = visual.offset_material.clone() {
+                if let Some(mut asset) = materials.get_mut(&dynamic) {
+                    asset.blend = blend;
                 }
-                Some(handle)
-            };
-            if let Some(handle) = next {
-                *material = MeshMaterial2d(handle);
-                visual.blend = blend;
+                *material = MeshMaterial2d(dynamic);
+            } else {
+                let key = MaterialKey::new(&visual.atlas_image, blend);
+                let held = bindings
+                    .get(&slot_ref.armature)
+                    .is_some_and(|binding| binding.materials.contains(&key));
+                let next = if held {
+                    material_cache.handle(key)
+                } else {
+                    let handle = material_cache.acquire(&visual.atlas_image, blend, &mut materials);
+                    if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
+                        binding.materials.insert(key);
+                    }
+                    Some(handle)
+                };
+                if let Some(handle) = next {
+                    *material = MeshMaterial2d(handle);
+                }
             }
+            visual.blend = blend;
         }
 
         // Per-slot tint lives in the mesh vertex color attribute, so every slot
@@ -368,7 +429,10 @@ pub(crate) fn sync_dragonbones(
         let visual_hash = slot_visual_hash(slot);
         // Rebuild when the display frame changes *or* the frame content changed
         // without an index change (e.g. `replace_texture_data` / `replace_skin`).
-        if visual.last_display_frame != slot.display_frame || visual.content_hash != visual_hash {
+        if atlas_page_changed
+            || visual.last_display_frame != slot.display_frame
+            || visual.content_hash != visual_hash
+        {
             // `build_slot_visual` already bakes `color` into vertex colors.
             let (mesh, kind, weighted, unskinned) = build_slot_visual(
                 slot,
@@ -410,6 +474,58 @@ pub(crate) fn sync_dragonbones(
             apply_vertex_color(&mut mesh, color);
             visual.color = color;
         }
+
+        // DragonBones color offset lives in the material (a uniform cannot be
+        // per-slot on a shared material). Zero-offset slots keep the shared
+        // material; non-zero slots get one dedicated material whose uniform is
+        // updated in place.
+        let color_offset = slot_color_offset(slot);
+        if visual.color_offset != color_offset {
+            if color_offset != Vec4::ZERO {
+                if let Some(handle) = visual.offset_material.clone() {
+                    if let Some(mut asset) = materials.get_mut(&handle) {
+                        asset.color_offset = color_offset;
+                    }
+                    *material = MeshMaterial2d(handle);
+                } else {
+                    let handle = materials.add(DragonBonesMaterial {
+                        texture: visual.atlas_image.clone(),
+                        blend: visual.blend,
+                        color_offset,
+                    });
+                    if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
+                        binding.dynamic_materials.push(handle.clone());
+                    }
+                    visual.offset_material = Some(handle.clone());
+                    *material = MeshMaterial2d(handle);
+                }
+            } else if let Some(handle) = visual.offset_material.take() {
+                materials.remove(handle.id());
+                if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
+                    binding
+                        .dynamic_materials
+                        .retain(|dynamic| dynamic.id() != handle.id());
+                }
+                let key = MaterialKey::new(&visual.atlas_image, visual.blend);
+                let held = bindings
+                    .get(&slot_ref.armature)
+                    .is_some_and(|binding| binding.materials.contains(&key));
+                let shared = if held {
+                    material_cache.handle(key)
+                } else {
+                    let handle =
+                        material_cache.acquire(&visual.atlas_image, visual.blend, &mut materials);
+                    if let Some(binding) = bindings.get_mut(&slot_ref.armature) {
+                        binding.materials.insert(key);
+                    }
+                    Some(handle)
+                };
+                if let Some(shared) = shared {
+                    *material = MeshMaterial2d(shared);
+                }
+            }
+            visual.color_offset = color_offset;
+        }
     }
 }
 
@@ -434,4 +550,38 @@ fn slot_order_map(
             .map(|(order, slot)| (slot.idx, order))
             .collect(),
     )
+}
+
+/// Positions [`DragonBonesBoneAttachment`] entities after the armature sync.
+///
+/// Attachment entities are deliberately kept outside the transform hierarchy:
+/// if they were children of a bone root, Bevy's propagation would recompute
+/// their `GlobalTransform` from a stale local `Transform` (and the adapter's
+/// direct `GlobalTransform` writes do not mark descendants as changed).
+pub(crate) fn sync_bone_attachments(
+    runtime: NonSend<DragonBonesRuntime>,
+    instances: Query<&DragonBonesInstance>,
+    roots: Query<&GlobalTransform, Without<DragonBonesBoneAttachment>>,
+    mut attachments: Query<(&DragonBonesBoneAttachment, &mut GlobalTransform)>,
+) {
+    for (attachment, mut global) in &mut attachments {
+        let Ok(instance) = instances.get(attachment.root) else {
+            continue;
+        };
+        let Some(armature) = runtime.armature(instance.armature) else {
+            continue;
+        };
+        let Some(bone_idx) = armature.get_bone(&attachment.bone) else {
+            continue;
+        };
+        let Some(bone) = armature.bones.get(bone_idx.index()) else {
+            continue;
+        };
+        let Ok(root) = roots.get(attachment.root) else {
+            continue;
+        };
+        let bone_world = matrix_to_affine3a(&bone.base.global_transform_matrix, 0.0);
+        let world = root.affine() * bone_world * attachment.offset.compute_affine();
+        write_global_transform(&mut global, world);
+    }
 }

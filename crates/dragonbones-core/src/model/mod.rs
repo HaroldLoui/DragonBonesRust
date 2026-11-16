@@ -24,5 +24,5 @@ pub use constraint_data::{ConstraintData, ConstraintKind};
 pub use display_data::{DisplayData, DisplayKind, GeometryData, WeightData};
 pub use dragon_bones_data::{DragonBonesData, IrArrays, RootInfo};
 pub use skin_data::SkinData;
-pub use texture_atlas_data::{TextureAtlasData, TextureData};
+pub use texture_atlas_data::{TextureAtlasData, TextureAtlasRef, TextureData};
 pub use user_data::{ActionData, UserData};

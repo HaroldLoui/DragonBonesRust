@@ -14,6 +14,7 @@ use crate::asset::{AtlasAsset, AtlasAssetLoader, SkeletonAsset, SkeletonAssetLoa
 use crate::blend::DragonBonesBlend;
 use crate::events::{BevyArmatureProxy, DragonBonesEvent, DragonBonesEventQueue};
 use crate::material::{self, DragonBonesMaterial, DragonBonesMaterials, MaterialKey};
+use crate::math::matrix_to_affine3a;
 use crate::player::{DragonBonesCommand, apply_dragonbones_commands};
 use crate::render;
 use crate::sync;
@@ -46,8 +47,18 @@ pub(crate) struct ArmatureBinding {
     /// at runtime (the old key is kept until the armature is disposed, which
     /// bounds the set to at most four keys per atlas page).
     pub(crate) materials: HashSet<MaterialKey>,
-    dragon_bones_key: String,
-    atlas_key: String,
+    pub(crate) dragon_bones_key: String,
+    pub(crate) atlas_key: String,
+    /// Atlas pages per factory atlas key. The primary build key maps to the
+    /// pages passed to `spawn_armature_slots`; cross-data skin replacement adds
+    /// further keys here.
+    pub(crate) atlas_sets: HashMap<String, Vec<(Handle<Image>, UVec2)>>,
+    /// Extra `(data, atlas)` registrations made by cross-data skin replacement;
+    /// released with the armature.
+    pub(crate) extra_registrations: Vec<(String, String)>,
+    /// Per-slot materials created for non-zero color offsets (not shared, so
+    /// they are not in `materials`).
+    pub(crate) dynamic_materials: Vec<Handle<DragonBonesMaterial>>,
     /// Root affine written by the last sync, used for the armature-level dirty
     /// check.
     pub(crate) last_root: Option<Affine3A>,
@@ -83,6 +94,13 @@ impl Default for DragonBonesPlaybackState {
     }
 }
 
+/// Optional extra atlases for a skeleton whose textures span multiple
+/// `_tex.json` files. The primary [`DragonBonesArmature::atlas`] stays required;
+/// extras are registered under the same factory cache key, in this order, and
+/// their page index matches the core [`dragonbones_core::model::TextureAtlasRef`].
+#[derive(Component, Clone, Debug, Default)]
+pub struct DragonBonesExtraAtlases(pub Vec<Handle<AtlasAsset>>);
+
 /// Marks the root entity spawned for a child-armature display.
 ///
 /// Child armatures are built by core when a slot's display is an armature; the
@@ -95,6 +113,23 @@ pub struct DragonBonesChildArmature {
     pub parent_slot: Entity,
     /// Core armature instance of the parent.
     pub parent: ArmatureIdx,
+}
+
+/// Attaches an entity to a bone without spawning bone ECS entities.
+///
+/// Spawn the attachment as a **root** entity (no `ChildOf`) with this component
+/// and a `GlobalTransform`; `sync_bone_attachments` writes
+/// `root_world * bone_world * offset` after the normal slot sync. Keeping the
+/// attachment out of Bevy's transform hierarchy avoids propagation overwriting
+/// the affine written by the adapter.
+#[derive(Component, Clone, Debug)]
+pub struct DragonBonesBoneAttachment {
+    /// Armature root entity (carries [`DragonBonesInstance`]).
+    pub root: Entity,
+    /// Bone name in the armature data.
+    pub bone: String,
+    /// Local offset applied after the bone's world matrix.
+    pub offset: Transform,
 }
 
 /// Tuning knobs for the adapter's per-frame slot sync.
@@ -116,6 +151,27 @@ impl Default for DragonBonesSyncConfig {
     fn default() -> Self {
         Self {
             skip_clean_armatures: true,
+        }
+    }
+}
+
+/// Cross-armature draw-order aid.
+///
+/// Within one armature, slots already get a deterministic z from their order.
+/// When several top-level armatures share the same root z, set
+/// `armature_z_step` to a value larger than one armature's slot span
+/// (`slot_count * 0.001`) to keep each armature's slots contiguous. Layering by
+/// gameplay intent still belongs on the root `Transform::translation.z`.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct DragonBonesSorting {
+    /// Extra z per top-level armature index. `0.0` keeps the old behaviour.
+    pub armature_z_step: f32,
+}
+
+impl Default for DragonBonesSorting {
+    fn default() -> Self {
+        Self {
+            armature_z_step: 0.0,
         }
     }
 }
@@ -151,7 +207,18 @@ impl DragonBonesRuntime {
             .and_then(Option::as_ref)
     }
 
-    fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
+    /// Read-only world transform of a named bone (armature space; the caller's
+    /// armature-root transform is not applied). This is the low-cost C2 path for
+    /// games that want to move their own effects every frame.
+    #[must_use]
+    pub fn bone_transform(&self, idx: ArmatureIdx, bone_name: &str) -> Option<Affine3A> {
+        let armature = self.armature(idx)?;
+        let bone_idx = armature.get_bone(bone_name)?;
+        let bone = armature.bones.get(bone_idx.index())?;
+        Some(matrix_to_affine3a(&bone.base.global_transform_matrix, 0.0))
+    }
+
+    pub(crate) fn retain_data(&mut self, dragon_bones_key: &str, atlas_key: &str) {
         *self
             .data_refs
             .entry(dragon_bones_key.to_owned())
@@ -301,6 +368,17 @@ impl Plugin for DragonBonesPlugin {
         // available when the first pipeline is specialized.
         material::register(app);
 
+        // Child armatures share the root's event queue so their lifecycle and
+        // frame events reach the same Bevy message stream.
+        let event_queue = DragonBonesEventQueue::default();
+        let mut runtime = DragonBonesRuntime::default();
+        {
+            let child_queue = event_queue.clone();
+            runtime
+                .factory
+                .set_proxy_factory(move || Box::new(BevyArmatureProxy::new(child_queue.clone())));
+        }
+
         // Slot visibility is written as inherited/hidden, so the adapter relies
         // on Bevy's hierarchy propagation; the mesh asset collection is also
         // registered here so headless/adapter-only apps can spawn slots.
@@ -315,11 +393,12 @@ impl Plugin for DragonBonesPlugin {
             .register_asset_loader(AtlasAssetLoader)
             .init_resource::<DragonBonesMaterials>()
             .init_resource::<DragonBonesSyncConfig>()
-            .insert_non_send(DragonBonesEventQueue::default())
+            .init_resource::<DragonBonesSorting>()
+            .insert_non_send(event_queue)
             .add_message::<DragonBonesEvent>()
             .add_message::<DragonBonesCommand>()
             .add_message::<crate::player::DragonBonesCommandError>()
-            .insert_non_send(DragonBonesRuntime::default())
+            .insert_non_send(runtime)
             .configure_sets(
                 Update,
                 (
@@ -358,6 +437,12 @@ impl Plugin for DragonBonesPlugin {
             .add_systems(
                 PostUpdate,
                 sync::sync_dragonbones.in_set(DragonBonesSystems::SyncTransforms),
+            )
+            .add_systems(
+                PostUpdate,
+                sync::sync_bone_attachments
+                    .after(DragonBonesSystems::SyncTransforms)
+                    .before(VisibilitySystems::VisibilityPropagate),
             );
     }
 }
@@ -427,6 +512,12 @@ fn cleanup_armatures(
             for key in &binding.materials {
                 material_cache.release(*key, &mut materials);
             }
+            for material in &binding.dynamic_materials {
+                materials.remove(material.id());
+            }
+            for (data_key, atlas_key) in &binding.extra_registrations {
+                runtime.release_data(data_key, atlas_key);
+            }
             runtime.release_data(&binding.dragon_bones_key, &binding.atlas_key);
 
             if binding.parent.is_none() {
@@ -460,6 +551,7 @@ struct SpawnedSlots {
     slot_entities: Vec<Entity>,
     mesh_handles: Vec<Handle<Mesh>>,
     material_keys: HashSet<MaterialKey>,
+    dynamic_materials: Vec<Handle<DragonBonesMaterial>>,
 }
 
 /// Spawns one entity per slot of `armature_idx` under `parent`.
@@ -472,8 +564,7 @@ fn spawn_armature_slots(
     runtime: &DragonBonesRuntime,
     parent: Entity,
     armature_idx: ArmatureIdx,
-    atlas_texture: &Handle<Image>,
-    atlas_size: UVec2,
+    atlas_pages: &[(Handle<Image>, UVec2)],
 ) -> Option<SpawnedSlots> {
     let armature = runtime
         .factory
@@ -483,18 +574,38 @@ fn spawn_armature_slots(
     let armature_scale = armature.armature_data().scale;
     let mut slot_entities = Vec::with_capacity(armature.slots.len());
     let mut mesh_handles = Vec::with_capacity(armature.slots.len());
+    let mut dynamic_materials = Vec::new();
     // One shared material per (atlas page, blend mode) used by this armature;
     // the key set is what cleanup releases.
-    let mut armature_materials: HashMap<DragonBonesBlend, Handle<DragonBonesMaterial>> =
-        HashMap::new();
+    let mut armature_materials: HashMap<MaterialKey, Handle<DragonBonesMaterial>> = HashMap::new();
     for slot in &armature.slots {
+        let page_index = slot
+            .texture_atlas_ref()
+            .map_or(0, |atlas| atlas.index)
+            .min(atlas_pages.len().saturating_sub(1));
+        let (atlas_image, atlas_size) = atlas_pages.get(page_index)?;
         let blend = DragonBonesBlend::from_core(slot.blend_mode);
-        let material = if let Some(material) = armature_materials.get(&blend) {
-            material.clone()
+        let color_offset = crate::math::slot_color_offset(slot);
+        let (material, offset_material) = if color_offset == Vec4::ZERO {
+            let key = MaterialKey::new(atlas_image, blend);
+            let material = if let Some(material) = armature_materials.get(&key) {
+                material.clone()
+            } else {
+                let material = material_cache.acquire(atlas_image, blend, materials);
+                armature_materials.insert(key, material.clone());
+                material
+            };
+            (material, None)
         } else {
-            let material = material_cache.acquire(atlas_texture, blend, materials);
-            armature_materials.insert(blend, material.clone());
-            material
+            // Non-zero offsets cannot use the shared material: make a
+            // per-slot material whose uniform is updated in place.
+            let material = materials.add(DragonBonesMaterial {
+                texture: atlas_image.clone(),
+                blend,
+                color_offset,
+            });
+            dynamic_materials.push(material.clone());
+            (material.clone(), Some(material))
         };
         let (entity, mesh) = render::spawn_slot(
             commands,
@@ -505,21 +616,21 @@ fn spawn_armature_slots(
             slot,
             &material,
             blend,
-            atlas_texture,
-            atlas_size,
+            atlas_image,
+            *atlas_size,
             armature_scale,
+            color_offset,
+            offset_material,
         );
         slot_entities.push(entity);
         mesh_handles.push(mesh);
     }
-    let material_keys = armature_materials
-        .into_keys()
-        .map(|blend| MaterialKey::new(atlas_texture, blend))
-        .collect();
+    let material_keys = armature_materials.into_keys().collect();
     Some(SpawnedSlots {
         slot_entities,
         mesh_handles,
         material_keys,
+        dynamic_materials,
     })
 }
 
@@ -566,8 +677,7 @@ fn spawn_child_armatures(
     material_cache: &mut DragonBonesMaterials,
     parent_idx: ArmatureIdx,
     parent_slot_entities: &[Entity],
-    atlas_texture: &Handle<Image>,
-    atlas_size: UVec2,
+    atlas_pages: &[(Handle<Image>, UVec2)],
 ) {
     let mut pending: Vec<(ArmatureIdx, Entity, ArmatureIdx)> = {
         let Some(parent) = runtime
@@ -606,8 +716,7 @@ fn spawn_child_armatures(
             runtime,
             child_root,
             child_idx,
-            atlas_texture,
-            atlas_size,
+            atlas_pages,
         ) else {
             commands.entity(child_root).despawn();
             continue;
@@ -635,7 +744,10 @@ fn spawn_child_armatures(
                 slots: spawned.slot_entities.clone(),
                 meshes: spawned.mesh_handles,
                 materials: spawned.material_keys,
+                dynamic_materials: spawned.dynamic_materials,
                 dragon_bones_key: db_key,
+                atlas_sets: HashMap::from([(atlas_key.clone(), atlas_pages.to_vec())]),
+                extra_registrations: Vec::new(),
                 atlas_key,
                 last_root: None,
                 last_pose: None,
@@ -719,9 +831,10 @@ fn setup_armatures(
         Ref<DragonBonesArmature>,
         Option<&DragonBonesInstance>,
         Option<&mut DragonBonesArmatureState>,
+        Option<&DragonBonesExtraAtlases>,
     )>,
 ) {
-    for (root, request_ref, instance, mut state) in &mut query {
+    for (root, request_ref, instance, mut state, extras) in &mut query {
         let request: &DragonBonesArmature = &request_ref;
         let hash = request_hash(request);
         if instance.is_some() {
@@ -772,11 +885,56 @@ fn setup_armatures(
             continue;
         };
 
+        // Primary atlas plus optional extra `_tex.json` pages, in registration
+        // order. Waiting for any page keeps the whole request in
+        // `WaitingForAssets`.
+        let mut atlas_handles = vec![request.atlas.clone()];
+        if let Some(extras) = extras {
+            for handle in &extras.0 {
+                if !atlas_handles.contains(handle) {
+                    atlas_handles.push(handle.clone());
+                }
+            }
+        }
+        let mut atlas_datas = Vec::with_capacity(atlas_handles.len());
+        let mut atlas_pages = Vec::with_capacity(atlas_handles.len());
+        let mut missing_atlas = false;
+        for handle in &atlas_handles {
+            let Some(page) = atlases.get(handle) else {
+                missing_atlas = true;
+                break;
+            };
+            atlas_datas.push(page.data.clone());
+            atlas_pages.push((
+                page.texture.clone(),
+                UVec2::new(
+                    page.data.width.max(1.0) as u32,
+                    page.data.height.max(1.0) as u32,
+                ),
+            ));
+        }
+        if missing_atlas {
+            warn_waiting(
+                &mut commands,
+                root,
+                state,
+                &request.armature_name,
+                "atlas",
+                hash,
+            );
+            continue;
+        }
+
         // Asset names are not unique across split files ("Dragon" is used by
         // Dragon, Dragon_Blend and Surface). Key the factory caches by the
-        // asset handle id so each loaded file is independent.
+        // asset handle id so each loaded file is independent. The whole atlas
+        // set is part of the key so two requests with the same skeleton but
+        // different extra pages do not share a registration.
         let db_key = format!("{}::{:?}", skeleton.data.name, request.skeleton.id());
-        let atlas_key = format!("{}::{:?}", atlas.data.name, request.atlas.id());
+        let mut atlas_key = format!("{}::{:?}", atlas.data.name, request.skeleton.id());
+        for handle in &atlas_handles {
+            atlas_key.push_str(&format!("::{:?}", handle.id()));
+        }
         runtime
             .factory
             .data_map
@@ -787,8 +945,10 @@ fn setup_armatures(
             .atlas_map
             .entry(atlas_key.clone())
             .or_default();
-        if !atlas_list.contains(&atlas.data) {
-            atlas_list.push(atlas.data.clone());
+        for data in atlas_datas {
+            if !atlas_list.contains(&data) {
+                atlas_list.push(data);
+            }
         }
 
         let Some(armature_idx) = runtime.factory.build_armature(
@@ -834,10 +994,6 @@ fn setup_armatures(
         // force one update so the first rendered frame is posed.
         runtime.factory.advance_one(armature_idx, 0.0);
 
-        let atlas_size = UVec2::new(
-            atlas.data.width.max(1.0) as u32,
-            atlas.data.height.max(1.0) as u32,
-        );
         let Some(spawned) = spawn_armature_slots(
             &mut commands,
             &mut meshes,
@@ -846,8 +1002,7 @@ fn setup_armatures(
             &runtime,
             root,
             armature_idx,
-            &atlas.texture,
-            atlas_size,
+            &atlas_pages,
         ) else {
             // `advance_one` above cannot drop the armature.
             warn!("DragonBones: armature {armature_idx:?} disappeared after build");
@@ -862,7 +1017,10 @@ fn setup_armatures(
                 slots: spawned.slot_entities.clone(),
                 meshes: spawned.mesh_handles,
                 materials: spawned.material_keys,
+                dynamic_materials: spawned.dynamic_materials,
                 dragon_bones_key: db_key,
+                atlas_sets: HashMap::from([(atlas_key.clone(), atlas_pages.clone())]),
+                extra_registrations: Vec::new(),
                 atlas_key,
                 last_root: None,
                 last_pose: None,
@@ -889,8 +1047,7 @@ fn setup_armatures(
             &mut material_cache,
             armature_idx,
             &spawned.slot_entities,
-            &atlas.texture,
-            atlas_size,
+            &atlas_pages,
         );
     }
 }

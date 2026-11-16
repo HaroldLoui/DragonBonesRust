@@ -72,8 +72,9 @@ is the armature's world placement; each slot is spawned as a child with a
   display index hides the previously selected child armature. A child root
   despawned on its own releases its subtree's GPU assets (with a warning) but is
   not respawned until the parent is rebuilt; core still owns the child armature
-  and disposes it with the parent. Limitation: core builds child armatures with a
-  null proxy, so their events are not forwarded as Bevy messages yet.
+  and disposes it with the parent. Child armatures share the root event queue, so
+  their lifecycle and frame events are forwarded as `DragonBonesEvent` messages
+  with the child's `ArmatureIdx`.
 - Visibility is hierarchical: visible slots are written as `Visibility::Inherited`,
   hidden ones as `Visibility::Hidden`, and the root's own `Visibility` is part of
   the dirty check — so `root.insert(Visibility::Hidden)` hides an armature like any
@@ -82,6 +83,23 @@ is the armature's world placement; each slot is spawned as a child with a
 - Runtime `replace_texture_data` / `replace_skin` calls are picked up in the same
   frame: the dirty check hashes display-frame content (region, geometry identity,
   pivot, child armature), not just the display index.
+- Runtime content commands: `ReplaceSkin`, `ReplaceSkinFrom` (another skeleton's
+  skin + atlases), `ReplaceDisplay` / `ClearDisplay`, and `ReplaceAtlas` (one
+  atlas page + image, with slot texture/UV refresh).
+- Playback commands: `Seek` / `SeekProgress`, `SetLoop`, `SetLayer`, `SetGroup`,
+  `FadeIn` / `FadeOut`; `PlayConfig` inherits the armature speed when
+  `with_time_scale` is not set.
+- Slot/armature commands: `SetSlotTint` (multiplier + offset), `SetSlotVisible`,
+  `SetArmatureAlpha`, `SetFlip`.
+- Multi-atlas skeletons: add `DragonBonesExtraAtlases([...])` next to
+  `DragonBonesArmature`; each slot resolves its own atlas page image and material.
+- Bone attachment: spawn `DragonBonesBoneAttachment { root, bone, offset }` on a
+  root entity; it is positioned after the slot sync without spawning bone entities.
+  `DragonBonesRuntime::bone_transform` provides the read-only query path.
+- Color offset: non-zero offsets get a per-slot material uniform (shared materials
+  stay zero-offset), so hit flashes / darkening do not break material batching.
+- Cross-armature order: `DragonBonesSorting::armature_z_step` places each
+  top-level armature's slots in a contiguous z band.
 - Color multipliers + global alpha baked into per-vertex colors, with one shared
   `DragonBonesMaterial` per `(atlas page, blend mode)` (see below).
 - DragonBones blend modes: Normal / Add / Multiply / Screen through a custom
@@ -123,15 +141,18 @@ runs before setup/advance and, for a despawned root:
 
 ## Materials, per-slot color and blend modes
 
-Slots only need a per-slot tint and a per-slot blend mode, not a per-slot
-texture: every slot of an armature samples the same atlas page. The adapter
-therefore creates **one `DragonBonesMaterial` per `(atlas page image, blend
-mode)`** (`src/material.rs`) and bakes the DragonBones color multiplier + global
-alpha into the mesh `ATTRIBUTE_COLOR` attribute.
+Slots need a per-slot tint, blend mode and (for multi-atlas rigs) atlas page.
+The adapter creates **one shared `DragonBonesMaterial` per `(atlas page image,
+blend mode)`** (`src/material.rs`) and bakes the DragonBones color multiplier +
+global alpha into the mesh `ATTRIBUTE_COLOR` attribute. A non-zero color offset
+uses a **dedicated per-slot material** (same `(image, blend)` otherwise) whose
+`color_offset` uniform is updated in place, so offsets do not break sharing for
+ordinary slots.
 
 `DragonBonesMaterial` is a small custom `Material2d`:
 
-- its only bindings are the atlas page texture and sampler;
+- its material bindings are the atlas page texture, sampler and `color_offset`
+  uniform;
 - the blend mode is forwarded through `#[bind_group_data(DragonBonesBlend)]`, so
   Bevy compiles one pipeline per blend mode and every slot sharing
   `(image, blend)` shares one material asset, bind group and draw batch;
@@ -139,9 +160,9 @@ alpha into the mesh `ATTRIBUTE_COLOR` attribute.
   Normal `SrcAlpha/OneMinusSrcAlpha`, Add `SrcAlpha/One`, Multiply
   `Dst/OneMinusSrcAlpha`, Screen `One/OneMinusSrc` (all `BlendOperation::Add`,
   alpha component always `OVER`);
-- the fragment shader (`src/dragonbones_material.wesl`) samples the atlas and
-  multiplies by the vertex color, mirroring `ColorMaterial`'s output/tonemapping
-  tail.
+- the fragment shader (`src/dragonbones_material.wesl`) samples the atlas,
+  multiplies by the vertex color, adds `color_offset`, then mirrors
+  `ColorMaterial`'s output/tonemapping tail.
 
 Notes:
 

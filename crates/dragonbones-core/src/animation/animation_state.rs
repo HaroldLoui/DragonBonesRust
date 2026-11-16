@@ -444,6 +444,23 @@ impl AnimationState {
         }
     }
 
+    /// Moves the playhead to `time` **without restarting** this animation state.
+    ///
+    /// - Follows `_setCurrentTime`'s wrap rules (negative values wrap from the
+    ///   end, values past `duration` wrap to the remainder).
+    /// - Resets the timeline frame cursors so the next `advance_time` evaluates
+    ///   the target frame directly; frames between the old and new time are not
+    ///   dispatched.
+    /// - Does not change `playhead_state` or `time_scale`: a paused state stays
+    ///   paused after the seek.
+    pub fn seek_to(&mut self, time: f64) {
+        if self.duration > 0.0 {
+            self.set_current_time(time);
+        } else {
+            self.time = 0.0;
+        }
+    }
+
     /// Applies the fade-before-playhead portion of `advanceTime` and computes
     /// this state's provisional blend weight. Timeline/action groups run after it.
     pub(crate) fn advance_time(

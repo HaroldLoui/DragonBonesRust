@@ -47,7 +47,7 @@ use crate::event::EventObject;
 use crate::geom::{ColorTransform, Matrix, Point};
 use crate::model::{
     ActionData, ArmatureData, BoundingBoxData, DisplayData, DisplayKind, DragonBonesData,
-    GeometryData, SlotData, TextureData,
+    GeometryData, SlotData, TextureAtlasRef, TextureData,
 };
 
 fn point_opt<'b>(value: &'b mut Option<&mut Point>) -> Option<&'b mut Point> {
@@ -145,6 +145,12 @@ pub struct DisplayFrame {
     pub display: Option<DisplayHandle>,
     /// 对齐 `deformVertices`（Slot.ts:36，readonly number[]；`_onClear` `.length = 0`）。
     pub deform_vertices: Vec<f64>,
+    /// 该帧贴图所属**图集**（cache key + page index）。
+    ///
+    /// TS 的 `_textureData.parent` 是 `TextureAtlasData` 对象；Rust 在 build /
+    /// `replace_*` 解析纹理时同时登记该值，适配层据此选择正确的 atlas image。
+    /// `None` = 外部直接 `replace_texture_data`（无图集归属）。
+    pub texture_atlas: Option<TextureAtlasRef>,
     /// 该帧贴图所属**图集的缩放**（TS `_textureData.parent.scale` 的值缓存）。
     ///
     /// TS 的 `TextureData.parent` 是 `TextureAtlasData` **对象引用**，`_updateDisplayData`
@@ -460,6 +466,15 @@ impl Default for Slot {
     }
 }
 impl Slot {
+    /// Atlas page identity of the currently displayed texture, if the factory
+    /// resolved it at build or through `replace_*`.
+    #[must_use]
+    pub fn texture_atlas_ref(&self) -> Option<&TextureAtlasRef> {
+        self.display_frame
+            .and_then(|index| self.display_frames.get(index))
+            .and_then(|frame| frame.texture_atlas.as_ref())
+    }
+
     /// 对齐 `Slot.init(slotData, armatureValue, rawDisplay, meshDisplay)`（Slot.ts:639-674）。
     ///
     /// # 参数（任务 7 调用面）
@@ -1406,6 +1421,7 @@ impl Slot {
         if display_frame.texture_data != texture_data {
             display_frame.texture_data = texture_data; // :873
             display_frame.texture_atlas_scale = None; // 外部路径无图集归属
+            display_frame.texture_atlas = None;
             if index as i32 == self.display_index {
                 // :875
                 self.display_data_dirty = true; // :876 只置 displayData 脏（不置 displayDirty）
@@ -1425,12 +1441,25 @@ impl Slot {
         atlas_scale: f64,
         index: i32,
     ) {
+        self.replace_texture_data_with_atlas_ref(texture_data, atlas_scale, None, index);
+    }
+
+    /// [`Self::replace_texture_data`] 的图集感知变体：同时登记贴图所属图集的
+    /// cache key + page index（适配层据此选择 image）。
+    pub fn replace_texture_data_with_atlas_ref(
+        &mut self,
+        texture_data: Option<TextureData>,
+        atlas_scale: f64,
+        atlas: Option<TextureAtlasRef>,
+        index: i32,
+    ) {
         // :864-869
         let Some(index) = self.resolve_replace_index(index) else {
             return;
         };
 
         let atlas_scale = texture_data.as_ref().map(|_| atlas_scale);
+        let atlas = texture_data.as_ref().and(atlas.clone());
         // :871-872
         let display_frame = self
             .display_frames
@@ -1438,9 +1467,11 @@ impl Slot {
             .expect("displayFrames[index]（TS 越界同样崩溃，Slot.ts:871）");
         if display_frame.texture_data != texture_data
             || display_frame.texture_atlas_scale != atlas_scale
+            || display_frame.texture_atlas != atlas
         {
             display_frame.texture_data = texture_data; // :873
             display_frame.texture_atlas_scale = atlas_scale;
+            display_frame.texture_atlas = atlas;
             if index as i32 == self.display_index {
                 // :875
                 self.display_data_dirty = true; // :876 只置 displayData 脏（不置 displayDirty）

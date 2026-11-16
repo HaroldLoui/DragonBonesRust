@@ -34,6 +34,13 @@ pub struct Armature {
     pub idx: ArmatureIdx,
     /// 骨架名（→ `data.armatures[name]`，D-3.3）。
     pub armature_name: String,
+    /// 构建时使用的图集缓冲 key（`BuildArmaturePackage.texture_atlas_name`）。
+    ///
+    /// 运行时 `replace_*` 需要按图集解析新显示的 `TextureData`；TS 在
+    /// `_getSlotDisplay` 里从 `displayData.parent...name` 反推 data name，Rust 的
+    /// data 层不可变、也没有对象 parent 链，因此在 build 时把实际 key 记在
+    /// Armature 上。空串表示 build 时未指定（`_getTextureData` 走 autoSearch）。
+    pub texture_atlas_name: String,
     /// 阶段 2 产物根（D-3.3：运行时不借生命周期，`Arc` 持有；data 解析后不可变）。
     pub data: Arc<DragonBonesData>,
     /// 对齐 `inheritAnimation`（Armature.ts:63），`_onClear` = **true**（Armature.ts:155）。
@@ -110,6 +117,7 @@ impl Armature {
             idx,
             data,
             armature_name,
+            texture_atlas_name: String::new(),
             inherit_animation: true, // _onClear Armature.ts:155
             user_data: None,         // :156
             lock_update: false,      // :158
@@ -284,6 +292,15 @@ impl Armature {
         if self.flip_y != value {
             self.flip_y = value;
             self.invalid_update(None, false);
+        }
+    }
+
+    /// 对齐 `alpha` setter（Armature.ts:705-715）：修改后标记 alpha 脏，
+    /// 由下一次 `Armature::advance_time` 传播到 slot。
+    pub fn set_alpha(&mut self, value: f64) {
+        if self.alpha != value {
+            self.alpha = value;
+            self.alpha_dirty = true;
         }
     }
 
@@ -797,6 +814,7 @@ impl Armature {
         // 偏差），`armature_name` 清空使 `armature_data()` 不可达（≈ TS null 解
         // 引用崩溃；`Slot::on_clear` 清 `slot_name` 同款处理）。
         self.armature_name.clear();
+        self.texture_atlas_name.clear();
         // :173 `_animation = null`——见上 :143-145（reset + 回指）。
         // :174 `_proxy = null`——Rust `Box<dyn>` 不可 null：`db_clear()` 已清场，
         // box 保活（D-3.1 偏差；复用走 `Armature::new` 重挂 proxy）。

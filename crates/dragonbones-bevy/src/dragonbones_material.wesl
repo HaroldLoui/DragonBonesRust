@@ -24,6 +24,7 @@ import bevy_render::color_operations::linear_rgb_to_oklab;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var atlas_texture: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var atlas_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var<uniform> color_offset: vec4<f32>;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -31,6 +32,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     @if(VERTEX_COLORS)
     color = color * in.color;
+
+    // DragonBones color transform: channel = texture * multiplier + offset.
+    color = clamp(color + color_offset, vec4<f32>(0.0), vec4<f32>(1.0));
 
     @if(TONEMAP_IN_SHADER)
     color = tonemapping::tone_mapping(color, view.color_grading);
